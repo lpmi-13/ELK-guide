@@ -2,6 +2,12 @@
 
 A self-contained Docker Compose lab with Elasticsearch, Logstash, Kibana, five small HTTP microservices, and a browser telemetry service. It creates 500 historical events on first start and then continuously produces structured, correlated JSON logs.
 
+## Project direction
+
+This repository is the foundation for an adaptive Kibana incident-learning system. The planned interactive experience runs in the learner's own opted-in Kibana tab through a browser extension. That extension will provide demonstration, guided-practice, and minimally scaffolded challenge modes while recording semantic investigation actions for feedback.
+
+Playwright is planned only as a headless scenario-recording and compatibility tool. It will replay seeded scenarios to produce reproducible reference videos, screenshots, and automated UI checks; a Playwright-owned or noVNC-streamed browser is not intended to be a learner-facing mode. See [PLAN.md](PLAN.md) for the architecture, scenario model, scoring design, and delivery milestones.
+
 ## Architecture
 
 | Component | Purpose | Host port |
