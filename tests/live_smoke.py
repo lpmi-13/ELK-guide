@@ -90,9 +90,7 @@ def main():
     session_id = created["session"]["session_id"]
     ready = wait_ready(learning, run_id)
 
-    status, claimed = request_json(f"{learning}/api/sessions/{session_id}/claim", "POST", {"code": created["session"]["pairing_code"]})
-    expect(status, claimed, (200,))
-    token = claimed["token"]
+    token = created["session"]["connection_token"]
     trace_id = find_trace(elasticsearch, run_id)
     actions = [
         action(run_id, session_id, 1, "time_range_changed", {"from": "now-10m", "to": "now"}, {"time_from": "now-10m"}),

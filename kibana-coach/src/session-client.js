@@ -2,7 +2,9 @@ class IncidentSessionClient {
   constructor(config) {
     this.server = config.server.replace(/\/$/, '');
     this.sessionId = config.session;
-    this.code = config.code;
+    this.token = config.token;
+    this.runId = config.runId;
+    this.mode = config.mode;
     this.sequence = 0;
     this.socket = null;
     this.stopped = false;
@@ -10,20 +12,18 @@ class IncidentSessionClient {
 
   async connect() {
     const saved = JSON.parse(sessionStorage.getItem(`incident-coach:${this.sessionId}`) || 'null');
-    const response = await fetch(`${this.server}/api/sessions/${this.sessionId}/claim`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({code: this.code, token: saved?.token})
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || `Pairing failed (${response.status})`);
-    this.token = result.token;
-    this.runId = result.session.run_id;
-    this.mode = result.session.mode;
+    this.token ||= saved?.token;
+    this.runId ||= saved?.runId;
+    this.mode ||= saved?.mode;
+    if (!this.token || !this.runId || !this.mode) throw new Error('The automatic session handoff is incomplete. Open Kibana from the lab launcher again.');
     this.sequence = saved?.sequence || 0;
-    sessionStorage.setItem(`incident-coach:${this.sessionId}`, JSON.stringify({token: this.token, sequence: this.sequence}));
+    this.save();
     this.openSocket();
-    return result.session;
+    return {session_id: this.sessionId, run_id: this.runId, mode: this.mode};
+  }
+
+  save() {
+    sessionStorage.setItem(`incident-coach:${this.sessionId}`, JSON.stringify({token: this.token, runId: this.runId, mode: this.mode, sequence: this.sequence}));
   }
 
   openSocket() {
@@ -53,7 +53,7 @@ class IncidentSessionClient {
 
   sendAction(partial, actor = 'learner') {
     this.sequence += 1;
-    sessionStorage.setItem(`incident-coach:${this.sessionId}`, JSON.stringify({token: this.token, sequence: this.sequence}));
+    this.save();
     const action = {
       protocol_version: 1,
       run_id: this.runId,
@@ -86,6 +86,11 @@ class IncidentSessionClient {
   stop() {
     this.stopped = true;
     this.socket?.close(1000, 'Learner stopped automation');
+  }
+
+  forget() {
+    this.stop();
+    sessionStorage.removeItem(`incident-coach:${this.sessionId}`);
   }
 }
 

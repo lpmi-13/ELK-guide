@@ -83,7 +83,7 @@ async function main() {
   const startedAt = new Date().toISOString();
   const created = await jsonRequest(`${learningUrl}/api/runs`, {method: 'POST', body: JSON.stringify({scenario: 'slow-payments', seed, mode: 'demonstration'})});
   await waitReady(created.run.run_id);
-  const claim = await jsonRequest(`${learningUrl}/api/sessions/${created.session.session_id}/claim`, {method: 'POST', body: JSON.stringify({code: created.session.pairing_code})});
+  const connectionToken = created.session.connection_token;
   const browser = await chromium.launch({headless: true});
   const context = await browser.newContext({viewport, locale: 'en-GB', timezoneId: 'UTC', colorScheme: 'dark', reducedMotion: 'reduce', recordVideo: {dir: outputDir, size: viewport}});
   await context.addInitScript(() => {
@@ -102,7 +102,7 @@ async function main() {
   let score = null;
   const pending = [];
   let wake;
-  const wsUrl = learningUrl.replace(/^http/, 'ws') + claim.websocket_path + `?token=${encodeURIComponent(claim.token)}`;
+  const wsUrl = learningUrl.replace(/^http/, 'ws') + created.session.websocket_path + `?token=${encodeURIComponent(connectionToken)}`;
   const socket = new WebSocket(wsUrl);
   socket.onmessage = event => { pending.push(JSON.parse(event.data)); wake?.(); };
   await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
@@ -118,7 +118,7 @@ async function main() {
       if (message.message_type !== 'command') continue;
       if (message.type === 'request_diagnosis') {
         const answer = {service: 'payments', fault_type: 'latency', affected_route: '/checkout', trace_id: traceId, evidence: 'The payment transaction dominates the correlated checkout trace.'};
-        const feedback = await jsonRequest(`${learningUrl}/api/sessions/${created.session.session_id}/answer`, {method: 'POST', headers: {Authorization: `Bearer ${claim.token}`}, body: JSON.stringify(answer)});
+        const feedback = await jsonRequest(`${learningUrl}/api/sessions/${created.session.session_id}/answer`, {method: 'POST', headers: {Authorization: `Bearer ${connectionToken}`}, body: JSON.stringify(answer)});
         if (!feedback.diagnosis_correct) throw new Error(`Reference diagnosis was rejected: ${JSON.stringify(feedback.components)}`);
         score = feedback.total;
         break;

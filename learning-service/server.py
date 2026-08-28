@@ -23,7 +23,6 @@ CONTROLLER_URL = os.getenv("SCENARIO_CONTROLLER_URL", "http://scenario-controlle
 ELASTICSEARCH_URL = os.getenv("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
 LEARNING_DIR = Path(os.getenv("LEARNING_DIR", "/app/learning"))
 LOG_FILE = Path(os.getenv("LOG_DIR", "/tmp")) / "learning-service.json"
-PAIR_TTL_SECONDS = int(os.getenv("PAIR_TTL_SECONDS", "600"))
 ALLOWED_ORIGINS = {value.rstrip("/") for value in os.getenv("ALLOWED_ORIGINS", "http://localhost:5601,http://127.0.0.1:5601,http://localhost:8090").split(",")}
 
 sessions = {}
@@ -85,7 +84,6 @@ def create_session(run_response, mode):
     playbook = load_definition("playbooks", manifest["playbook"])
     rubric = load_definition("rubrics", manifest["rubric"])
     session_id = f"session-{uuid.uuid4().hex[:12]}"
-    pairing_code = f"{secrets.randbelow(1_000_000):06d}"
     session = {
         "id": session_id,
         "run_id": manifest["run_id"],
@@ -94,10 +92,7 @@ def create_session(run_response, mode):
         "policy": MODE_POLICIES[mode],
         "playbook": playbook,
         "rubric": rubric,
-        "pairing_code": pairing_code,
-        "pair_expires": time.time() + PAIR_TTL_SECONDS,
-        "controller_token": None,
-        "claimed": False,
+        "controller_token": secrets.token_urlsafe(24),
         "last_action_sequence": 0,
         "last_command_sequence": 0,
         "completed_goals": set(),
@@ -116,7 +111,7 @@ def create_session(run_response, mode):
     return session
 
 
-def session_public(session, include_pairing=False):
+def session_public(session, include_connection=False):
     result = {
         "session_id": session["id"],
         "run_id": session["run_id"],
@@ -127,11 +122,10 @@ def session_public(session, include_pairing=False):
         "completed_goals": sorted(session["completed_goals"]),
         "step": current_step_index(session),
         "step_count": len(session["playbook"]["steps"]),
-        "claimed": session["claimed"],
     }
-    if include_pairing:
-        result["pairing_code"] = session["pairing_code"]
-        result["pairing_expires_at"] = datetime.fromtimestamp(session["pair_expires"], timezone.utc).isoformat()
+    if include_connection:
+        result["connection_token"] = session["controller_token"]
+        result["websocket_path"] = f"/api/sessions/{session['id']}/events"
     return result
 
 
@@ -246,7 +240,7 @@ def record_action(session, action):
     if sequence <= session["last_action_sequence"]:
         raise ValueError("action sequence must increase monotonically")
     if action.get("run_id") != session["run_id"] or action.get("session_id") != session["id"]:
-        raise ValueError("action run_id and session_id must match the paired session")
+        raise ValueError("action run_id and session_id must match the connected session")
     if int(action.get("protocol_version", 0)) != 1:
         raise ValueError("unsupported protocol version")
     session["last_action_sequence"] = sequence
@@ -261,20 +255,6 @@ def record_action(session, action):
     session["actions"].append({"action": action, "evaluation": evaluation})
     emit(session, action, evaluation)
     return evaluation
-
-
-def claim_session(session, code, existing_token=None):
-    if existing_token and secrets.compare_digest(existing_token, session.get("controller_token") or ""):
-        return existing_token
-    if session["claimed"]:
-        raise ValueError("session is already controlled by another browser")
-    if time.time() > session["pair_expires"]:
-        raise ValueError("pairing code expired")
-    if not secrets.compare_digest(str(code), session["pairing_code"]):
-        raise ValueError("invalid pairing code")
-    session["claimed"] = True
-    session["controller_token"] = secrets.token_urlsafe(24)
-    return session["controller_token"]
 
 
 def authorized(handler, session, query=None):
@@ -387,7 +367,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             session = create_session(run, mode)
             public_run = {key: value for key, value in run.items() if key != "manifest"}
-            self.respond(202, {"run": public_run, "session": session_public(session, include_pairing=True)})
+            self.respond(202, {"run": public_run, "session": session_public(session, include_connection=True)})
             return
 
         if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "reset":
@@ -400,7 +380,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(400, {"error": "invalid mode"})
                 return
             session = create_session(run, mode)
-            self.respond(202, {"run": {key: value for key, value in run.items() if key != "manifest"}, "session": session_public(session, include_pairing=True)})
+            self.respond(202, {"run": {key: value for key, value in run.items() if key != "manifest"}, "session": session_public(session, include_connection=True)})
             return
 
         if len(parts) == 4 and parts[:2] == ["api", "sessions"]:
@@ -410,14 +390,6 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(404, {"error": "session not found"})
                     return
                 action = parts[3]
-                if action == "claim":
-                    try:
-                        token = claim_session(session, payload.get("code", ""), payload.get("token"))
-                    except ValueError as error:
-                        self.respond(409, {"error": str(error)})
-                        return
-                    self.respond(200, {"token": token, "session": session_public(session), "websocket_path": f"/api/sessions/{session['id']}/events"})
-                    return
                 if not authorized(self, session):
                     self.respond(401, {"error": "invalid controller token"})
                     return
@@ -524,7 +496,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def cors_headers(self):
         origin = self.headers.get("Origin", "")
-        if origin in ALLOWED_ORIGINS or origin.startswith("chrome-extension://"):
+        if origin in ALLOWED_ORIGINS:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
 

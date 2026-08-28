@@ -8,7 +8,9 @@
     :root { color-scheme: dark; font: 15px system-ui, sans-serif; background: #0d1721; color: #eef5fb; }
     body { max-width: 1040px; margin: 0 auto; padding: 42px 24px 80px; }
     header { display:flex;align-items:center;gap:12px;margin-bottom:34px; } header h1 { font-size:22px;margin:0;flex:1; }
-    #telemetry { color:#f5b342;font-size:13px; } #telemetry.online { color:#43d7a0; }
+    .connection-status { font-size:13px; }
+    #coach-runtime { color:#f5b342; } #coach-runtime.online { color:#43d7a0; } #coach-runtime.error { color:#ff8878; }
+    #telemetry { color:#f5b342; } #telemetry.online { color:#43d7a0; }
     main { display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,.75fr);gap:24px; }
     section { background:#142331;border:1px solid #2e4559;border-radius:12px;padding:24px;box-shadow:0 14px 40px #0003; }
     h2 { margin-top:0;font-size:20px; } p { line-height:1.55;color:#c6d4df; } label { display:block;font-weight:650;margin-top:14px; }
@@ -20,7 +22,6 @@
     .field-row button { margin-top:5px;padding:9px 12px;border:1px solid #668096;background:#203447;white-space:nowrap; }
     .field-help { margin:6px 0 0;font-size:13px;color:#90a5b6; }
     #session-card { border-left:4px solid #ffb000; } #session-card[hidden] { display:none; }
-    .code { display:inline-block;padding:8px 12px;background:#09121a;border:1px solid #536c80;border-radius:5px;font:700 24px ui-monospace,monospace;letter-spacing:.16em; }
     dl { display:grid;grid-template-columns:110px 1fr;gap:8px;margin:18px 0; } dt { color:#90a5b6; } dd { margin:0;overflow-wrap:anywhere; }
     #run-state.ready { color:#43d7a0; } #run-state.failed { color:#ff8878; }
     .evidence-progress { margin-top:20px; }
@@ -39,7 +40,7 @@
   </style>
 </head>
 <body>
-  <header><h1>Adaptive Kibana incident lab</h1><span id="telemetry">connecting telemetry…</span></header>
+  <header><h1>Adaptive Kibana incident lab</h1><span id="coach-runtime" class="connection-status">checking Kibana coach…</span><span id="telemetry" class="connection-status">connecting telemetry…</span></header>
   <main>
     <section>
       <h2>Start an investigation</h2>
@@ -62,15 +63,15 @@
       <h2>How it works</h2>
       <ol>
         <li>Start a run and wait for the evidence checkpoint.</li>
-        <li>Load the unpacked extension from <code>browser-extension/</code>.</li>
-        <li>Open Kibana in its own tab, click the extension, and enter the pairing details.</li>
-        <li>Investigate live evidence; every goal is validated from state, not click coordinates.</li>
+        <li>The coach is built into this local Kibana endpoint; there is nothing to install in your browser.</li>
+        <li>Open Kibana from the ready-run button; the page connects to your selected session automatically.</li>
+        <li>The chosen demonstration, guided, or challenge experience begins immediately.</li>
       </ol>
     </section>
     <section id="session-card" hidden>
       <h2>Incident preparing</h2>
       <p id="brief"></p>
-      <dl><dt>Run</dt><dd id="run-id"></dd><dt>Scenario key</dt><dd id="active-key"></dd><dt>Session</dt><dd id="session-id"></dd><dt>State</dt><dd id="run-state">CREATED</dd><dt>Pairing code</dt><dd><span class="code" id="pair-code"></span></dd></dl>
+      <dl><dt>Run</dt><dd id="run-id"></dd><dt>Scenario key</dt><dd id="active-key"></dd><dt>Session</dt><dd id="session-id"></dd><dt>Mode</dt><dd id="active-mode"></dd><dt>State</dt><dd id="run-state">CREATED</dd><dt>Coach</dt><dd>Connects automatically when Kibana opens</dd></dl>
       <div class="evidence-progress">
         <p id="readiness" role="status" aria-live="polite">Preparing investigation evidence…</p>
         <progress id="evidence-progress" value="0" max="10" aria-label="Investigation evidence preparation" aria-describedby="readiness"></progress>
@@ -82,6 +83,7 @@
   <script>
     const kibanaUrl = __KIBANA_URL__;
     const learningUrl = __LEARNING_URL__;
+    const coachRuntime = document.querySelector('#coach-runtime');
     const telemetry = document.querySelector('#telemetry');
     const form = document.querySelector('#start-form');
     const card = document.querySelector('#session-card');
@@ -92,7 +94,29 @@
     const openKibana = document.querySelector('#open-kibana');
     const openKibanaHelp = document.querySelector('#open-kibana-help');
     let investigationUrl = '';
+    let sessionConnection = null;
     let socket;
+    let coachRuntimeReady = false;
+
+    async function detectCoachRuntime() {
+      try {
+        const response = await fetch(`${kibanaUrl}/incident-coach/runtime.json`, {cache: 'no-store'});
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const runtime = await response.json();
+        coachRuntimeReady = runtime.delivery === 'built-in';
+        if (!coachRuntimeReady) throw new Error('unexpected runtime');
+        coachRuntime.textContent = `built-in Kibana coach ${runtime.version} ready`;
+        coachRuntime.className = 'connection-status online';
+        if (investigationUrl) {
+          openKibana.disabled = false;
+          openKibanaHelp.textContent = 'Evidence is ready. Opens in a new tab and starts the selected mode.';
+        }
+      } catch (error) {
+        coachRuntime.textContent = 'built-in Kibana coach unavailable';
+        coachRuntime.className = 'connection-status error';
+        coachRuntime.title = error.message;
+      }
+    }
 
     const keyWords = [
       ['bright', 'calm', 'gentle', 'hidden', 'quiet', 'silver', 'steady', 'warm'],
@@ -109,6 +133,21 @@
       const indexed = Math.max(Number(count) || 0, 0);
       evidenceProgress.max = threshold;
       evidenceProgress.value = Math.min(indexed, threshold);
+    }
+
+    function addSessionHandoff(url) {
+      if (!sessionConnection) return url;
+      const target = new URL(url, kibanaUrl);
+      const separator = target.hash.indexOf('?');
+      const route = separator >= 0 ? target.hash.slice(0, separator) : target.hash;
+      const parameters = new URLSearchParams(separator >= 0 ? target.hash.slice(separator + 1) : '');
+      parameters.set('incident_coach_server', `${target.origin}/incident-coach/learning`);
+      parameters.set('incident_coach_session', sessionConnection.session_id);
+      parameters.set('incident_coach_token', sessionConnection.connection_token);
+      parameters.set('incident_coach_run', sessionConnection.run_id);
+      parameters.set('incident_coach_mode', sessionConnection.mode);
+      target.hash = `${route}?${parameters}`;
+      return target.href;
     }
 
     function send(type, details = {}) {
@@ -135,9 +174,11 @@
           readiness.textContent = 'Investigation evidence is ready.';
           evidenceProgress.value = evidenceProgress.max;
           evidenceProgressContainer.className = 'evidence-progress ready';
-          investigationUrl = run.investigation_url || `${kibanaUrl}/app/discover#/view/incident-investigation`;
-          openKibana.disabled = false;
-          openKibanaHelp.textContent = 'Evidence is ready. Opens in a new tab.';
+          investigationUrl = addSessionHandoff(run.investigation_url || `${kibanaUrl}/app/discover#/view/incident-investigation`);
+          openKibana.disabled = !coachRuntimeReady;
+          openKibanaHelp.textContent = coachRuntimeReady
+            ? 'Evidence is ready. Opens in a new tab and starts the selected mode.'
+            : 'The built-in Kibana coach is unavailable. Check the Kibana gateway service.';
           send('scenario_ready', {run_id: runId});
           break;
         }
@@ -162,6 +203,7 @@
       evidenceProgress.value = 0;
       evidenceProgressContainer.className = 'evidence-progress';
       investigationUrl = '';
+      sessionConnection = null;
       openKibana.disabled = true;
       openKibanaHelp.textContent = 'Available when the evidence bar is full.';
       try {
@@ -173,8 +215,9 @@
         document.querySelector('#run-id').textContent = result.run.run_id;
         document.querySelector('#active-key').textContent = result.run.scenario_key || scenarioKey.value;
         document.querySelector('#session-id').textContent = result.session.session_id;
-        document.querySelector('#pair-code').textContent = result.session.pairing_code;
+        document.querySelector('#active-mode').textContent = result.session.mode;
         document.querySelector('#run-state').textContent = result.run.state;
+        sessionConnection = result.session;
         sessionStorage.launcherSession = result.session.session_id;
         send('scenario_started', {run_id: result.run.run_id, tutorial_mode: result.session.mode});
         await poll(result.run.run_id);
@@ -197,6 +240,7 @@
       scenarioKey.focus();
     });
     scenarioKey.value = generateScenarioKey();
+    detectCoachRuntime();
     connectTelemetry();
   </script>
 </body>

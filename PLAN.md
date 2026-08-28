@@ -261,12 +261,12 @@ This adapter is not a noVNC or streamed-browser product mode. Learners should no
 
 ### Learner Browser Adapter
 
-This is the primary interactive path. To drive Kibana inside a learner's existing browser, require an explicitly installed browser extension or an equivalent trusted same-origin integration. A normal server cannot safely attach itself to an arbitrary browser tab.
+This is the primary interactive path. A local gateway serves Kibana and injects the versioned coach runtime as same-origin scripts. The same gateway proxies the authenticated learning WebSocket, so the browser requires no extension, userscript, or remote-debugging access.
 
-The extension should:
+The injected coach should:
 
-1. Ask the learner to opt in for the current Kibana tab.
-2. Pair the tab to a tutorial session using a short-lived code or token.
+1. Treat opening the launcher-generated Kibana URL as opt-in for that tab.
+2. Consume the session-scoped token from the URL and remove it before Kibana starts.
 3. Open an outbound authenticated WebSocket to the session service.
 4. Resolve semantic targets in the Kibana DOM.
 5. Draw the tutorial cursor, spotlight, hints, toasts, and panels.
@@ -287,13 +287,13 @@ The service should send semantic commands, never screen coordinates. Example:
 }
 ```
 
-The extension should acknowledge `started`, `completed`, or `failed` and return the observed post-action state. Commands must be idempotent so reconnecting a session cannot type a query twice or add duplicate filters.
+The coach should acknowledge `started`, `completed`, or `failed` and return the observed post-action state. Commands must be idempotent so reconnecting a session cannot type a query twice or add duplicate filters.
 
-Do not expose a remote-debugging port from the learner's everyday browser. That would grant broader browser control than the tutorial requires. Limit extension permissions to the configured Kibana origin and keep all automation visibly opt-in.
+Do not expose a remote-debugging port from the learner's everyday browser. Opening the launcher-generated URL is the explicit opt-in boundary, and the persistent coach panel and stop control keep automation visible.
 
 ### Recommendation
 
-Build the semantic command protocol and the **learner-browser extension adapter first**. It is the product surface for demonstrations, guided practice, and challenge mode. Retain a smaller **headless Playwright adapter** solely to replay the same semantic playbooks for video production and automated compatibility checks. Both adapters should share target selectors and validation contracts, but Playwright does not need the learner session, extension pairing, take-control, accessibility-overlay, or scoring UI.
+Build the semantic command protocol and the **injected Kibana coach adapter first**. It is the product surface for demonstrations, guided practice, and challenge mode. Retain a smaller **headless Playwright adapter** solely to replay the same semantic playbooks for video production and automated compatibility checks. Both adapters should share target selectors and validation contracts, but Playwright does not need the learner session handoff, take-control, accessibility-overlay, or scoring UI.
 
 ## 4. Cursor and Narration UX
 
@@ -366,7 +366,7 @@ Browser/tutorial becomes available
         ↓
 Learner loads the incident workspace
         ↓
-Learner browser pairs with learning session
+Learner browser automatically connects to learning session
         ↓
 Investigation steps are validated
         ↓
@@ -494,7 +494,7 @@ Implement one scenario only:
 - targeted checkout traffic;
 - `scenario.id` propagation;
 - Kibana saved data view and dashboard;
-- one semantic playbook executed in the learner's Kibana tab by the extension adapter;
+- one semantic playbook executed in the learner's Kibana tab by the built-in coach adapter;
 - a five-step investigation that can demonstrate actions or wait for the learner;
 - normalized learner-action telemetry;
 - a structured diagnosis submission and basic evidence-based debrief;
@@ -582,8 +582,7 @@ learning-service/
 └── protocol/
     └── websocket.ts
 
-browser-extension/
-├── manifest.json
+kibana-coach/
 └── src/
     ├── session-client.ts
     ├── kibana-adapter.ts
@@ -593,6 +592,11 @@ browser-extension/
         ├── spotlight.ts
         ├── coach-panel.ts
         └── debrief.ts
+
+kibana-gateway/
+├── Dockerfile
+├── nginx.conf
+└── runtime.json
 
 scenario-recorder/
 ├── Dockerfile
@@ -606,7 +610,7 @@ kibana/
 └── saved-objects.ndjson
 ```
 
-The learning service exposes the learning-session HTTP and WebSocket APIs. The browser extension is the packaged learner client, not another Docker Compose service. The scenario recorder is an optional build/CI tool; it does not host learner sessions or contain a second copy of the tutorial UI.
+The learning service exposes the learning-session HTTP and WebSocket APIs. The Kibana gateway packages and injects the learner client while proxying its WebSocket on the Kibana origin. The scenario recorder is an optional build/CI tool; it does not host learner sessions or contain a second copy of the tutorial UI.
 
 The Docker Compose additions would roughly be:
 
@@ -667,8 +671,8 @@ The existing iframe cannot deeply automate Kibana.
 
 Mitigation:
 
-- Use the opt-in browser extension inside the learner's Kibana tab as the interactive automation boundary.
-- Use the telemetry workspace as the session launcher and pairing surface.
+- Serve Kibana through a local same-origin gateway that injects the constrained coach runtime.
+- Use the telemetry workspace to launch Kibana with an automatic session handoff.
 - Let Playwright own a separate Kibana page only while producing headless recordings or running compatibility checks.
 
 ### Timing and Ingestion Delays
@@ -1034,7 +1038,6 @@ Minimum HTTP surface:
 POST /api/runs                    create a run from template, seed, and mode
 GET  /api/runs/{run_id}           return lifecycle, manifest summary, and readiness
 POST /api/runs/{run_id}/reset     stop traffic and create a clean replay
-POST /api/sessions/{id}/claim     pair a browser using a short-lived code
 POST /api/sessions/{id}/answer    submit diagnosis and cited evidence
 GET  /api/sessions/{id}/feedback return score, route summary, and debrief
 WS   /api/sessions/{id}/events    commands, acknowledgements, observed state, and actions
@@ -1083,8 +1086,8 @@ Exit criteria: the same seed creates the same logical incident, ten affected tra
 
 ### Milestone C — Learner-Browser Learning Loop
 
-- Implement the learning service, semantic playbook engine, and extension adapter.
-- Add explicit Kibana-tab pairing and restrict extension permissions to configured origins.
+- Implement the learning service, semantic playbook engine, built-in coach, and Kibana gateway.
+- Add an authenticated launcher-to-Kibana handoff and proxy the learning WebSocket on the Kibana origin.
 - Add the docked coach panel, virtual cursor, target spotlight, toasts, and debrief modal.
 - Run the same five goals in demonstration and guided-practice policies.
 - Normalize relevant Kibana actions and validate browser plus Elasticsearch state.
@@ -1129,11 +1132,11 @@ The most valuable tests exercise contracts rather than screenshots alone.
 - **Seed tests:** identical template version plus seed yields an identical manifest; different seeds vary only allowed fields.
 - **Fault tests:** injected delay/error affects the real caller and disappears after cleanup.
 - **Evidence tests:** every generated expected answer can be proven by the generated Elasticsearch predicates.
-- **Extension contract tests:** the learner adapter can resolve targets, read state, perform semantic commands, observe learner actions, and recover after reconnect.
+- **Coach contract tests:** the learner adapter can resolve targets, read state, perform semantic commands, observe learner actions, and recover after reconnect.
 - **Recorder contract tests:** the Playwright adapter can resolve the same targets, perform demonstration commands, validate the result, capture video, and emit reproducibility metadata; it does not need learner-action observation or session-recovery behavior.
 - **Playbook tests:** alternative valid routes satisfy the same goals; invalid KQL does not advance progress.
 - **Scorer fixtures:** known action histories produce stable, reviewable score components and feedback.
-- **End-to-end tests:** fresh start, readiness, each extension mode, diagnosis, debrief, reset, replay, and selected headless recordings all complete for the pinned Kibana version.
+- **End-to-end tests:** fresh start, readiness, each assistance mode, diagnosis, debrief, reset, replay, and selected headless recordings all complete for the pinned Kibana version.
 - **Accessibility tests:** all guidance is reachable without a mouse, focus remains visible, and reduced-motion mode suppresses cursor animation without losing instructions.
 
 Store screenshots and DOM snapshots only on failure in CI. Use semantic state and Elasticsearch evidence as the primary assertions.
@@ -1144,7 +1147,7 @@ These choices should be made explicitly as implementation begins:
 
 | Decision | Recommendation | Reason |
 | --- | --- | --- |
-| Interactive browser surface | Opt-in extension adapter | Runs demonstrations and guidance in the learner's real Kibana tab with constrained permissions |
+| Interactive browser surface | Built-in same-origin coach | Runs demonstrations and guidance in the learner's real Kibana tab without browser installation |
 | Playwright scope | Headless recording and compatibility checks only | Produces reproducible scenario videos and validates selectors without creating a second learner experience |
 | First investigation UI | Discover plus provisioned views | Smallest surface that teaches time range, KQL, fields, and trace correlation |
 | First trace fidelity | Correlated operation documents | Avoids making APM setup block the initial learning loop |
@@ -1154,4 +1157,4 @@ These choices should be made explicitly as implementation begins:
 | Assistance scoring | Report separately | Makes feedback understandable and avoids hidden penalties |
 | Tutorial telemetry | Dedicated data stream/index | Prevents learner activity from polluting incident evidence |
 
-Before multi-learner or hosted deployment, decide whether the primary target is a local single-learner lab, a hosted workshop, or both. That decision changes authentication, session tenancy, TLS, retention, and whether an extension can safely connect to `localhost`. It does not need to block the local extension-based vertical slice.
+Before multi-learner or hosted deployment, decide whether the primary target is a local single-learner lab, a hosted workshop, or both. That decision changes authentication, session tenancy, TLS, retention, and gateway isolation. It does not need to block the local same-origin vertical slice.

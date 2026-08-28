@@ -5,7 +5,10 @@ class KibanaAdapter {
   }
 
   async initialize() {
-    this.registry = await fetch(chrome.runtime.getURL('selectors/kibana-8.15.json')).then(response => response.json());
+    const registryUrl = globalThis.chrome?.runtime?.getURL
+      ? chrome.runtime.getURL('selectors/kibana-8.15.json')
+      : '/incident-coach/assets/selectors/kibana-8.15.json';
+    this.registry = await fetch(registryUrl).then(response => response.json());
   }
 
   resolve(name) {
@@ -23,7 +26,7 @@ class KibanaAdapter {
     element.dispatchEvent(new Event('change', {bubbles: true}));
   }
 
-  async waitFor(name, timeout = 5000) {
+  async waitFor(name, timeout = 20000) {
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
       const element = this.resolve(name);

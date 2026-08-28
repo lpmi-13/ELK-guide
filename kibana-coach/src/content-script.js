@@ -1,4 +1,5 @@
-(() => {
+function startIncidentCoach() {
+  if (document.querySelector('#adaptive-incident-coach')) return;
   const host = document.createElement('div');
   host.id = 'adaptive-incident-coach';
   host.hidden = true;
@@ -8,6 +9,7 @@
   let client = null;
   let observer = null;
   let currentCommand = null;
+  const activeSessionKey = 'incident-coach:auto-connect';
 
   async function execute(command, explicitlyRequested = false) {
     try {
@@ -21,7 +23,7 @@
     }
   }
 
-  async function pair(config) {
+  async function startSession(config) {
     client?.stop();
     observer?.stop();
     await adapter.initialize();
@@ -43,7 +45,12 @@
     coach.onPause = paused => client.send({message_type: paused ? 'pause' : 'resume'});
     coach.onHint = () => client.requestHint();
     coach.onDemonstrate = () => currentCommand && execute(currentCommand, true);
-    coach.onStop = () => { observer.stop(); client.stop(); coach.stop(); };
+    coach.onStop = () => {
+      observer.stop();
+      client.forget();
+      sessionStorage.removeItem(activeSessionKey);
+      coach.stop();
+    };
     coach.onDiagnosis = async answer => {
       try {
         const feedback = await client.submitDiagnosis(answer);
@@ -51,12 +58,20 @@
       } catch (error) { coach.toast(error.message, true); }
     };
     host.hidden = false;
-    coach.toast(`Paired to ${session.session_id}. Automation is visibly active.`);
+    coach.toast(`Connected to ${session.session_id}. Automation is visibly active.`);
   }
 
-  chrome.runtime.onMessage.addListener((message, _sender, respond) => {
-    if (message.type !== 'incident-coach-pair') return false;
-    pair(message.config).then(() => respond({ok: true})).catch(error => respond({ok: false, error: error.message}));
-    return true;
-  });
-})();
+  const savedConfig = sessionStorage.getItem(activeSessionKey);
+  if (savedConfig) {
+    startSession(JSON.parse(savedConfig)).catch(error => {
+      host.hidden = false;
+      coach.toast(`Automatic connection failed: ${error.message}`, true);
+    });
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', startIncidentCoach, {once: true});
+} else {
+  startIncidentCoach();
+}

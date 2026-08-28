@@ -2,7 +2,7 @@
 
 A self-contained Docker Compose lab that turns a five-service request path into a reproducible Kibana investigation. The initial `slow-payments` scenario injects real latency into checkout calls, generates correlated transactions and downstream spans, waits for Elasticsearch evidence, and then guides or observes the learner in Kibana.
 
-The interactive experience runs in the learner's explicitly opted-in Kibana tab through the extension in `browser-extension/`. Playwright is limited to headless reference recordings and selector compatibility checks; it is not a streamed learner browser. See [PLAN.md](PLAN.md) for the larger scenario catalog and delivery roadmap.
+The interactive experience runs directly in the learner's Kibana tab. A local same-origin gateway injects the coach runtime and proxies its authenticated learning WebSocket, so Chrome, Vivaldi, Firefox, and other modern browsers need no extension or other installation. Playwright is limited to headless reference recordings and compatibility checks; it is not a streamed learner browser. See [PLAN.md](PLAN.md) for the larger scenario catalog and delivery roadmap.
 
 ## What is implemented
 
@@ -13,7 +13,7 @@ The interactive experience runs in the learner's explicitly opted-in Kibana tab 
 - An Elasticsearch readiness predicate requiring ten affected payment traces before `READY`.
 - Automatic Kibana data-view, Discover search, and overview-dashboard provisioning.
 - Demonstration, guided-practice, and challenge policies driven by one semantic playbook.
-- Short-lived, single-controller browser pairing and an immediate visible stop control.
+- Automatic authenticated WebSocket handoff from the launcher to Kibana, plus an immediate visible stop control.
 - Normalized investigation actions, state/evidence validation, structured diagnosis submission, and component scoring.
 - Separate `tutorial-*` and `scenario-*` indices so learning/control telemetry does not contaminate `microservices-*` evidence.
 - A profile-gated Playwright recorder with video metadata and failure screenshots/DOM snapshots.
@@ -24,7 +24,8 @@ The interactive experience runs in the learner's explicitly opted-in Kibana tab 
 | --- | --- | --- |
 | Elasticsearch | Stores incident, tutorial, and control events | `9200` |
 | Logstash | Tails JSON events and routes them by dataset | `5044`, `9600` |
-| Kibana | Provisioned investigation surface | `5601` |
+| Kibana | Provisioned investigation surface behind the gateway | internal `5601` |
+| Kibana gateway | Serves Kibana with the built-in coach runtime | `5601` |
 | API gateway | Calls auth, catalog, and orders | `8080` |
 | Auth | Simulates identity work | internal `8081` |
 | Catalog | Simulates product work | internal `8082` |
@@ -32,7 +33,7 @@ The interactive experience runs in the learner's explicitly opted-in Kibana tab 
 | Payments | Receives the initial latency fault | internal `8084` |
 | Scenario controller | Activates faults, generates traffic, and gates readiness | internal `8092` |
 | Learning service | Owns sessions, semantic commands, validation, and debriefs | `8091` |
-| Lab launcher | Starts runs, shows readiness, pairing details, and telemetry state | `8090` |
+| Lab launcher | Starts runs, shows readiness, opens the connected Kibana session, and reports telemetry state | `8090` |
 
 The scenario controller writes an immutable manifest for every run. The launcher turns a 10–40 character scenario key into the manifest's numeric seed; reusing the exact key reproduces the allowed variation, while a unique run ID prevents historical evidence from leaking into a replay. The launcher generates clean three-word examples, but user-entered keys may contain any characters. Existing automation can continue to supply numeric seeds directly.
 
@@ -48,18 +49,15 @@ docker compose ps
 
 Open <http://localhost:8090>, choose an assistance mode, accept or change the suggested scenario key, and activate the incident. The launcher shows evidence progress and enables the Kibana link only after the run reaches `READY`. No manual Kibana data-view creation is required.
 
-### Install and pair the learner extension
+### Open the built-in learner experience
 
-The local prototype is an unpacked Manifest V3 extension:
+1. Open the launcher at <http://localhost:8090> and confirm its header says **built-in Kibana coach 1.0.0 ready**.
+2. Choose an assistance mode, start a scenario, and wait for its evidence to become ready.
+3. Select **Open the ready investigation in Kibana**. The new tab connects automatically and immediately starts the assistance mode you chose.
 
-1. Open your browser's extension-management page and enable developer mode.
-2. Choose **Load unpacked** and select this repository's `browser-extension/` directory.
-3. Open the ready investigation link from the launcher in its own Kibana tab.
-4. Click the extension and enter the session ID and six-digit code shown by the launcher.
+The automatic handoff is scoped to the local Kibana gateway. Its session token is removed from the address bar before Kibana starts and retained only for reloads in that tab. The coach always shows when automation is active, and **Stop** immediately disconnects it and forgets the handoff. Demonstration mode performs semantic actions visibly; guided and challenge modes observe the learner's normalized Kibana actions.
 
-Pairing is scoped to the configured local Kibana and learning-service origins. The coach always shows when automation is active, and **Stop** immediately disconnects it. Demonstration mode performs semantic actions visibly; guided and challenge modes observe the learner's normalized Kibana actions.
-
-The lab suppresses Kibana's insecure-cluster and public-URL warnings, plus the Discover first-run tour callouts. Reload the unpacked extension after pulling changes so its document-start preferences apply to new Kibana tabs.
+The lab suppresses Kibana's insecure-cluster and public-URL warnings, plus the Discover first-run tour callouts.
 
 ## Reproduce or reset a run
 
@@ -125,7 +123,7 @@ python -m unittest discover -s tests -v
 docker compose config -q
 ```
 
-With the stack running, exercise run creation, readiness, pairing, all five goals, diagnosis, and debrief:
+With the stack running, exercise run creation, readiness, authenticated connection, all five goals, diagnosis, and debrief:
 
 ```sh
 python tests/live_smoke.py

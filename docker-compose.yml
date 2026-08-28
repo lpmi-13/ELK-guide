@@ -66,14 +66,31 @@ services:
     depends_on:
       elasticsearch:
         condition: service_healthy
-    ports:
-      - "127.0.0.1:5601:5601"
-      - "[::1]:5601:5601"
     healthcheck:
       test: [CMD-SHELL, "curl -fsS http://localhost:5601/api/status"]
       interval: 10s
       timeout: 5s
       retries: 30
+    networks: [observability]
+
+  kibana-gateway:
+    build:
+      context: .
+      dockerfile: kibana-gateway/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5601:5601"
+      - "[::1]:5601:5601"
+    depends_on:
+      kibana:
+        condition: service_healthy
+      learning-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5601/incident-coach/runtime.json"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     networks: [observability]
 
   kibana-setup:
