@@ -28,7 +28,8 @@ services:
     volumes:
       - elasticsearch-data:/usr/share/elasticsearch/data
     ports:
-      - "9200:9200"
+      - "127.0.0.1:9200:9200"
+      - "[::1]:9200:9200"
     healthcheck:
       test: [CMD-SHELL, "curl -fsS http://localhost:9200/_cluster/health?wait_for_status=yellow"]
       interval: 10s
@@ -48,21 +49,26 @@ services:
       elasticsearch:
         condition: service_healthy
     ports:
-      - "5044:5044"
-      - "9600:9600"
+      - "127.0.0.1:5044:5044"
+      - "[::1]:5044:5044"
+      - "127.0.0.1:9600:9600"
+      - "[::1]:9600:9600"
     networks: [observability]
 
   kibana:
     image: docker.elastic.co/kibana/kibana:${STACK_VERSION:-8.15.3}
     environment:
       ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      SERVER_PUBLICBASEURL: http://localhost:5601
       XPACK_SECURITY_ENABLED: "false"
+      XPACK_SECURITY_SHOWINSECURECLUSTERWARNING: "false"
       TELEMETRY_ENABLED: "false"
     depends_on:
       elasticsearch:
         condition: service_healthy
     ports:
-      - "5601:5601"
+      - "127.0.0.1:5601:5601"
+      - "[::1]:5601:5601"
     healthcheck:
       test: [CMD-SHELL, "curl -fsS http://localhost:5601/api/status"]
       interval: 10s
@@ -100,7 +106,9 @@ services:
       SERVICE_NAME: api-gateway
       PORT: "8080"
       DEPENDENCIES: http://auth:8081,http://catalog:8082,http://orders:8083
-    ports: ["8080:8080"]
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "[::1]:8080:8080"
 
   auth:
     <<: *microservice
@@ -179,7 +187,8 @@ services:
     volumes:
       - service-logs:/var/log/microservices
     ports:
-      - "8091:8091"
+      - "127.0.0.1:8091:8091"
+      - "[::1]:8091:8091"
     depends_on:
       scenario-controller:
         condition: service_healthy
@@ -201,7 +210,8 @@ services:
     volumes:
       - service-logs:/var/log/microservices
     ports:
-      - "8090:8090"
+      - "127.0.0.1:8090:8090"
+      - "[::1]:8090:8090"
     depends_on:
       kibana-setup:
         condition: service_completed_successfully
