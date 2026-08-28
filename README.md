@@ -59,6 +59,8 @@ The local prototype is an unpacked Manifest V3 extension:
 
 Pairing is scoped to the configured local Kibana and learning-service origins. The coach always shows when automation is active, and **Stop** immediately disconnects it. Demonstration mode performs semantic actions visibly; guided and challenge modes observe the learner's normalized Kibana actions.
 
+The lab suppresses Kibana's insecure-cluster and public-URL warnings, plus the Discover first-run tour callouts. Reload the unpacked extension after pulling changes so its document-start preferences apply to new Kibana tabs.
+
 ## Reproduce or reset a run
 
 Set the default startup scenario in `.env`:

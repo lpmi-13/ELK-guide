@@ -86,6 +86,14 @@ async function main() {
   const claim = await jsonRequest(`${learningUrl}/api/sessions/${created.session.session_id}/claim`, {method: 'POST', body: JSON.stringify({code: created.session.pairing_code})});
   const browser = await chromium.launch({headless: true});
   const context = await browser.newContext({viewport, locale: 'en-GB', timezoneId: 'UTC', colorScheme: 'dark', reducedMotion: 'reduce', recordVideo: {dir: outputDir, size: viewport}});
+  await context.addInitScript(() => {
+    for (const key of [
+      'discover:docExplorerCalloutClosed',
+      'discover:docExplorerUpdateCalloutClosed',
+    ]) {
+      localStorage.setItem(key, JSON.stringify(true));
+    }
+  });
   const page = await context.newPage();
   const snapshots = [];
   let outcome = 'completed';

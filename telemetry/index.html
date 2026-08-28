@@ -23,6 +23,17 @@
     .code { display:inline-block;padding:8px 12px;background:#09121a;border:1px solid #536c80;border-radius:5px;font:700 24px ui-monospace,monospace;letter-spacing:.16em; }
     dl { display:grid;grid-template-columns:110px 1fr;gap:8px;margin:18px 0; } dt { color:#90a5b6; } dd { margin:0;overflow-wrap:anywhere; }
     #run-state.ready { color:#43d7a0; } #run-state.failed { color:#ff8878; }
+    .evidence-progress { margin-top:20px; }
+    #readiness { margin:0;font-weight:650;color:#dbe8f1; }
+    #evidence-progress { display:block;width:100%;height:14px;margin-top:10px;border:0;border-radius:999px;background:#09121a;overflow:hidden;accent-color:#32b8eb; }
+    #evidence-progress::-webkit-progress-bar { background:#09121a;border-radius:999px;box-shadow:inset 0 0 0 1px #334b5e; }
+    #evidence-progress::-webkit-progress-value { background:linear-gradient(90deg,#1b78b5,#32b8eb);border-radius:999px;transition:width .35s ease; }
+    #evidence-progress::-moz-progress-bar { background:linear-gradient(90deg,#1b78b5,#32b8eb);border-radius:999px; }
+    .evidence-progress.ready #evidence-progress::-webkit-progress-value { background:linear-gradient(90deg,#168a65,#43d7a0); }
+    .evidence-progress.ready #evidence-progress::-moz-progress-bar { background:linear-gradient(90deg,#168a65,#43d7a0); }
+    #open-kibana { width:100%;box-sizing:border-box; }
+    #open-kibana[disabled] { opacity:1;background:#253542;color:#7e92a2;border:1px solid #425767;box-shadow:inset 0 0 0 1px #101a22;cursor:not-allowed; }
+    .button-help { margin:7px 0 0;text-align:center;font-size:12px;color:#90a5b6; }
     ol { color:#c6d4df;padding-left:20px;line-height:1.65; }
     @media(max-width:760px){main{grid-template-columns:1fr}body{padding:22px 14px}.field-row{grid-template-columns:1fr}}
   </style>
@@ -60,8 +71,12 @@
       <h2>Incident preparing</h2>
       <p id="brief"></p>
       <dl><dt>Run</dt><dd id="run-id"></dd><dt>Scenario key</dt><dd id="active-key"></dd><dt>Session</dt><dd id="session-id"></dd><dt>State</dt><dd id="run-state">CREATED</dd><dt>Pairing code</dt><dd><span class="code" id="pair-code"></span></dd></dl>
-      <p id="readiness">Waiting for affected traces to be indexed…</p>
-      <a id="open-kibana" class="button" target="_blank" rel="noopener" hidden>Open the ready investigation in Kibana</a>
+      <div class="evidence-progress">
+        <p id="readiness" role="status" aria-live="polite">Preparing investigation evidence…</p>
+        <progress id="evidence-progress" value="0" max="10" aria-label="Investigation evidence preparation" aria-describedby="readiness"></progress>
+      </div>
+      <button id="open-kibana" class="button" type="button" disabled aria-describedby="open-kibana-help">Open the ready investigation in Kibana</button>
+      <p id="open-kibana-help" class="button-help">Available when the evidence bar is full.</p>
     </section>
   </main>
   <script>
@@ -71,6 +86,12 @@
     const form = document.querySelector('#start-form');
     const card = document.querySelector('#session-card');
     const scenarioKey = document.querySelector('#scenario-key');
+    const evidenceProgress = document.querySelector('#evidence-progress');
+    const evidenceProgressContainer = document.querySelector('.evidence-progress');
+    const readiness = document.querySelector('#readiness');
+    const openKibana = document.querySelector('#open-kibana');
+    const openKibanaHelp = document.querySelector('#open-kibana-help');
+    let investigationUrl = '';
     let socket;
 
     const keyWords = [
@@ -83,10 +104,11 @@
       const values = crypto.getRandomValues(new Uint32Array(3));
       return keyWords.map((words, index) => words[values[index] % words.length]).join('-');
     }
-    function evidenceStatus(count, required) {
-      if (count >= required) return `${count} affected traces indexed; minimum of ${required} met.`;
-      const remaining = required - count;
-      return `${count} affected traces indexed; ${remaining} more ${remaining === 1 ? 'is' : 'are'} needed.`;
+    function updateEvidenceProgress(count, required) {
+      const threshold = Math.max(Number(required) || 1, 1);
+      const indexed = Math.max(Number(count) || 0, 0);
+      evidenceProgress.max = threshold;
+      evidenceProgress.value = Math.min(indexed, threshold);
     }
 
     function send(type, details = {}) {
@@ -107,17 +129,21 @@
         state.className = run.state.toLowerCase();
         const count = run.evidence?.affected_traces || 0;
         const required = run.evidence?.required || 10;
-        document.querySelector('#readiness').textContent = evidenceStatus(count, required);
+        updateEvidenceProgress(count, required);
         if (run.state === 'READY') {
           document.querySelector('#session-card h2').textContent = 'Incident evidence is ready';
-          const link = document.querySelector('#open-kibana');
-          link.href = run.investigation_url || `${kibanaUrl}/app/discover#/view/incident-investigation`;
-          link.hidden = false;
+          readiness.textContent = 'Investigation evidence is ready.';
+          evidenceProgress.value = evidenceProgress.max;
+          evidenceProgressContainer.className = 'evidence-progress ready';
+          investigationUrl = run.investigation_url || `${kibanaUrl}/app/discover#/view/incident-investigation`;
+          openKibana.disabled = false;
+          openKibanaHelp.textContent = 'Evidence is ready. Opens in a new tab.';
           send('scenario_ready', {run_id: runId});
           break;
         }
         if (run.state === 'FAILED' || run.state === 'ABORTED') {
-          document.querySelector('#readiness').textContent = run.error || 'Run did not become ready.';
+          readiness.textContent = run.error || 'Run did not become ready.';
+          openKibanaHelp.textContent = 'Unavailable because the run did not become ready.';
           break;
         }
       }
@@ -131,6 +157,13 @@
       newKey.disabled = true;
       scenarioKey.readOnly = true;
       start.textContent = 'Activating…';
+      document.querySelector('#session-card h2').textContent = 'Incident preparing';
+      readiness.textContent = 'Preparing investigation evidence…';
+      evidenceProgress.value = 0;
+      evidenceProgressContainer.className = 'evidence-progress';
+      investigationUrl = '';
+      openKibana.disabled = true;
+      openKibanaHelp.textContent = 'Available when the evidence bar is full.';
       try {
         const response = await fetch(`${learningUrl}/api/runs`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario:'slow-payments',mode:document.querySelector('#mode').value,scenario_key:scenarioKey.value})});
         const result = await response.json();
@@ -146,7 +179,8 @@
         send('scenario_started', {run_id: result.run.run_id, tutorial_mode: result.session.mode});
         await poll(result.run.run_id);
       } catch (error) {
-        document.querySelector('#readiness').textContent = error.message;
+        readiness.textContent = error.message;
+        openKibanaHelp.textContent = 'Unavailable because the run did not become ready.';
         card.hidden = false;
         start.disabled = false;
       } finally {
@@ -154,6 +188,9 @@
         newKey.disabled = false;
         scenarioKey.readOnly = false;
       }
+    });
+    openKibana.addEventListener('click', () => {
+      if (investigationUrl) window.open(investigationUrl, '_blank', 'noopener');
     });
     document.querySelector('#new-key').addEventListener('click', () => {
       scenarioKey.value = generateScenarioKey();

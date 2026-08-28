@@ -17,6 +17,11 @@
   "content_scripts": [
     {
       "matches": ["http://localhost:5601/*", "http://127.0.0.1:5601/*"],
+      "js": ["src/kibana-bootstrap.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["http://localhost:5601/*", "http://127.0.0.1:5601/*"],
       "js": [
         "src/ui/cursor.js",
         "src/ui/spotlight.js",

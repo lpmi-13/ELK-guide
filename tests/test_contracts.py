@@ -45,13 +45,39 @@ class ContractTests(unittest.TestCase):
         for target in ("kibana.time_picker", "kibana.time_value", "kibana.time_unit", "kibana.time_apply", "kibana.query_bar", "kibana.add_filter", "kibana.first_result", "kibana.first_trace_value", "kibana.trace_field"):
             self.assertTrue(shared["targets"][target])
 
+    def test_kibana_first_run_prompts_are_suppressed(self):
+        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        self.assertIn("SERVER_PUBLICBASEURL: http://localhost:5601", compose)
+        self.assertIn('XPACK_SECURITY_SHOWINSECURECLUSTERWARNING: "false"', compose)
+
+        manifest = json.loads((ROOT / "browser-extension/manifest.json").read_text(encoding="utf-8"))
+        bootstrap_scripts = [
+            script
+            for script in manifest["content_scripts"]
+            if "src/kibana-bootstrap.js" in script["js"]
+        ]
+        self.assertEqual(len(bootstrap_scripts), 1)
+        self.assertEqual(bootstrap_scripts[0]["run_at"], "document_start")
+
+        bootstrap = (ROOT / "browser-extension/src/kibana-bootstrap.js").read_text(encoding="utf-8")
+        recorder = (ROOT / "scenario-recorder/recorder.mjs").read_text(encoding="utf-8")
+        for key in (
+            "discover:docExplorerCalloutClosed",
+            "discover:docExplorerUpdateCalloutClosed",
+        ):
+            self.assertIn(key, bootstrap)
+            self.assertIn(key, recorder)
+
     def test_launcher_uses_scenario_keys_and_unambiguous_evidence_progress(self):
         launcher = (ROOT / "telemetry/index.html").read_text(encoding="utf-8")
         self.assertIn('id="scenario-key"', launcher)
         self.assertIn('minlength="10" maxlength="40"', launcher)
         self.assertNotIn('id="scenario-key" type="text" value="quiet-river-signal" pattern=', launcher)
         self.assertIn("scenario_key:scenarioKey.value", launcher)
-        self.assertIn("minimum of ${required} met", launcher)
+        self.assertIn('id="evidence-progress"', launcher)
+        self.assertIn('id="open-kibana" class="button" type="button" disabled', launcher)
+        self.assertIn("evidenceProgress.value = Math.min(indexed, threshold)", launcher)
+        self.assertNotIn("minimum of ${required} met", launcher)
         self.assertNotIn("${count} of ${required} affected traces", launcher)
 
         manifest_schema = json.loads((ROOT / "learning/schemas/run-manifest.schema.json").read_text())
