@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "id": "slow-service-investigation",
+  "version": 1,
+  "starting_view": "incident-investigation",
+  "steps": [
+    {
+      "id": "scope-incident-window",
+      "goal": "scope_incident_window",
+      "narration": "Start by narrowing Discover to the period in which checkout became slow.",
+      "target": "kibana.time_picker",
+      "action": "set_time_range",
+      "value": {"from": "now-10m", "to": "now"},
+      "validation": {"type": "browser_state", "time_from": "now-10m"},
+      "hints": ["Focus on the incident window.", "Use Kibana's date picker.", "Choose a relative range measured in minutes.", "Set the start to now-10m."]
+    },
+    {
+      "id": "find-slow-requests",
+      "goal": "identify_slow_transactions",
+      "narration": "Filter for operations lasting at least two seconds while retaining this run's evidence.",
+      "target": "kibana.query_bar",
+      "action": "enter_query",
+      "value": "scenario.id: \"${run_id}\" and event.duration >= 2000000000",
+      "validation": {"type": "elasticsearch_count", "minimum": 1},
+      "hints": ["Look for unusually long operations.", "Use the event.duration field.", "Durations are stored in nanoseconds.", "Try event.duration >= 2000000000."]
+    },
+    {
+      "id": "isolate-slowest-service",
+      "goal": "compare_services",
+      "narration": "Use the evidence to isolate the service contributing the dominant latency.",
+      "target": "kibana.query_bar",
+      "action": "add_filter",
+      "value": {"field": "service.name", "value": "${expected_service}"},
+      "validation": {"type": "browser_and_elasticsearch", "field": "service.name", "value": "${expected_service}", "minimum": 1},
+      "hints": ["Compare the services in the slow result set.", "Inspect service.name.", "The slow local operation reveals the dependency.", "Filter service.name to the service with the repeated 3+ second operations."]
+    },
+    {
+      "id": "inspect-correlated-trace",
+      "goal": "inspect_representative_trace",
+      "narration": "Open one affected event and pivot on its trace ID to confirm the upstream impact.",
+      "target": "kibana.first_result",
+      "action": "open_trace",
+      "value": {"field": "trace.id"},
+      "validation": {"type": "selected_trace", "minimum_services": 3},
+      "hints": ["Inspect a representative document.", "Expand a slow result row.", "Find trace.id in the document.", "Use the trace ID to view the correlated request path."]
+    },
+    {
+      "id": "submit-diagnosis",
+      "goal": "submit_supported_diagnosis",
+      "narration": "State the faulty service, failure type, affected route, and the trace evidence supporting your conclusion.",
+      "target": "coach.diagnosis",
+      "action": "request_diagnosis",
+      "validation": {"type": "structured_answer"},
+      "hints": ["Summarize what the evidence proves.", "Name the locally slow service and the user-facing route.", "Cite a trace ID.", "Submit the service, latency fault, /checkout, and a representative trace."]
+    }
+  ]
+}

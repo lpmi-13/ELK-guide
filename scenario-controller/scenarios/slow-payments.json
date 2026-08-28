@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "slow-payments",
+  "version": 1,
+  "title": "Checkout requests are suddenly slow",
+  "difficulty": "beginner",
+  "brief": "Users report that checkout became slow in the last few minutes. Identify the bottleneck and support the conclusion with correlated request evidence.",
+  "fault": {
+    "service": "payments",
+    "type": "latency",
+    "delay_ms": 3500,
+    "probability": 0.85,
+    "paths": ["/checkout"]
+  },
+  "traffic": {
+    "entrypoint": "api-gateway",
+    "path": "/checkout",
+    "requests_per_second": 3
+  },
+  "readiness": {
+    "timeout_seconds": 120,
+    "minimum_affected_traces": 10,
+    "expected_service": "payments",
+    "minimum_duration_ms": 3000
+  },
+  "truth": {
+    "root_cause_service": "payments",
+    "fault_type": "latency",
+    "affected_route": "/checkout",
+    "evidence": ["slow_transaction", "dominant_dependency_span", "shared_trace"]
+  },
+  "playbook": "slow-service-investigation",
+  "rubric": "slow-service-beginner"
+}

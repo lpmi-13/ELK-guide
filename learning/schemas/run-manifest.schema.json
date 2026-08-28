@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://elk-guide.local/schemas/run-manifest.schema.json",
+  "title": "Materialized incident run",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "template_id", "template_version", "template_hash", "seed", "generator_version", "created_at", "scenario", "expected", "playbook", "rubric"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"type": "string", "pattern": "^run-[a-f0-9]+$"},
+    "template_id": {"type": "string"},
+    "template_version": {"type": "integer", "minimum": 1},
+    "template_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "seed": {"type": "integer", "minimum": 0},
+    "scenario_key": {"type": "string", "pattern": "^[a-z]{2,20}(-[a-z]{2,20}){2}$"},
+    "generator_version": {"type": "integer", "minimum": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "scenario": {"type": "object"},
+    "expected": {"type": "object"},
+    "playbook": {"type": "string"},
+    "rubric": {"type": "string"}
+  }
+}

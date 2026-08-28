@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Adaptive Kibana Incident Coach",
+  "version": "0.1.0",
+  "description": "Opt-in semantic guidance for the local ELK incident lab.",
+  "permissions": ["activeTab", "storage"],
+  "host_permissions": [
+    "http://localhost:5601/*",
+    "http://127.0.0.1:5601/*",
+    "http://localhost:8091/*",
+    "ws://localhost:8091/*"
+  ],
+  "action": {
+    "default_title": "Pair incident coach",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://localhost:5601/*", "http://127.0.0.1:5601/*"],
+      "js": [
+        "src/ui/cursor.js",
+        "src/ui/spotlight.js",
+        "src/ui/coach-panel.js",
+        "src/ui/debrief.js",
+        "src/kibana-adapter.js",
+        "src/action-observer.js",
+        "src/session-client.js",
+        "src/content-script.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["selectors/kibana-8.15.json"],
+      "matches": ["http://localhost:5601/*", "http://127.0.0.1:5601/*"]
+    }
+  ]
+}

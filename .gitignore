@@ -3,3 +3,7 @@ data/
 __pycache__/
 *.pyc
 
+recordings/*
+!recordings/.gitkeep
+
+notes.txt

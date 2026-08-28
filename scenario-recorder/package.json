@@ -1,0 +1,8 @@
+{
+  "name": "elk-guide-scenario-recorder",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"record": "node recorder.mjs"},
+  "dependencies": {"playwright": "1.62.1"}
+}

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://elk-guide.local/schemas/scenario.schema.json",
+  "title": "Incident scenario template",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "title", "fault", "traffic", "readiness", "truth", "playbook", "rubric"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]+$"},
+    "version": {"type": "integer", "minimum": 1},
+    "title": {"type": "string", "minLength": 1},
+    "difficulty": {"enum": ["beginner", "intermediate", "advanced"]},
+    "brief": {"type": "string", "minLength": 1},
+    "fault": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service", "type", "delay_ms", "probability", "paths"],
+      "properties": {
+        "service": {"type": "string", "minLength": 1},
+        "type": {"enum": ["latency", "error", "unavailable"]},
+        "delay_ms": {"type": "integer", "minimum": 0, "maximum": 30000},
+        "probability": {"type": "number", "minimum": 0, "maximum": 1},
+        "paths": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^/"}}
+      }
+    },
+    "traffic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entrypoint", "path", "requests_per_second"],
+      "properties": {
+        "entrypoint": {"type": "string", "minLength": 1},
+        "path": {"type": "string", "pattern": "^/"},
+        "requests_per_second": {"type": "number", "exclusiveMinimum": 0, "maximum": 20}
+      }
+    },
+    "readiness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeout_seconds", "minimum_affected_traces", "expected_service", "minimum_duration_ms"],
+      "properties": {
+        "timeout_seconds": {"type": "integer", "minimum": 5},
+        "minimum_affected_traces": {"type": "integer", "minimum": 1},
+        "expected_service": {"type": "string", "minLength": 1},
+        "minimum_duration_ms": {"type": "integer", "minimum": 1}
+      }
+    },
+    "truth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root_cause_service", "fault_type", "affected_route", "evidence"],
+      "properties": {
+        "root_cause_service": {"type": "string"},
+        "fault_type": {"type": "string"},
+        "affected_route": {"type": "string"},
+        "evidence": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+      }
+    },
+    "playbook": {"type": "string", "minLength": 1},
+    "rubric": {"type": "string", "minLength": 1}
+  }
+}

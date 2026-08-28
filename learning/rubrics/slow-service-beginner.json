@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "slow-service-beginner",
+  "version": 1,
+  "goals": [
+    {"id": "scope_incident_window", "requires": []},
+    {"id": "identify_slow_transactions", "requires": ["scope_incident_window"]},
+    {"id": "compare_services", "requires": ["identify_slow_transactions"]},
+    {"id": "inspect_representative_trace", "requires": ["identify_slow_transactions"]},
+    {"id": "submit_supported_diagnosis", "requires": ["compare_services", "inspect_representative_trace"]}
+  ],
+  "weights": {"diagnosis": 40, "evidence": 20, "coverage": 20, "relevance": 10, "efficiency": 10},
+  "reference_action_cost": 5,
+  "action_costs": {
+    "time_range_changed": 1,
+    "query_submitted": 1,
+    "filter_added": 1,
+    "document_expanded": 0.5,
+    "trace_opened": 1,
+    "diagnosis_submitted": 1,
+    "query_rejected": 1.5,
+    "filter_removed": 1.25
+  }
+}

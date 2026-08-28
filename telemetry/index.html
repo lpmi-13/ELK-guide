@@ -3,47 +3,164 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Kibana telemetry workspace</title>
+  <title>Adaptive Kibana incident lab</title>
   <style>
-    html, body { height: 100%; margin: 0; font: 14px system-ui, sans-serif; background: #101820; color: white; }
-    body { display: grid; grid-template-rows: 42px 1fr; }
-    header { display: flex; align-items: center; gap: 12px; padding: 0 16px; }
-    #status { color: #f5a700; } #status.online { color: #35c98b; }
-    iframe { width: 100%; height: 100%; border: 0; background: white; }
+    :root { color-scheme: dark; font: 15px system-ui, sans-serif; background: #0d1721; color: #eef5fb; }
+    body { max-width: 1040px; margin: 0 auto; padding: 42px 24px 80px; }
+    header { display:flex;align-items:center;gap:12px;margin-bottom:34px; } header h1 { font-size:22px;margin:0;flex:1; }
+    #telemetry { color:#f5b342;font-size:13px; } #telemetry.online { color:#43d7a0; }
+    main { display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,.75fr);gap:24px; }
+    section { background:#142331;border:1px solid #2e4559;border-radius:12px;padding:24px;box-shadow:0 14px 40px #0003; }
+    h2 { margin-top:0;font-size:20px; } p { line-height:1.55;color:#c6d4df; } label { display:block;font-weight:650;margin-top:14px; }
+    input,select { width:100%;box-sizing:border-box;margin-top:5px;padding:9px;border:1px solid #668096;border-radius:5px;background:#0c1822;color:#fff;font:inherit; }
+    button,a.button { display:inline-block;margin-top:18px;padding:10px 14px;border:0;border-radius:6px;background:#1b78b5;color:white;font-weight:750;text-decoration:none;cursor:pointer; }
+    button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible { outline:3px solid #ffb000;outline-offset:2px; }
+    button[disabled] { opacity:.55;cursor:wait; } .muted { font-size:13px;color:#90a5b6; }
+    .field-row { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end; }
+    .field-row button { margin-top:5px;padding:9px 12px;border:1px solid #668096;background:#203447;white-space:nowrap; }
+    .field-help { margin:6px 0 0;font-size:13px;color:#90a5b6; }
+    #session-card { border-left:4px solid #ffb000; } #session-card[hidden] { display:none; }
+    .code { display:inline-block;padding:8px 12px;background:#09121a;border:1px solid #536c80;border-radius:5px;font:700 24px ui-monospace,monospace;letter-spacing:.16em; }
+    dl { display:grid;grid-template-columns:110px 1fr;gap:8px;margin:18px 0; } dt { color:#90a5b6; } dd { margin:0;overflow-wrap:anywhere; }
+    #run-state.ready { color:#43d7a0; } #run-state.failed { color:#ff8878; }
+    ol { color:#c6d4df;padding-left:20px;line-height:1.65; }
+    @media(max-width:760px){main{grid-template-columns:1fr}body{padding:22px 14px}.field-row{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
-  <header><strong>Kibana workspace</strong><span id="status">connecting telemetry…</span></header>
-  <iframe id="kibana" title="Kibana dashboard"></iframe>
+  <header><h1>Adaptive Kibana incident lab</h1><span id="telemetry">connecting telemetry…</span></header>
+  <main>
+    <section>
+      <h2>Start an investigation</h2>
+      <p>A fault will affect the real checkout request path. The lab waits for enough indexed evidence before it lets the investigation begin.</p>
+      <form id="start-form">
+        <label>Assistance mode
+          <select id="mode"><option value="guided">Guided practice</option><option value="demonstration">Demonstration</option><option value="challenge">Challenge</option></select>
+        </label>
+        <label for="scenario-key">Scenario key</label>
+        <div class="field-row">
+          <input id="scenario-key" type="text" value="quiet-river-signal" pattern="[A-Za-z]{2,20}(-[A-Za-z]{2,20}){2}" title="Use three words separated by dashes." autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="scenario-key-help" required>
+          <button id="new-key" type="button">New key</button>
+        </div>
+        <p class="field-help" id="scenario-key-help">Reuse the same three-word key to replay the same incident variation.</p>
+        <button id="start" type="submit">Activate slow-checkout incident</button>
+      </form>
+      <p class="muted">The briefing intentionally does not name the faulty service.</p>
+    </section>
+    <section id="instructions">
+      <h2>How it works</h2>
+      <ol>
+        <li>Start a run and wait for the evidence checkpoint.</li>
+        <li>Load the unpacked extension from <code>browser-extension/</code>.</li>
+        <li>Open Kibana in its own tab, click the extension, and enter the pairing details.</li>
+        <li>Investigate live evidence; every goal is validated from state, not click coordinates.</li>
+      </ol>
+    </section>
+    <section id="session-card" hidden>
+      <h2>Incident preparing</h2>
+      <p id="brief"></p>
+      <dl><dt>Run</dt><dd id="run-id"></dd><dt>Scenario key</dt><dd id="active-key"></dd><dt>Session</dt><dd id="session-id"></dd><dt>State</dt><dd id="run-state">CREATED</dd><dt>Pairing code</dt><dd><span class="code" id="pair-code"></span></dd></dl>
+      <p id="readiness">Waiting for affected traces to be indexed…</p>
+      <a id="open-kibana" class="button" target="_blank" rel="noopener" hidden>Open the ready investigation in Kibana</a>
+    </section>
+  </main>
   <script>
     const kibanaUrl = __KIBANA_URL__;
-    const frame = document.querySelector('#kibana');
-    const status = document.querySelector('#status');
-    const sessionId = crypto.randomUUID();
-    let socket, pointerOverDashboard = false;
-    frame.src = kibanaUrl;
+    const learningUrl = __LEARNING_URL__;
+    const telemetry = document.querySelector('#telemetry');
+    const form = document.querySelector('#start-form');
+    const card = document.querySelector('#session-card');
+    const scenarioKey = document.querySelector('#scenario-key');
+    let socket;
+
+    const keyWords = [
+      ['bright', 'calm', 'gentle', 'hidden', 'quiet', 'silver', 'steady', 'warm'],
+      ['canyon', 'forest', 'garden', 'harbor', 'island', 'meadow', 'river', 'summit'],
+      ['beacon', 'comet', 'falcon', 'lantern', 'orbit', 'otter', 'signal', 'sparrow']
+    ];
+
+    function generateScenarioKey() {
+      const values = crypto.getRandomValues(new Uint32Array(3));
+      return keyWords.map((words, index) => words[values[index] % words.length]).join('-');
+    }
+    function evidenceStatus(count, required) {
+      if (count >= required) return `${count} affected traces indexed; minimum of ${required} met.`;
+      const remaining = required - count;
+      return `${count} affected traces indexed; ${remaining} more ${remaining === 1 ? 'is' : 'are'} needed.`;
+    }
 
     function send(type, details = {}) {
-      if (socket?.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({type, session_id: sessionId, path: frame.src,
-          viewport: `${innerWidth}x${innerHeight}`, ...details}));
-      }
+      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({type, session_id: sessionStorage.launcherSession || crypto.randomUUID(), path: location.pathname, viewport: `${innerWidth}x${innerHeight}`, ...details}));
     }
-    function connect() {
+    function connectTelemetry() {
       socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-      socket.onopen = () => { status.textContent = 'telemetry connected'; status.className = 'online'; send('session_started'); };
-      socket.onmessage = event => { const reply = JSON.parse(event.data); status.title = `Server: ${reply.type}`; };
-      socket.onclose = () => { status.textContent = 'telemetry reconnecting…'; status.className = ''; setTimeout(connect, 1500); };
+      socket.onopen = () => { telemetry.textContent = 'telemetry connected'; telemetry.className = 'online'; send('launcher_opened'); };
+      socket.onclose = () => { telemetry.textContent = 'telemetry reconnecting…';telemetry.className='';setTimeout(connectTelemetry,1500); };
     }
-    frame.addEventListener('load', () => send('dashboard_loaded'));
-    frame.addEventListener('pointerenter', () => { pointerOverDashboard = true; send('dashboard_pointer_enter'); });
-    frame.addEventListener('pointerleave', () => { pointerOverDashboard = false; send('dashboard_pointer_leave'); });
-    window.addEventListener('blur', () => send(pointerOverDashboard ? 'dashboard_interaction' : 'window_blurred'));
-    window.addEventListener('focus', () => send('window_focused'));
-    document.addEventListener('visibilitychange', () => send(`page_${document.visibilityState}`));
-    window.addEventListener('resize', () => send('viewport_resized'));
-    setInterval(() => { if (!document.hidden) send('dashboard_active'); }, 15000);
-    connect();
+    async function poll(runId) {
+      const state = document.querySelector('#run-state');
+      while (true) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        const response = await fetch(`${learningUrl}/api/runs/${runId}`);
+        const run = await response.json();
+        state.textContent = run.state;
+        state.className = run.state.toLowerCase();
+        const count = run.evidence?.affected_traces || 0;
+        const required = run.evidence?.required || 10;
+        document.querySelector('#readiness').textContent = evidenceStatus(count, required);
+        if (run.state === 'READY') {
+          document.querySelector('#session-card h2').textContent = 'Incident evidence is ready';
+          const link = document.querySelector('#open-kibana');
+          link.href = run.investigation_url || `${kibanaUrl}/app/discover#/view/incident-investigation`;
+          link.hidden = false;
+          send('scenario_ready', {run_id: runId});
+          break;
+        }
+        if (run.state === 'FAILED' || run.state === 'ABORTED') {
+          document.querySelector('#readiness').textContent = run.error || 'Run did not become ready.';
+          break;
+        }
+      }
+      document.querySelector('#start').disabled = false;
+    }
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const start = document.querySelector('#start');
+      const newKey = document.querySelector('#new-key');
+      start.disabled = true;
+      newKey.disabled = true;
+      scenarioKey.readOnly = true;
+      start.textContent = 'Activating…';
+      try {
+        const response = await fetch(`${learningUrl}/api/runs`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario:'slow-payments',mode:document.querySelector('#mode').value,scenario_key:scenarioKey.value.trim().toLowerCase()})});
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `Start failed (${response.status})`);
+        card.hidden = false;
+        document.querySelector('#brief').textContent = result.session.brief;
+        document.querySelector('#run-id').textContent = result.run.run_id;
+        document.querySelector('#active-key').textContent = result.run.scenario_key || scenarioKey.value;
+        document.querySelector('#session-id').textContent = result.session.session_id;
+        document.querySelector('#pair-code').textContent = result.session.pairing_code;
+        document.querySelector('#run-state').textContent = result.run.state;
+        sessionStorage.launcherSession = result.session.session_id;
+        send('scenario_started', {run_id: result.run.run_id, tutorial_mode: result.session.mode});
+        await poll(result.run.run_id);
+      } catch (error) {
+        document.querySelector('#readiness').textContent = error.message;
+        card.hidden = false;
+        start.disabled = false;
+      } finally {
+        start.textContent = 'Activate slow-checkout incident';
+        newKey.disabled = false;
+        scenarioKey.readOnly = false;
+      }
+    });
+    document.querySelector('#new-key').addEventListener('click', () => {
+      scenarioKey.value = generateScenarioKey();
+      scenarioKey.focus();
+    });
+    scenarioKey.value = generateScenarioKey();
+    connectTelemetry();
   </script>
 </body>
 </html>

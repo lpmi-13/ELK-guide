@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://elk-guide.local/schemas/command.schema.json",
+  "title": "Learner browser semantic command",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "command_id", "run_id", "session_id", "sequence", "type", "target", "mode"],
+  "properties": {
+    "protocol_version": {"const": 1},
+    "command_id": {"type": "string"},
+    "run_id": {"type": "string"},
+    "session_id": {"type": "string"},
+    "sequence": {"type": "integer", "minimum": 1},
+    "type": {"enum": ["orient", "set_time_range", "enter_query", "add_filter", "open_trace", "request_diagnosis", "show_debrief", "pause", "resume"]},
+    "target": {"type": "string"},
+    "value": {},
+    "expected_page": {"type": "string"},
+    "mode": {"enum": ["demonstration", "guided", "challenge"]},
+    "narration": {"type": "string"}
+  }
+}

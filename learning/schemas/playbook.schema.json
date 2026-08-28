@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://elk-guide.local/schemas/playbook.schema.json",
+  "title": "Semantic investigation playbook",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "version", "starting_view", "steps"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "id": {"type": "string"},
+    "version": {"type": "integer", "minimum": 1},
+    "starting_view": {"type": "string"},
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "goal", "narration", "target", "action", "validation", "hints"],
+        "properties": {
+          "id": {"type": "string"},
+          "goal": {"type": "string"},
+          "narration": {"type": "string"},
+          "target": {"type": "string"},
+          "action": {"type": "string"},
+          "value": {},
+          "validation": {"type": "object"},
+          "hints": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  }
+}
