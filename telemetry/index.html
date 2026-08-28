@@ -39,10 +39,10 @@
         </label>
         <label for="scenario-key">Scenario key</label>
         <div class="field-row">
-          <input id="scenario-key" type="text" value="quiet-river-signal" pattern="[A-Za-z]{2,20}(-[A-Za-z]{2,20}){2}" title="Use three words separated by dashes." autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="scenario-key-help" required>
+          <input id="scenario-key" type="text" value="quiet-river-signal" minlength="10" maxlength="40" title="Use 10 to 40 characters." autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="scenario-key-help" required>
           <button id="new-key" type="button">New key</button>
         </div>
-        <p class="field-help" id="scenario-key-help">Reuse the same three-word key to replay the same incident variation.</p>
+        <p class="field-help" id="scenario-key-help">Use any 10–40 characters. Reuse the same key to replay this incident variation.</p>
         <button id="start" type="submit">Activate slow-checkout incident</button>
       </form>
       <p class="muted">The briefing intentionally does not name the faulty service.</p>
@@ -132,7 +132,7 @@
       scenarioKey.readOnly = true;
       start.textContent = 'Activating…';
       try {
-        const response = await fetch(`${learningUrl}/api/runs`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario:'slow-payments',mode:document.querySelector('#mode').value,scenario_key:scenarioKey.value.trim().toLowerCase()})});
+        const response = await fetch(`${learningUrl}/api/runs`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario:'slow-payments',mode:document.querySelector('#mode').value,scenario_key:scenarioKey.value})});
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || `Start failed (${response.status})`);
         card.hidden = false;

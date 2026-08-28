@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import random
-import re
 import secrets
 import threading
 import time
@@ -38,7 +37,9 @@ state_lock = threading.RLock()
 write_lock = threading.Lock()
 current_run = None
 cancel_event = threading.Event()
-SCENARIO_KEY_PATTERN = re.compile(r"^[a-z]{2,20}(?:-[a-z]{2,20}){2}$")
+SCENARIO_KEY_MIN_LENGTH = 10
+SCENARIO_KEY_MAX_LENGTH = 40
+SCENARIO_KEY_UNSET = object()
 
 
 def now_iso():
@@ -90,32 +91,38 @@ def load_template(name):
     return template
 
 
+def scenario_key_seed(value):
+    """Map an exact, user-visible scenario key to its internal numeric seed."""
+    if not isinstance(value, str):
+        raise ValueError("scenario key must be a string between 10 and 40 characters")
+    if not SCENARIO_KEY_MIN_LENGTH <= len(value) <= SCENARIO_KEY_MAX_LENGTH:
+        raise ValueError("scenario key must be between 10 and 40 characters")
+    digest = hashlib.sha256(f"scenario-key:v1:{value}".encode()).digest()
+    return int.from_bytes(digest[:8], "big") & ((1 << 63) - 1), value
+
+
 def normalize_seed(value=None):
-    """Return an internal numeric seed and an optional memorable scenario key."""
+    """Return an internal numeric seed, accepting legacy string keys as input."""
     selected = value
     if selected is None or selected == "":
         selected = SCENARIO_SEED or secrets.randbits(63)
     if isinstance(selected, bool):
-        raise ValueError("seed must be a non-negative integer or a three-word scenario key")
+        raise ValueError("seed must be a non-negative integer or a 10-40 character scenario key")
     if isinstance(selected, int):
         seed = selected
         scenario_key = None
     elif isinstance(selected, float):
         if not selected.is_integer():
-            raise ValueError("seed must be a non-negative integer or a three-word scenario key")
+            raise ValueError("seed must be a non-negative integer or a 10-40 character scenario key")
         seed = int(selected)
         scenario_key = None
     else:
-        candidate = str(selected).strip().lower()
+        candidate = str(selected).strip()
         if candidate.isdecimal():
             seed = int(candidate)
             scenario_key = None
         else:
-            if not SCENARIO_KEY_PATTERN.fullmatch(candidate):
-                raise ValueError("scenario key must contain three lowercase words separated by dashes")
-            digest = hashlib.sha256(f"scenario-key:v1:{candidate}".encode()).digest()
-            seed = int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
-            scenario_key = candidate
+            return scenario_key_seed(candidate)
     if seed < 0:
         raise ValueError("seed must be a non-negative integer")
     return seed, scenario_key
@@ -303,9 +310,12 @@ def lifecycle(manifest, stop):
         clear_active_fault({"manifest": manifest})
 
 
-def create_run(seed=None, scenario_name=None):
+def create_run(seed=None, scenario_name=None, scenario_key=SCENARIO_KEY_UNSET):
     global current_run, cancel_event
-    selected_seed, scenario_key = normalize_seed(seed)
+    if scenario_key is SCENARIO_KEY_UNSET:
+        selected_seed, scenario_key = normalize_seed(seed)
+    else:
+        selected_seed, scenario_key = scenario_key_seed(scenario_key)
     template = load_template(scenario_name or SCENARIO_NAME)
     manifest = materialize(template, selected_seed, scenario_key=scenario_key)
     with state_lock:
@@ -391,19 +401,31 @@ class Handler(BaseHTTPRequestHandler):
         parts = parsed.path.strip("/").split("/")
         try:
             if parsed.path == "/api/runs":
-                selected_seed = payload.get("scenario_key", payload.get("seed"))
-                self.respond(202, create_run(selected_seed, payload.get("scenario")))
+                if "scenario_key" in payload:
+                    run = create_run(scenario_name=payload.get("scenario"), scenario_key=payload["scenario_key"])
+                else:
+                    run = create_run(payload.get("seed"), payload.get("scenario"))
+                self.respond(202, run)
                 return
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "reset":
                 with state_lock:
                     if not current_run or current_run["manifest"]["run_id"] != parts[2]:
                         self.respond(404, {"error": "run not found"})
                         return
-                    seed = payload.get("scenario_key", payload.get("seed"))
-                    if seed is None:
-                        seed = current_run["manifest"].get("scenario_key", current_run["manifest"]["seed"])
+                    use_scenario_key = "scenario_key" in payload
+                    seed = payload.get("seed")
+                    scenario_key = payload.get("scenario_key")
+                    if not use_scenario_key and seed is None:
+                        scenario_key = current_run["manifest"].get("scenario_key")
+                        use_scenario_key = scenario_key is not None
+                        if not use_scenario_key:
+                            seed = current_run["manifest"]["seed"]
                     scenario = current_run["manifest"]["template_id"]
-                self.respond(202, create_run(seed, scenario))
+                if use_scenario_key:
+                    run = create_run(scenario_name=scenario, scenario_key=scenario_key)
+                else:
+                    run = create_run(seed, scenario)
+                self.respond(202, run)
                 return
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "state":
                 try:

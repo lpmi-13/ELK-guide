@@ -34,7 +34,7 @@ The interactive experience runs in the learner's explicitly opted-in Kibana tab 
 | Learning service | Owns sessions, semantic commands, validation, and debriefs | `8091` |
 | Lab launcher | Starts runs, shows readiness, pairing details, and telemetry state | `8090` |
 
-The scenario controller writes an immutable manifest for every run. The launcher turns a memorable three-word scenario key into the manifest's numeric seed; reusing the key reproduces the allowed variation, while a unique run ID prevents historical evidence from leaking into a replay. Existing automation can continue to supply numeric seeds directly.
+The scenario controller writes an immutable manifest for every run. The launcher turns a 10–40 character scenario key into the manifest's numeric seed; reusing the exact key reproduces the allowed variation, while a unique run ID prevents historical evidence from leaking into a replay. The launcher generates clean three-word examples, but user-entered keys may contain any characters. Existing automation can continue to supply numeric seeds directly.
 
 ## Run the lab
 
@@ -69,7 +69,7 @@ SCENARIO_SEED=20260822
 SCENARIO_AUTO_START=true
 ```
 
-The launcher suggests a fresh three-word key. Reuse a key to replay the same incident parameters, or choose **New key** for a fresh variation. The HTTP entry point accepts either `scenario_key` or the existing numeric `seed`:
+The launcher suggests a fresh three-word key, but accepts any string from 10 to 40 characters. Reuse an exact key to replay the same incident parameters, or choose **New key** for a fresh variation. The HTTP entry point accepts either `scenario_key` or the existing numeric `seed`:
 
 ```sh
 curl -sS http://localhost:8091/api/runs \

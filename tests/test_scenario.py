@@ -36,21 +36,25 @@ class ScenarioTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "non-negative"):
             self.controller.create_run(seed=-1, scenario_name="slow-payments")
 
-    def test_three_word_scenario_key_maps_to_a_stable_numeric_seed(self):
-        first_seed, first_key = self.controller.normalize_seed("Quiet-River-Signal")
-        second_seed, second_key = self.controller.normalize_seed("quiet-river-signal")
+    def test_arbitrary_scenario_key_maps_to_a_stable_numeric_seed(self):
+        value = "My custom key! #42"
+        first_seed, first_key = self.controller.scenario_key_seed(value)
+        second_seed, second_key = self.controller.scenario_key_seed(value)
         self.assertEqual(first_seed, second_seed)
-        self.assertEqual(first_key, "quiet-river-signal")
-        self.assertEqual(second_key, "quiet-river-signal")
+        self.assertEqual(first_key, value)
+        self.assertEqual(second_key, value)
+        self.assertNotEqual(first_seed, self.controller.scenario_key_seed(value.lower())[0])
+        for boundary_value in ("x" * 10, "x" * 40):
+            self.assertEqual(self.controller.scenario_key_seed(boundary_value)[1], boundary_value)
 
         manifest = self.controller.materialize(self.template, first_seed, scenario_key=first_key)
         self.assertEqual(manifest["seed"], first_seed)
-        self.assertEqual(manifest["scenario_key"], "quiet-river-signal")
+        self.assertEqual(manifest["scenario_key"], value)
 
     def test_invalid_scenario_key_is_rejected(self):
-        for value in ("two-words", "four-word-keys-here", "spaces are invalid"):
-            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "three lowercase words"):
-                self.controller.normalize_seed(value)
+        for value in ("short-key", "x" * 41, 1234567890):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "between 10 and 40"):
+                self.controller.scenario_key_seed(value)
 
     def test_fault_configuration_validates_and_scopes_to_run_and_path(self):
         configured = self.service.set_fault({"scenario_id": "run-test", "scenario_name": "slow-payments", "fault": "latency", "delay_ms": 25, "probability": 1, "paths": ["/checkout"]})
