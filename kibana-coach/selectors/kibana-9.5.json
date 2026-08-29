@@ -1,11 +1,12 @@
 {
   "version": 1,
-  "kibana_version": "8.15.3",
+  "kibana_version": "9.5.2",
   "targets": {
-    "kibana.time_picker": ["[data-test-subj='superDatePickerToggleQuickMenuButton']", "button[aria-label*='date picker' i]"],
-    "kibana.time_value": ["input[aria-label='Time value']", "[data-test-subj='superDatePickerRelativeDateInputNumber']"],
-    "kibana.time_unit": ["select[aria-label='Time unit']", "[data-test-subj='superDatePickerRelativeDateInputUnitSelector']"],
-    "kibana.time_apply": ["button.euiQuickSelect__applyButton", "[data-test-subj='superDatePickerApplyTimeButton']"],
+    "kibana.time_picker": ["[data-test-subj='dateRangePickerControlButton']", "[data-test-subj='dateRangePickerInput']", "[data-test-subj='superDatePickerToggleQuickMenuButton']", "button[aria-label*='date picker' i]"],
+    "kibana.time_custom_range": ["[data-test-subj='dateRangePickerCustomRangeNavItem'] button", "[data-test-subj='dateRangePickerCustomRangeNavItem']"],
+    "kibana.time_value": ["[data-test-subj='dateRangePickerStartRelativeCount']", "input[aria-label='Time value']", "[data-test-subj='superDatePickerRelativeDateInputNumber']"],
+    "kibana.time_unit": ["[data-test-subj='dateRangePickerStartRelativeUnitDirection']", "select[aria-label='Time unit']", "[data-test-subj='superDatePickerRelativeDateInputUnitSelector']"],
+    "kibana.time_apply": ["[data-test-subj='dateRangePickerCustomRangeApplyButton']", "button.euiQuickSelect__applyButton", "[data-test-subj='superDatePickerApplyTimeButton']"],
     "kibana.time_from": ["[data-test-subj='superDatePickerAbsoluteDateInput'] input", "input[aria-label*='start date' i]"],
     "kibana.query_bar": ["textarea[data-test-subj='queryInput']", "input[data-test-subj='queryInput']", "[data-test-subj='queryInput'] textarea", "[data-test-subj='queryInput'] input", "textarea[aria-label*='query' i]"],
     "kibana.query_submit": ["[data-test-subj='querySubmitButton']", "button[aria-label*='submit query' i]"],

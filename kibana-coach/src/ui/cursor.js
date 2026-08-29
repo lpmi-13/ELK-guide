@@ -7,12 +7,16 @@ class IncidentCursor {
     root.append(this.element);
   }
 
-  async moveTo(target) {
+  async moveTo(target, {timingScale = 1, signal} = {}) {
     if (!target) return;
     const rect = target.getBoundingClientRect();
+    const duration = matchMedia('(prefers-reduced-motion: reduce)').matches
+      ? 0
+      : Math.min(900, 650 * timingScale);
     this.element.classList.add('visible');
+    this.element.style.setProperty('--incident-cursor-duration', `${duration}ms`);
     this.element.style.transform = `translate(${Math.round(rect.left + rect.width / 2)}px,${Math.round(rect.top + rect.height / 2)}px)`;
-    await new Promise(resolve => setTimeout(resolve, matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 650));
+    await IncidentCursor.wait(duration, signal);
   }
 
   click() {
@@ -22,6 +26,21 @@ class IncidentCursor {
   }
 
   hide() { this.element.classList.remove('visible'); }
+
+  static wait(milliseconds, signal) {
+    if (signal?.aborted) return Promise.reject(new DOMException('Demonstration stopped', 'AbortError'));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal?.removeEventListener('abort', abort);
+        resolve();
+      }, milliseconds);
+      const abort = () => {
+        clearTimeout(timer);
+        reject(new DOMException('Demonstration stopped', 'AbortError'));
+      };
+      signal?.addEventListener('abort', abort, {once: true});
+    });
+  }
 }
 
 globalThis.IncidentCursor = IncidentCursor;

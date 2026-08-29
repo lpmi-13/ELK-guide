@@ -6,7 +6,14 @@ class IncidentCoachPanel {
       <aside class="panel" aria-label="Incident coach">
         <header><span class="live-dot"></span><strong>Incident coach</strong><button id="stop" title="Stop automation">Stop</button></header>
         <div class="progress" aria-hidden="true"><span></span></div>
-        <p id="mode"></p><h2 id="objective">Waiting for a session…</h2><p id="narration" aria-live="polite"></p>
+        <p id="mode"></p><h2 id="objective">Waiting for a session…</h2>
+        <section id="explanation" aria-live="polite">
+          <h3>What I’ll do</h3><p id="narration"></p>
+          <div id="reasoning-block" class="explanation-block"><h3>Why I’m doing it</h3><p id="reasoning"></p></div>
+          <div id="evidence-block" class="explanation-block"><h3>How to read the evidence</h3><p id="evidence"></p></div>
+          <div id="concept-block" class="explanation-block"><h3>In plain language</h3><p id="concept"></p></div>
+        </section>
+        <section id="activity" aria-live="polite" hidden><h3>Current action</h3><p></p></section>
         <div class="actions"><button id="pause">Pause</button><button id="hint">Hint</button><button id="demonstrate">Show me</button></div>
         <form id="diagnosis" hidden>
           <label>Faulty service<input name="service" required></label>
@@ -23,6 +30,16 @@ class IncidentCoachPanel {
     this.spotlight = new IncidentSpotlight(this.root);
     this.debrief = new IncidentDebrief(this.root);
     this.paused = false;
+    this.activeTarget = null;
+    this.activeCommandId = null;
+    this.reposition = () => {
+      if (!this.panel.hidden && this.activeTarget?.isConnected) {
+        this.spotlight.show(this.activeTarget);
+        this.placeAwayFrom(this.activeTarget);
+      }
+    };
+    window.addEventListener('resize', this.reposition);
+    window.addEventListener('scroll', this.reposition, true);
     this.root.querySelector('#pause').onclick = event => {
       this.paused = !this.paused;
       event.target.textContent = this.paused ? 'Resume' : 'Pause';
@@ -39,14 +56,82 @@ class IncidentCoachPanel {
 
   showCommand(command, target) {
     this.host.hidden = false;
+    this.panel.hidden = false;
+    this.activeCommandId = command.command_id;
+    this.activeTarget = target;
     this.root.querySelector('#mode').textContent = `${command.mode} · step ${command.step_index + 1} of ${command.step_count}`;
     this.root.querySelector('#objective').textContent = command.step_id.replaceAll('-', ' ');
     this.root.querySelector('#narration').textContent = command.narration || '';
+    this.root.querySelector('#reasoning').textContent = command.reasoning || '';
+    this.root.querySelector('#evidence').textContent = command.evidence || '';
+    this.root.querySelector('#concept').textContent = command.concept || '';
+    this.root.querySelector('#explanation').hidden = command.mode === 'challenge';
+    this.root.querySelector('#reasoning-block').hidden = command.mode !== 'demonstration' || !command.reasoning;
+    this.root.querySelector('#evidence-block').hidden = command.mode !== 'demonstration' || !command.evidence;
+    this.root.querySelector('#concept-block').hidden = command.mode !== 'demonstration' || !command.concept;
+    this.root.querySelector('#activity').hidden = command.mode !== 'demonstration';
+    this.root.querySelector('#activity p').textContent = 'Watch the highlighted control and the cursor.';
     this.root.querySelector('.progress span').style.width = `${100 * command.step_index / command.step_count}%`;
     this.root.querySelector('#demonstrate').hidden = command.mode !== 'guided';
     this.root.querySelector('#hint').hidden = command.mode === 'demonstration';
-    this.root.querySelector('#diagnosis').hidden = command.type !== 'request_diagnosis';
+    this.root.querySelector('#diagnosis').hidden = command.type !== 'request_diagnosis' || command.mode === 'demonstration';
     if (target && command.mode !== 'challenge') this.spotlight.show(target); else this.spotlight.hide();
+    requestAnimationFrame(() => this.placeAwayFrom(target));
+  }
+
+  showTarget(target, activity = '') {
+    this.activeTarget = target;
+    const activityPanel = this.root.querySelector('#activity');
+    if (activity) {
+      activityPanel.hidden = false;
+      activityPanel.querySelector('p').textContent = activity;
+    }
+    if (target) {
+      this.spotlight.show(target);
+      this.placeAwayFrom(target);
+    }
+  }
+
+  placeAwayFrom(target) {
+    if (this.panel.hidden) return;
+    const margin = 18;
+    const topMargin = 72;
+    const panelRect = this.panel.getBoundingClientRect();
+    const width = panelRect.width;
+    const height = Math.min(panelRect.height, innerHeight - topMargin - margin);
+    const maxLeft = Math.max(margin, innerWidth - width - margin);
+    const maxTop = Math.max(topMargin, innerHeight - height - margin);
+    const positions = [
+      {left: margin, top: topMargin},
+      {left: maxLeft, top: topMargin},
+      {left: margin, top: maxTop},
+      {left: maxLeft, top: maxTop},
+    ];
+    const targetRect = target?.getBoundingClientRect();
+    const score = position => {
+      if (!targetRect) return position.left === maxLeft && position.top === topMargin ? 1 : 0;
+      const panel = {left: position.left, right: position.left + width, top: position.top, bottom: position.top + height};
+      const protectedTarget = {left: targetRect.left - 36, right: targetRect.right + 36, top: targetRect.top - 36, bottom: targetRect.bottom + 36};
+      const overlapWidth = Math.max(0, Math.min(panel.right, protectedTarget.right) - Math.max(panel.left, protectedTarget.left));
+      const overlapHeight = Math.max(0, Math.min(panel.bottom, protectedTarget.bottom) - Math.max(panel.top, protectedTarget.top));
+      const distance = Math.hypot(
+        position.left + width / 2 - (targetRect.left + targetRect.width / 2),
+        position.top + height / 2 - (targetRect.top + targetRect.height / 2),
+      );
+      return distance - overlapWidth * overlapHeight * 100;
+    };
+    const selected = positions.sort((left, right) => score(right) - score(left))[0];
+    this.panel.style.left = `${Math.round(selected.left)}px`;
+    this.panel.style.top = `${Math.round(selected.top)}px`;
+    this.panel.style.right = 'auto';
+  }
+
+  finishCommand(command) {
+    if (command?.command_id !== this.activeCommandId) return;
+    this.spotlight.hide();
+    this.cursor.hide();
+    this.panel.hidden = true;
+    this.activeTarget = null;
   }
 
   toast(message, error = false) {
@@ -58,25 +143,29 @@ class IncidentCoachPanel {
   stop() {
     this.spotlight.hide();
     this.cursor.hide();
+    this.panel.hidden = true;
     this.host.hidden = true;
   }
 
   static styles = `
     :host { all: initial; position: fixed; z-index: 2147483647; inset: 0; pointer-events: none; font: 14px system-ui,sans-serif; color: #17212b; }
-    .panel { pointer-events: auto; position: fixed; top: 72px; right: 18px; width: 330px; max-height: calc(100vh - 100px); overflow: auto; box-sizing: border-box; padding: 16px; border: 1px solid #b6c6d6; border-radius: 10px; background: #fff; box-shadow: 0 12px 40px #17212b3d; }
+    .panel { pointer-events: auto; position: fixed; z-index:3; top: 72px; right: 18px; width: min(390px, calc(100vw - 36px)); max-height: calc(100vh - 90px); overflow: auto; box-sizing: border-box; padding: 16px; border: 1px solid #b6c6d6; border-radius: 10px; background: #fff; box-shadow: 0 12px 40px #17212b3d; transition: left .2s ease, top .2s ease; }
+    [hidden] { display:none!important; }
     header { display:flex; align-items:center; gap:8px; } header strong { flex:1; } .live-dot { width:9px;height:9px;border-radius:50%;background:#1aa87a;box-shadow:0 0 0 4px #1aa87a22; }
-    h2 { margin: 14px 0 6px; font-size: 17px; text-transform: capitalize; } p { line-height:1.45; } #mode { color:#536170; font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+    h2 { margin: 14px 0 8px; font-size: 17px; text-transform: capitalize; } h3 { margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.045em;color:#3f5060; } p { line-height:1.45; } #mode { color:#536170; font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+    #explanation { padding:12px;border:1px solid #c8d8e6;border-left:4px solid #006bb4;border-radius:7px;background:#f4f8fb; } #explanation p { margin:0; } .explanation-block { margin-top:12px;padding-top:11px;border-top:1px solid #d6e2eb; }
+    #activity { margin-top:10px;padding:10px 12px;border-radius:7px;background:#fff6dc;border:1px solid #e7bd50; } #activity p { margin:0; }
     button { border:1px solid #8293a3;border-radius:5px;background:#f5f7f9;padding:6px 9px;cursor:pointer; } button:hover,button:focus-visible { outline:2px solid #006bb4;outline-offset:1px; }
     #stop { color:#a32b1c;border-color:#d77d72; } .actions { display:flex; gap:7px; margin-top:12px; }
     .progress { height:4px;background:#dce4eb;margin:13px 0;border-radius:4px;overflow:hidden; }.progress span { display:block;height:100%;background:#006bb4;transition:width .3s; }
     label { display:block;font-weight:650;margin-top:10px; } input,select,textarea { display:block;width:100%;box-sizing:border-box;margin-top:3px;padding:7px;border:1px solid #9ba9b6;border-radius:4px;font:inherit; } textarea { min-height:58px; }
     #diagnosis button { margin-top:12px;background:#006bb4;color:#fff;border:0; } #status { min-height:18px;color:#147d5c; }.error { color:#a32b1c!important; }
-    .incident-spotlight { position:fixed;display:none;box-sizing:border-box;border:3px solid #ffb000;border-radius:7px;box-shadow:0 0 0 9999px #10182070;pointer-events:none;transition:all .25s; }
-    .incident-cursor { position:fixed;left:-12px;top:-12px;width:24px;height:24px;opacity:0;pointer-events:none;transition:transform .65s cubic-bezier(.2,.75,.25,1),opacity .15s; }
+    .incident-spotlight { position:fixed;z-index:1;display:none;box-sizing:border-box;border:3px solid #ffb000;border-radius:7px;box-shadow:0 0 0 9999px #10182070;pointer-events:none;transition:all .25s; }
+    .incident-cursor { position:fixed;z-index:2;left:-12px;top:-12px;width:24px;height:24px;opacity:0;pointer-events:none;transition:transform var(--incident-cursor-duration, .65s) cubic-bezier(.4,.1,.6,.9),opacity .15s; }
     .incident-cursor.visible { opacity:1; }.incident-cursor:before { content:'➤';display:block;color:#ffb000;font-size:28px;filter:drop-shadow(0 2px 2px #0008);transform:rotate(-25deg); }
     .incident-cursor span { position:absolute;inset:0;border:2px solid #ffb000;border-radius:50%;opacity:0; }.incident-cursor.clicked span { animation:click-ring .5s; }
     @keyframes click-ring { from{opacity:1;transform:scale(.3)}to{opacity:0;transform:scale(2)} }
-    dialog.incident-debrief { pointer-events:auto;max-width:540px;border:0;border-radius:10px;padding:24px;box-shadow:0 14px 50px #0006;color:#17212b; }.incident-debrief::backdrop{background:#101820aa}.dialog-close{float:right;border:0;font-size:22px}.incident-debrief li{display:flex;justify-content:space-between;padding:5px 0}.incident-debrief .total{font-size:20px;font-weight:750}
+    dialog.incident-debrief { pointer-events:auto;max-width:600px;border:0;border-radius:10px;padding:24px;box-shadow:0 14px 50px #0006;color:#17212b; }.incident-debrief::backdrop{background:#101820aa}.dialog-close{float:right;border:0;font-size:22px}.incident-debrief li{display:flex;justify-content:space-between;padding:5px 0}.incident-debrief .total{font-size:20px;font-weight:750}.incident-debrief .demo-checks{padding-left:20px}.incident-debrief .demo-checks li{display:list-item;padding:5px 0}.incident-debrief .demo-checks p{margin:3px 0}.incident-conclusion{padding:12px 14px;border-left:4px solid #1aa87a;background:#eef9f5;border-radius:6px}
     @media (prefers-reduced-motion: reduce) { *, .incident-cursor, .progress span { transition:none!important;animation:none!important; } }
   `;
 }

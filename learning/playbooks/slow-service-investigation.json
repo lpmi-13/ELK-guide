@@ -3,21 +3,57 @@
   "id": "slow-service-investigation",
   "version": 1,
   "starting_view": "incident-investigation",
+  "demonstration_summary": {
+    "title": "Slow checkout investigation complete",
+    "summary": "The walkthrough narrowed the data from the incident window to a single slow dependency, then checked that conclusion against a correlated request trace.",
+    "checks": [
+      {
+        "title": "Incident window",
+        "detail": "Discover was limited to the last 10 minutes so older background traffic could not distort the comparison."
+      },
+      {
+        "title": "Slow operations",
+        "detail": "Evidence for run ${run_id} was filtered to operations lasting at least 2,000,000,000 nanoseconds, confirming that the reported symptom was latency."
+      },
+      {
+        "title": "Service isolation",
+        "detail": "Rows sharing a trace ID showed api-gateway calling orders and orders calling ${expected_service}. The ${expected_service} transaction itself took more than three seconds; the similarly long upstream rows included time spent waiting for that downstream work."
+      },
+      {
+        "title": "Trace correlation",
+        "detail": "The query was changed to trace.id ${trace_id}. That displayed the gateway, orders, and ${expected_service} events belonging to one checkout request and tied the local delay to its upstream impact."
+      }
+    ],
+    "evidence": "Run-scoped events crossed the two-second threshold; ${expected_service} events crossed the scenario's ${minimum_duration_ns} nanosecond latency threshold; and trace ${trace_id} connected the affected dependency to the wider request path.",
+    "conclusion": "The ${expected_service} service has a ${expected_fault_type} fault affecting ${expected_route}.",
+    "diagnosis": {
+      "service": "${expected_service}",
+      "fault_type": "${expected_fault_type}",
+      "affected_route": "${expected_route}",
+      "trace_id": "${trace_id}"
+    }
+  },
   "steps": [
     {
       "id": "scope-incident-window",
       "goal": "scope_incident_window",
-      "narration": "Start by narrowing Discover to the period in which checkout became slow.",
+      "narration": "I’ll open Kibana’s time picker, choose Custom range, enter 10 for the relative start, choose minutes ago, leave the end at Now, and apply the range. The results will then cover now back through the previous ten minutes.",
+      "reasoning": "The incident report says checkout became slow only in the last few minutes. Older records describe normal traffic from before the incident, so including them would mix healthy and unhealthy behaviour and make the pattern harder to see.",
+      "evidence": "Watch the time label above the chart. After I apply the change, it should say “Last 10 minutes,” and the histogram and document table will refresh to that interval.",
+      "concept": "A time filter limits documents by their @timestamp. It does not change or delete the data; it only controls which records Kibana shows.",
       "target": "kibana.time_picker",
       "action": "set_time_range",
       "value": {"from": "now-10m", "to": "now"},
       "validation": {"type": "browser_state", "time_from": "now-10m"},
-      "hints": ["Focus on the incident window.", "Use Kibana's date picker.", "Choose a relative range measured in minutes.", "Set the start to now-10m."]
+      "hints": ["Focus on the incident window.", "Open Kibana's date picker and choose Custom range.", "Set the relative start to 10 minutes ago and leave the end at Now.", "Apply the range so it reads Last 10 minutes."]
     },
     {
       "id": "find-slow-requests",
       "goal": "identify_slow_transactions",
-      "narration": "Filter for operations lasting at least two seconds while retaining this run's evidence.",
+      "narration": "I’ll enter a Kibana Query Language (KQL) search with two conditions: scenario.id keeps only records created for this exercise, and event.duration >= 2000000000 keeps only operations lasting at least two seconds.",
+      "reasoning": "First we need to confirm the reported symptom—slowness—without guessing which service caused it. Keeping this run’s ID excludes unrelated demo traffic, while the duration condition removes fast operations so the slow request path is easier to inspect.",
+      "evidence": "Kibana stores event.duration in nanoseconds. One second is 1,000,000,000 nanoseconds, so 2,000,000,000 means two seconds. After the query runs, every remaining row belongs to this scenario and crossed that threshold.",
+      "concept": "KQL is Kibana Query Language. The word “and” means that a document must satisfy both conditions to remain in the results.",
       "target": "kibana.query_bar",
       "action": "enter_query",
       "value": "scenario.id: \"${run_id}\" and event.duration >= 2000000000",
@@ -27,7 +63,10 @@
     {
       "id": "isolate-slowest-service",
       "goal": "compare_services",
-      "narration": "Use the evidence to isolate the service contributing the dominant latency.",
+      "narration": "I’ll add service.name: \"${expected_service}\" to the existing query so we can isolate and repeatedly verify the service where the delay begins.",
+      "reasoning": "This is not a guess based only on the service name. Before adding the filter, rows with the same trace.id repeat this call sequence: api-gateway calls orders, then orders calls ${expected_service}. The ${expected_service} transaction itself lasts more than three seconds. The gateway and orders also look slow because their timers include the time they spend waiting for ${expected_service}. That makes ${expected_service} the deepest slow service and the likely bottleneck.",
+      "evidence": "Read the service.name, transaction.name, span.name, event.duration, and trace.id columns together. A ${expected_service} transaction shows slow work inside ${expected_service}; an orders span named GET ${expected_service}:8084/checkout shows orders waiting on it. Seeing this pattern on many trace IDs is stronger evidence than one unusually slow row.",
+      "concept": "A transaction is work handled inside one service. A span records part of that work, such as a call to another service. Parent services can therefore have long durations even when the delay actually originates in a downstream dependency.",
       "target": "kibana.query_bar",
       "action": "add_filter",
       "value": {"field": "service.name", "value": "${expected_service}"},
@@ -37,7 +76,10 @@
     {
       "id": "inspect-correlated-trace",
       "goal": "inspect_representative_trace",
-      "narration": "Open one affected event and pivot on its trace ID to confirm the upstream impact.",
+      "narration": "I’ll expand one slow result, read its trace.id, and use that ID as the next query. I’ll remove the payments-only condition so Kibana can show every service event belonging to this one checkout request.",
+      "reasoning": "The payments filter proved a repeated local delay, but we still need to show that the delay affected the user-facing request. Events from api-gateway, orders, and payments share one trace ID when they are parts of the same request. Viewing them together checks the complete causal path instead of relying on timing coincidence.",
+      "evidence": "After the trace query runs, the table should contain several rows with the same trace.id but different service.name values. Their transaction and span names reconstruct the path from api-gateway to orders to payments, while their durations show the downstream wait propagating back toward checkout.",
+      "concept": "To “pivot” means to take a useful value found in one result and use it as the search key for the next view. A trace ID is a shared identifier carried through every service involved in one end-to-end request.",
       "target": "kibana.first_result",
       "action": "open_trace",
       "value": {"field": "trace.id"},
@@ -47,7 +89,10 @@
     {
       "id": "submit-diagnosis",
       "goal": "submit_supported_diagnosis",
-      "narration": "State the faulty service, failure type, affected route, and the trace evidence supporting your conclusion.",
+      "narration": "I’ll state the faulty service, describe the fault as latency, name the affected /checkout route, and cite the representative trace that links the service delay to the user-facing request.",
+      "reasoning": "A supported diagnosis combines all prior checks: the correct incident window, run-specific operations over two seconds, the deepest service with its own long transaction, and one trace connecting that service to the affected route.",
+      "evidence": "The final answer should say what failed and why we believe it. A service name alone is only a suspicion; the duration threshold and correlated trace turn it into an evidence-backed conclusion.",
+      "concept": "The root cause is where the delay originates. An upstream symptom is where that delay becomes visible—for example, checkout can be slow at the gateway because it is waiting on payments.",
       "target": "coach.diagnosis",
       "action": "request_diagnosis",
       "validation": {"type": "structured_answer"},

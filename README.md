@@ -1,6 +1,6 @@
 # Adaptive Kibana incident lab
 
-A self-contained Docker Compose lab that turns a five-service request path into a reproducible Kibana investigation. The initial `slow-payments` scenario injects real latency into checkout calls, generates correlated transactions and downstream spans, waits for Elasticsearch evidence, and then guides or observes the learner in Kibana.
+A self-contained Docker Compose lab, pinned to Elastic Stack 9.5.2, that turns a five-service request path into a reproducible Kibana investigation. The initial `slow-payments` scenario injects real latency into checkout calls, generates correlated transactions and downstream spans, waits for Elasticsearch evidence, and then guides or observes the learner in Kibana.
 
 The interactive experience runs directly in the learner's Kibana tab. A local same-origin gateway injects the coach runtime and proxies its authenticated learning WebSocket, so Chrome, Vivaldi, Firefox, and other modern browsers need no extension or other installation. Playwright is limited to headless reference recordings and compatibility checks; it is not a streamed learner browser. See [PLAN.md](PLAN.md) for the larger scenario catalog and delivery roadmap.
 
@@ -55,7 +55,7 @@ Open <http://localhost:8090>, choose an assistance mode, accept or change the su
 2. Choose an assistance mode, start a scenario, and wait for its evidence to become ready.
 3. Select **Open the ready investigation in Kibana**. The new tab connects automatically and immediately starts the assistance mode you chose.
 
-The automatic handoff is scoped to the local Kibana gateway. Its session token is removed from the address bar before Kibana starts and retained only for reloads in that tab. The coach always shows when automation is active, and **Stop** immediately disconnects it and forgets the handoff. Demonstration mode performs semantic actions visibly; guided and challenge modes observe the learner's normalized Kibana actions.
+The automatic handoff is scoped to the local Kibana gateway. Its session token is removed from the address bar before Kibana starts and retained only for reloads in that tab. The coach always shows when automation is active, and **Stop** immediately disconnects it and forgets the handoff. Demonstration mode explains the action and its reasoning, positions the coach away from each active target, uses extended reading and follow-up pauses while keeping cursor travel under 900 ms, types into form controls at a visible moderate pace, and ends with an evidence-and-conclusion summary. Guided and challenge modes retain the learner diagnosis form and observe the learner's normalized Kibana actions.
 
 The lab suppresses Kibana's insecure-cluster and public-URL warnings, plus the Discover first-run tour callouts.
 

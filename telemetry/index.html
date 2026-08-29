@@ -7,14 +7,27 @@
   <style>
     :root { color-scheme: dark; font: 15px system-ui, sans-serif; background: #0d1721; color: #eef5fb; }
     body { max-width: 1040px; margin: 0 auto; padding: 42px 24px 80px; }
-    header { display:flex;align-items:center;gap:12px;margin-bottom:34px; } header h1 { font-size:22px;margin:0;flex:1; }
+    header { display:flex;align-items:center;gap:18px;margin-bottom:34px; } header h1 { font-size:22px;margin:0;flex:1; }
+    .connection-statuses { display:flex;align-items:center;gap:12px; }
     .connection-status { font-size:13px; }
     #coach-runtime { color:#f5b342; } #coach-runtime.online { color:#43d7a0; } #coach-runtime.error { color:#ff8878; }
     #telemetry { color:#f5b342; } #telemetry.online { color:#43d7a0; }
-    main { display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,.75fr);gap:24px; }
-    section { background:#142331;border:1px solid #2e4559;border-radius:12px;padding:24px;box-shadow:0 14px 40px #0003; }
+    main { display:grid;grid-template-columns:minmax(0,580px);justify-content:center;gap:24px; }
+    main:has(#session-card:not([hidden])) { grid-template-columns:minmax(0,1fr) minmax(300px,.75fr);justify-content:stretch; }
+    main > section { background:#142331;border:1px solid #2e4559;border-radius:12px;padding:24px;box-shadow:0 14px 40px #0003; }
     h2 { margin-top:0;font-size:20px; } p { line-height:1.55;color:#c6d4df; } label { display:block;font-weight:650;margin-top:14px; }
     input,select { width:100%;box-sizing:border-box;margin-top:5px;padding:9px;border:1px solid #668096;border-radius:5px;background:#0c1822;color:#fff;font:inherit; }
+    .select-control { display:block;position:relative;margin-top:5px; }
+    .select-control select { appearance:none;-webkit-appearance:none;margin-top:0;padding-right:42px; }
+    .select-control.enhanced select { display:none; }
+    .select-control::after { content:"";position:absolute;right:15px;top:50%;width:7px;height:7px;border-right:2px solid #c6d4df;border-bottom:2px solid #c6d4df;transform:translateY(-70%) rotate(45deg);pointer-events:none; }
+    .select-control.open::after { transform:translateY(-30%) rotate(225deg); }
+    button.select-trigger { display:block;width:100%;box-sizing:border-box;margin:0;padding:9px 42px 9px 9px;border:1px solid #668096;border-radius:5px;background:#0c1822;color:#fff;font:inherit;font-weight:400;text-align:left; }
+    .select-options { position:absolute;z-index:20;top:calc(100% + 3px);left:0;right:0;width:auto;box-sizing:border-box;margin:0;padding:0;overflow:hidden;border:1px solid #668096;border-radius:5px;background:#0c1822;box-shadow:0 10px 24px #0008;list-style:none; }
+    .select-options:focus { outline:0;box-shadow:0 10px 24px #0008,inset 0 0 0 3px #ffb000; }
+    .select-option { width:100%;box-sizing:border-box;padding:8px 9px;color:#eef5fb;font-weight:400;line-height:1.2;cursor:pointer; }
+    .select-option[aria-selected="true"] { color:#fff;font-weight:650; }
+    .select-option.active { background:#1b78b5;color:#fff; }
     button,a.button { display:inline-block;margin-top:18px;padding:10px 14px;border:0;border-radius:6px;background:#1b78b5;color:white;font-weight:750;text-decoration:none;cursor:pointer; }
     button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible { outline:3px solid #ffb000;outline-offset:2px; }
     button[disabled] { opacity:.55;cursor:wait; } .muted { font-size:13px;color:#90a5b6; }
@@ -36,19 +49,49 @@
     #open-kibana[disabled] { opacity:1;background:#253542;color:#7e92a2;border:1px solid #425767;box-shadow:inset 0 0 0 1px #101a22;cursor:not-allowed; }
     .button-help { margin:7px 0 0;text-align:center;font-size:12px;color:#90a5b6; }
     ol { color:#c6d4df;padding-left:20px;line-height:1.65; }
-    @media(max-width:760px){main{grid-template-columns:1fr}body{padding:22px 14px}.field-row{grid-template-columns:1fr}}
+    .section-heading { display:flex;align-items:center;justify-content:space-between;gap:18px; }
+    .section-heading h2 { margin-bottom:0; }
+    button.secondary-button { flex:none;margin:0;padding:8px 11px;border:1px solid #668096;background:#203447; }
+    dialog { width:min(520px,calc(100% - 28px));box-sizing:border-box;padding:0;border:1px solid #3e566a;border-radius:12px;background:#142331;color:#eef5fb;box-shadow:0 24px 80px #000a; }
+    dialog::backdrop { background:#050c13cc;backdrop-filter:blur(3px); }
+    .dialog-content { padding:24px; }
+    .dialog-heading { display:flex;align-items:center;justify-content:space-between;gap:18px; }
+    .dialog-heading h2 { margin:0; }
+    button.dialog-close { margin:0;padding:2px 8px;background:transparent;color:#c6d4df;font-size:26px;font-weight:400;line-height:1; }
+    button.dialog-close:hover { color:#fff;background:#203447; }
+    .dialog-actions { display:flex;justify-content:flex-end; }
+    @media(max-width:760px){
+      body{padding:22px 14px}
+      header{display:block;margin-bottom:24px}
+      header h1{font-size:21px}
+      .connection-statuses{align-items:flex-start;flex-wrap:wrap;gap:6px 14px;margin-top:10px}
+      .connection-status{white-space:normal}
+      main,main:has(#session-card:not([hidden])){grid-template-columns:1fr;justify-content:stretch}
+      .field-row{grid-template-columns:1fr}
+      .dialog-content{padding:20px}
+    }
   </style>
 </head>
 <body>
-  <header><h1>Adaptive Kibana incident lab</h1><span id="coach-runtime" class="connection-status">checking Kibana coach…</span><span id="telemetry" class="connection-status">connecting telemetry…</span></header>
+  <header>
+    <h1>Adaptive Kibana incident lab</h1>
+    <div class="connection-statuses">
+      <span id="coach-runtime" class="connection-status">checking Kibana coach…</span>
+      <span id="telemetry" class="connection-status">connecting telemetry…</span>
+    </div>
+  </header>
   <main>
     <section>
-      <h2>Start an investigation</h2>
+      <div class="section-heading">
+        <h2>Start an investigation</h2>
+        <button id="show-instructions" class="secondary-button" type="button">How it works</button>
+      </div>
       <p>A fault will affect the real checkout request path. The lab waits for enough indexed evidence before it lets the investigation begin.</p>
       <form id="start-form">
-        <label>Assistance mode
-          <select id="mode"><option value="guided">Guided practice</option><option value="demonstration">Demonstration</option><option value="challenge">Challenge</option></select>
-        </label>
+        <label id="mode-label" for="mode">Assistance mode</label>
+        <span class="select-control">
+          <select id="mode"><option value="demonstration" selected>Demonstration</option><option value="guided">Guided practice</option><option value="challenge">Challenge</option></select>
+        </span>
         <label for="scenario-key">Scenario key</label>
         <div class="field-row">
           <input id="scenario-key" type="text" value="quiet-river-signal" minlength="10" maxlength="40" title="Use 10 to 40 characters." autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="scenario-key-help" required>
@@ -58,15 +101,6 @@
         <button id="start" type="submit">Activate slow-checkout incident</button>
       </form>
       <p class="muted">The briefing intentionally does not name the faulty service.</p>
-    </section>
-    <section id="instructions">
-      <h2>How it works</h2>
-      <ol>
-        <li>Start a run and wait for the evidence checkpoint.</li>
-        <li>The coach is built into this local Kibana endpoint; there is nothing to install in your browser.</li>
-        <li>Open Kibana from the ready-run button; the page connects to your selected session automatically.</li>
-        <li>The chosen demonstration, guided, or challenge experience begins immediately.</li>
-      </ol>
     </section>
     <section id="session-card" hidden>
       <h2>Incident preparing</h2>
@@ -80,12 +114,30 @@
       <p id="open-kibana-help" class="button-help">Available when the evidence bar is full.</p>
     </section>
   </main>
+  <dialog id="instructions" aria-labelledby="instructions-title" aria-describedby="instructions-list">
+    <div class="dialog-content">
+      <div class="dialog-heading">
+        <h2 id="instructions-title">How it works</h2>
+        <button id="close-instructions" class="dialog-close" type="button" aria-label="Close how it works dialog">&times;</button>
+      </div>
+      <ol id="instructions-list">
+        <li>Start a run and wait for the evidence checkpoint.</li>
+        <li>The coach is built into this local Kibana endpoint; there is nothing to install in your browser.</li>
+        <li>Open Kibana from the ready-run button; the page connects to your selected session automatically.</li>
+        <li>The chosen demonstration, guided, or challenge experience begins immediately.</li>
+      </ol>
+      <div class="dialog-actions"><button id="dismiss-instructions" type="button">Got it</button></div>
+    </div>
+  </dialog>
   <script>
     const kibanaUrl = __KIBANA_URL__;
     const learningUrl = __LEARNING_URL__;
     const coachRuntime = document.querySelector('#coach-runtime');
     const telemetry = document.querySelector('#telemetry');
     const form = document.querySelector('#start-form');
+    const modeSelect = document.querySelector('#mode');
+    const modeControl = modeSelect.closest('.select-control');
+    const modeLabel = document.querySelector('#mode-label');
     const card = document.querySelector('#session-card');
     const scenarioKey = document.querySelector('#scenario-key');
     const evidenceProgress = document.querySelector('#evidence-progress');
@@ -93,10 +145,149 @@
     const readiness = document.querySelector('#readiness');
     const openKibana = document.querySelector('#open-kibana');
     const openKibanaHelp = document.querySelector('#open-kibana-help');
+    const instructions = document.querySelector('#instructions');
+    const instructionsStorageKey = 'adaptive-kibana-how-it-works-dismissed-v1';
     let investigationUrl = '';
     let sessionConnection = null;
     let socket;
     let coachRuntimeReady = false;
+
+    const modeTrigger = document.createElement('button');
+    modeTrigger.id = 'mode-trigger';
+    modeTrigger.className = 'select-trigger';
+    modeTrigger.type = 'button';
+    modeTrigger.setAttribute('aria-haspopup', 'listbox');
+    modeTrigger.setAttribute('aria-controls', 'mode-options');
+    modeTrigger.setAttribute('aria-expanded', 'false');
+    modeTrigger.setAttribute('aria-labelledby', 'mode-label mode-value');
+    modeTrigger.innerHTML = '<span id="mode-value"></span>';
+    const modeList = document.createElement('ul');
+    modeList.id = 'mode-options';
+    modeList.className = 'select-options';
+    modeList.hidden = true;
+    modeList.tabIndex = -1;
+    modeList.setAttribute('role', 'listbox');
+    modeList.setAttribute('aria-labelledby', 'mode-label');
+    const modeOptions = [...modeSelect.options].map(option => {
+      const item = document.createElement('li');
+      item.id = `mode-option-${option.value}`;
+      item.className = 'select-option';
+      item.dataset.value = option.value;
+      item.textContent = option.textContent;
+      item.setAttribute('role', 'option');
+      modeList.append(item);
+      return item;
+    });
+    modeControl.append(modeTrigger, modeList);
+    modeControl.classList.add('enhanced');
+    modeLabel.htmlFor = modeTrigger.id;
+    modeSelect.tabIndex = -1;
+    modeSelect.setAttribute('aria-hidden', 'true');
+    let activeModeIndex = Math.max(0, modeSelect.selectedIndex);
+
+    function renderModeSelect() {
+      modeTrigger.querySelector('#mode-value').textContent = modeSelect.selectedOptions[0]?.textContent || '';
+      modeOptions.forEach((option, index) => option.setAttribute('aria-selected', String(index === modeSelect.selectedIndex)));
+    }
+
+    function setActiveMode(index) {
+      activeModeIndex = (index + modeOptions.length) % modeOptions.length;
+      modeOptions.forEach((option, optionIndex) => option.classList.toggle('active', optionIndex === activeModeIndex));
+      modeList.setAttribute('aria-activedescendant', modeOptions[activeModeIndex].id);
+      modeOptions[activeModeIndex].scrollIntoView({block: 'nearest'});
+    }
+
+    function openModeSelect(preferredIndex = modeSelect.selectedIndex) {
+      modeList.hidden = false;
+      modeControl.classList.add('open');
+      modeTrigger.setAttribute('aria-expanded', 'true');
+      setActiveMode(Math.max(0, preferredIndex));
+      modeList.focus();
+    }
+
+    function closeModeSelect(restoreFocus = false) {
+      modeList.hidden = true;
+      modeControl.classList.remove('open');
+      modeTrigger.setAttribute('aria-expanded', 'false');
+      modeList.removeAttribute('aria-activedescendant');
+      if (restoreFocus) modeTrigger.focus();
+    }
+
+    function chooseMode(index) {
+      modeSelect.selectedIndex = index;
+      modeSelect.dispatchEvent(new Event('change', {bubbles: true}));
+      renderModeSelect();
+      closeModeSelect(true);
+    }
+
+    function matchingModeIndex(key) {
+      const normalized = key.toLocaleLowerCase();
+      return modeOptions.findIndex(option => option.textContent.trim().toLocaleLowerCase().startsWith(normalized));
+    }
+
+    modeTrigger.addEventListener('click', () => modeList.hidden ? openModeSelect() : closeModeSelect(true));
+    modeTrigger.addEventListener('keydown', event => {
+      if (['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(event.key)) {
+        event.preventDefault();
+        const offset = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+        openModeSelect(modeSelect.selectedIndex + offset);
+      } else if (event.key.length === 1) {
+        const match = matchingModeIndex(event.key);
+        if (match >= 0) openModeSelect(match);
+      }
+    });
+    modeList.addEventListener('keydown', event => {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        setActiveMode(activeModeIndex + (event.key === 'ArrowDown' ? 1 : -1));
+      } else if (event.key === 'Home' || event.key === 'End') {
+        event.preventDefault();
+        setActiveMode(event.key === 'Home' ? 0 : modeOptions.length - 1);
+      } else if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        chooseMode(activeModeIndex);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        closeModeSelect(true);
+      } else if (event.key === 'Tab') {
+        closeModeSelect();
+      } else if (event.key.length === 1) {
+        const match = matchingModeIndex(event.key);
+        if (match >= 0) setActiveMode(match);
+      }
+    });
+    modeOptions.forEach((option, index) => {
+      option.addEventListener('pointermove', () => setActiveMode(index));
+      option.addEventListener('click', () => chooseMode(index));
+    });
+    document.addEventListener('pointerdown', event => {
+      if (!modeControl.contains(event.target)) closeModeSelect();
+    });
+    renderModeSelect();
+
+    function openInstructions() {
+      if (!instructions.open) instructions.showModal();
+    }
+
+    function closeInstructions() {
+      if (instructions.open) instructions.close();
+    }
+
+    instructions.addEventListener('close', () => {
+      try { localStorage.setItem(instructionsStorageKey, 'true'); } catch (_error) {}
+    });
+    instructions.addEventListener('click', event => {
+      if (event.target === instructions) closeInstructions();
+    });
+    document.querySelector('#show-instructions').addEventListener('click', openInstructions);
+    document.querySelector('#close-instructions').addEventListener('click', closeInstructions);
+    document.querySelector('#dismiss-instructions').addEventListener('click', closeInstructions);
+
+    try {
+      if (localStorage.getItem(instructionsStorageKey) !== 'true') openInstructions();
+    } catch (_error) {
+      openInstructions();
+    }
 
     async function detectCoachRuntime() {
       try {
@@ -155,8 +346,8 @@
     }
     function connectTelemetry() {
       socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-      socket.onopen = () => { telemetry.textContent = 'telemetry connected'; telemetry.className = 'online'; send('launcher_opened'); };
-      socket.onclose = () => { telemetry.textContent = 'telemetry reconnecting…';telemetry.className='';setTimeout(connectTelemetry,1500); };
+      socket.onopen = () => { telemetry.textContent = 'telemetry connected'; telemetry.className = 'connection-status online'; send('launcher_opened'); };
+      socket.onclose = () => { telemetry.textContent = 'telemetry reconnecting…';telemetry.className='connection-status';setTimeout(connectTelemetry,1500); };
     }
     async function poll(runId) {
       const state = document.querySelector('#run-state');
@@ -207,7 +398,7 @@
       openKibana.disabled = true;
       openKibanaHelp.textContent = 'Available when the evidence bar is full.';
       try {
-        const response = await fetch(`${learningUrl}/api/runs`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario:'slow-payments',mode:document.querySelector('#mode').value,scenario_key:scenarioKey.value})});
+        const response = await fetch(`${learningUrl}/api/runs`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario:'slow-payments',mode:modeSelect.value,scenario_key:scenarioKey.value})});
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || `Start failed (${response.status})`);
         card.hidden = false;

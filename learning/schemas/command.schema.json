@@ -16,6 +16,9 @@
     "value": {},
     "expected_page": {"type": "string"},
     "mode": {"enum": ["demonstration", "guided", "challenge"]},
-    "narration": {"type": "string"}
+    "narration": {"type": "string"},
+    "reasoning": {"type": "string"},
+    "evidence": {"type": "string"},
+    "concept": {"type": "string"}
   }
 }

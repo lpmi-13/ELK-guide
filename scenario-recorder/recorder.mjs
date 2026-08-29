@@ -44,11 +44,21 @@ async function perform(page, command) {
   if (command.type === 'set_time_range') {
     await target.click();
     const number = resolve(page, 'kibana.time_value');
-    if (await number.count()) {
+    try {
+      if (!(await number.isVisible())) {
+        await resolve(page, 'kibana.time_custom_range').click();
+      }
+      await number.waitFor({state: 'visible', timeout: 10_000});
       await number.fill('10');
-      await resolve(page, 'kibana.time_unit').selectOption('m');
+      const unit = resolve(page, 'kibana.time_unit');
+      const minuteValue = await unit.locator('option').evaluateAll(options => {
+        const minute = options.find(option => /^minutes? ago$/i.test(option.textContent.trim()))
+          || options.find(option => /^minutes?$/i.test(option.textContent.trim()));
+        return minute?.value;
+      });
+      await unit.selectOption(minuteValue);
       await resolve(page, 'kibana.time_apply').click();
-    } else {
+    } catch (error) {
       throw new Error('Kibana relative time controls were not found');
     }
     return {type: 'time_range_changed', details: command.value, state_after: {time_from: command.value.from}};
@@ -116,8 +126,13 @@ async function main() {
     while (true) {
       const message = await nextMessage();
       if (message.message_type !== 'command') continue;
-      if (message.type === 'request_diagnosis') {
-        const answer = {service: 'payments', fault_type: 'latency', affected_route: '/checkout', trace_id: traceId, evidence: 'The payment transaction dominates the correlated checkout trace.'};
+      if (message.type === 'request_diagnosis' || message.type === 'show_debrief') {
+        const answer = message.type === 'show_debrief'
+          ? {
+              ...message.value.diagnosis,
+              evidence: message.value.evidence,
+            }
+          : {service: 'payments', fault_type: 'latency', affected_route: '/checkout', trace_id: traceId, evidence: 'The payment transaction dominates the correlated checkout trace.'};
         const feedback = await jsonRequest(`${learningUrl}/api/sessions/${created.session.session_id}/answer`, {method: 'POST', headers: {Authorization: `Bearer ${connectionToken}`}, body: JSON.stringify(answer)});
         if (!feedback.diagnosis_correct) throw new Error(`Reference diagnosis was rejected: ${JSON.stringify(feedback.components)}`);
         score = feedback.total;
@@ -146,7 +161,7 @@ async function main() {
       await video.delete();
     }
     await browser.close();
-    const metadata = {schema_version: 1, run_id: created.run.run_id, scenario: 'slow-payments', seed, playbook: 'slow-service-investigation@1', kibana_version: '8.15.3', playwright_version: '1.62.1', viewport, locale: 'en-GB', timezone: 'UTC', reduced_motion: true, started_at: startedAt, completed_at: new Date().toISOString(), outcome, score, artifacts: snapshots};
+    const metadata = {schema_version: 1, run_id: created.run.run_id, scenario: 'slow-payments', seed, playbook: 'slow-service-investigation@1', kibana_version: '9.5.2', playwright_version: '1.62.1', viewport, locale: 'en-GB', timezone: 'UTC', reduced_motion: true, started_at: startedAt, completed_at: new Date().toISOString(), outcome, score, artifacts: snapshots};
     await writeFile(path.join(outputDir, `${created.run.run_id}.json`), JSON.stringify(metadata, null, 2));
   }
 }

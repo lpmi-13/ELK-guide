@@ -561,7 +561,7 @@ learning/
 │   ├── command.schema.json
 │   └── action.schema.json
 ├── selectors/
-│   └── kibana-8.15.json
+│   └── kibana-9.5.json
 ├── playbooks/
 │   ├── slow-service.yaml
 │   ├── elevated-errors.yaml

@@ -137,9 +137,22 @@ def current_step_index(session):
 
 
 def substitute(value, session):
+    trace_id = next(
+        (
+            str((item["action"].get("details") or {}).get("trace_id") or (item["action"].get("state_after") or {}).get("trace_id"))
+            for item in reversed(session["actions"])
+            if (item["action"].get("details") or {}).get("trace_id") or (item["action"].get("state_after") or {}).get("trace_id")
+        ),
+        "the selected trace",
+    )
+    expected = session["manifest"]["expected"]
     replacements = {
         "${run_id}": session["run_id"],
-        "${expected_service}": session["manifest"]["expected"]["service"],
+        "${expected_service}": expected["service"],
+        "${expected_fault_type}": expected["fault_type"],
+        "${expected_route}": expected["route"],
+        "${minimum_duration_ns}": expected["minimum_duration_ns"],
+        "${trace_id}": trace_id,
     }
     if isinstance(value, str):
         for source, replacement in replacements.items():
@@ -163,6 +176,10 @@ def next_command(session):
     step = session["playbook"]["steps"][index]
     session["last_command_sequence"] += 1
     command_type = step["action"]
+    command_value = substitute(step.get("value"), session)
+    if session["mode"] == "demonstration" and command_type == "request_diagnosis":
+        command_type = "show_debrief"
+        command_value = substitute(session["playbook"]["demonstration_summary"], session)
     if session["mode"] == "challenge" and command_type != "request_diagnosis":
         command_type = "orient"
     command = {
@@ -177,10 +194,13 @@ def next_command(session):
         "step_count": len(session["playbook"]["steps"]),
         "type": command_type,
         "target": step["target"],
-        "value": substitute(step.get("value"), session),
+        "value": command_value,
         "expected_page": "discover",
         "mode": session["mode"],
         "narration": step["narration"] if session["policy"]["show_narration"] else session["manifest"]["scenario"]["brief"],
+        "reasoning": step["reasoning"] if session["mode"] == "demonstration" else "",
+        "evidence": step["evidence"] if session["mode"] == "demonstration" else "",
+        "concept": step["concept"] if session["mode"] == "demonstration" else "",
     }
     session["pending_command"] = command
     return command
@@ -410,7 +430,8 @@ class Handler(BaseHTTPRequestHandler):
                         self.respond(409, {"error": "run evidence is not ready"})
                         return
                     session["answer"] = payload
-                    synthetic = {"protocol_version": 1, "run_id": session["run_id"], "session_id": session["id"], "sequence": session["last_action_sequence"] + 1, "type": "diagnosis_submitted", "actor": "learner", "observed_at": now_iso(), "details": payload}
+                    actor = "tutorial" if session["mode"] == "demonstration" else "learner"
+                    synthetic = {"protocol_version": 1, "run_id": session["run_id"], "session_id": session["id"], "sequence": session["last_action_sequence"] + 1, "type": "diagnosis_submitted", "actor": actor, "observed_at": now_iso(), "details": payload}
                     record_action(session, synthetic)
                     trace_valid = action_evidence(session, {"details": {"trace_id": payload.get("trace_id")}})["trace_services"] >= 3
                     session["feedback"] = score_session(session, trace_is_valid=trace_valid)

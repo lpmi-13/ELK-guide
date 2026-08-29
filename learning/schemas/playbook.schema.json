@@ -4,23 +4,58 @@
   "title": "Semantic investigation playbook",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "id", "version", "starting_view", "steps"],
+  "required": ["schema_version", "id", "version", "starting_view", "demonstration_summary", "steps"],
   "properties": {
     "schema_version": {"const": 1},
     "id": {"type": "string"},
     "version": {"type": "integer", "minimum": 1},
     "starting_view": {"type": "string"},
+    "demonstration_summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "summary", "checks", "evidence", "conclusion", "diagnosis"],
+      "properties": {
+        "title": {"type": "string"},
+        "summary": {"type": "string"},
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["title", "detail"],
+            "properties": {"title": {"type": "string"}, "detail": {"type": "string"}}
+          }
+        },
+        "evidence": {"type": "string"},
+        "conclusion": {"type": "string"},
+        "diagnosis": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["service", "fault_type", "affected_route", "trace_id"],
+          "properties": {
+            "service": {"type": "string"},
+            "fault_type": {"type": "string"},
+            "affected_route": {"type": "string"},
+            "trace_id": {"type": "string"}
+          }
+        }
+      }
+    },
     "steps": {
       "type": "array",
       "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "goal", "narration", "target", "action", "validation", "hints"],
+        "required": ["id", "goal", "narration", "reasoning", "evidence", "concept", "target", "action", "validation", "hints"],
         "properties": {
           "id": {"type": "string"},
           "goal": {"type": "string"},
           "narration": {"type": "string"},
+          "reasoning": {"type": "string"},
+          "evidence": {"type": "string"},
+          "concept": {"type": "string"},
           "target": {"type": "string"},
           "action": {"type": "string"},
           "value": {},

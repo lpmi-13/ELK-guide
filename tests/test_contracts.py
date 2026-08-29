@@ -27,6 +27,50 @@ class ContractTests(unittest.TestCase):
         self.assertEqual({step["goal"] for step in playbook["steps"]}, {goal["id"] for goal in rubric["goals"]})
         self.assertEqual(sum(rubric["weights"].values()), 100)
 
+    def test_demonstration_has_reasoning_and_a_non_interactive_summary(self):
+        playbook = json.loads((ROOT / "learning/playbooks/slow-service-investigation.json").read_text())
+        for field in ("reasoning", "evidence", "concept"):
+            self.assertTrue(all(step.get(field) for step in playbook["steps"]), field)
+        self.assertGreaterEqual(len(playbook["demonstration_summary"]["checks"]), 4)
+
+        learning_service = (ROOT / "learning-service/server.py").read_text(encoding="utf-8")
+        coach = (ROOT / "kibana-coach/src/ui/coach-panel.js").read_text(encoding="utf-8")
+        content = (ROOT / "kibana-coach/src/content-script.js").read_text(encoding="utf-8")
+        self.assertIn('command_type = "show_debrief"', learning_service)
+        self.assertIn('"evidence": step["evidence"]', learning_service)
+        self.assertIn('"concept": step["concept"]', learning_service)
+        self.assertIn("command.mode === 'demonstration'", coach)
+        self.assertIn('const demonstrationTimingScale = 10', content)
+        self.assertIn("demonstrationReadingPause(command)", content)
+        self.assertIn('placeAwayFrom(target)', coach)
+
+    def test_demonstration_cursor_is_snappy_and_form_values_are_typed(self):
+        cursor = (ROOT / "kibana-coach/src/ui/cursor.js").read_text(encoding="utf-8")
+        coach = (ROOT / "kibana-coach/src/ui/coach-panel.js").read_text(encoding="utf-8")
+        adapter = (ROOT / "kibana-coach/src/kibana-adapter.js").read_text(encoding="utf-8")
+
+        self.assertIn("Math.min(900, 650 * timingScale)", cursor)
+        self.assertIn("cubic-bezier(.4,.1,.6,.9)", coach)
+        self.assertIn("this.typingIntervalMs = 70", adapter)
+        self.assertIn("await this.typeValue(number, '10', signal)", adapter)
+        self.assertIn("await this.typeValue(input, query, signal)", adapter)
+        self.assertIn("this.pointAt(number", adapter)
+        self.assertIn("this.pointAt(unit", adapter)
+        self.assertIn("this.pointAt(apply", adapter)
+
+    def test_demonstration_explains_and_visibly_performs_the_trace_pivot(self):
+        playbook = json.loads((ROOT / "learning/playbooks/slow-service-investigation.json").read_text())
+        trace_step = next(step for step in playbook["steps"] if step["id"] == "inspect-correlated-trace")
+        adapter = (ROOT / "kibana-coach/src/kibana-adapter.js").read_text(encoding="utf-8")
+        coach = (ROOT / "kibana-coach/src/ui/coach-panel.js").read_text(encoding="utf-8")
+
+        self.assertIn("To “pivot” means", trace_step["concept"])
+        self.assertIn("trace.id", trace_step["narration"])
+        self.assertIn('const traceQuery = `scenario.id:', adapter)
+        self.assertIn("replace the service filter with this trace ID", adapter)
+        for section in ("How to read the evidence", "In plain language", "Current action"):
+            self.assertIn(section, coach)
+
     def test_saved_objects_are_ndjson_with_stable_ids(self):
         objects = [json.loads(line) for line in (ROOT / "kibana/saved-objects.ndjson").read_text().splitlines() if line]
         identities = {(item["type"], item["id"]) for item in objects}
@@ -36,13 +80,24 @@ class ContractTests(unittest.TestCase):
         visualization_ids = {identifier for object_type, identifier in identities if object_type == "visualization"}
         self.assertEqual(visualization_ids, {"request-duration-percentiles", "error-rate-over-time", "events-by-service", "slowest-endpoints", "common-error-types", "active-scenario-events"})
         dashboard = next(item for item in objects if item["type"] == "dashboard")
-        self.assertEqual(len(json.loads(dashboard["attributes"]["panelsJSON"])), 6)
+        panels = json.loads(dashboard["attributes"]["panelsJSON"])
+        self.assertEqual(len(panels), 6)
+        self.assertEqual({panel["version"] for panel in panels}, {"9.5.2"})
+
+    def test_stack_is_pinned_to_elastic_9_5_2(self):
+        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        environment = (ROOT / ".env.example").read_text(encoding="utf-8")
+        recorder = (ROOT / "scenario-recorder/recorder.mjs").read_text(encoding="utf-8")
+        self.assertEqual(compose.count("${STACK_VERSION:-9.5.2}"), 3)
+        self.assertIn("STACK_VERSION=9.5.2", environment)
+        self.assertIn("kibana_version: '9.5.2'", recorder)
 
     def test_coach_and_shared_selectors_stay_identical(self):
-        shared = json.loads((ROOT / "learning/selectors/kibana-8.15.json").read_text())
-        coach = json.loads((ROOT / "kibana-coach/selectors/kibana-8.15.json").read_text())
+        shared = json.loads((ROOT / "learning/selectors/kibana-9.5.json").read_text())
+        coach = json.loads((ROOT / "kibana-coach/selectors/kibana-9.5.json").read_text())
         self.assertEqual(shared, coach)
-        for target in ("kibana.time_picker", "kibana.time_value", "kibana.time_unit", "kibana.time_apply", "kibana.query_bar", "kibana.add_filter", "kibana.first_result", "kibana.first_trace_value", "kibana.trace_field"):
+        self.assertEqual(shared["kibana_version"], "9.5.2")
+        for target in ("kibana.time_picker", "kibana.time_custom_range", "kibana.time_value", "kibana.time_unit", "kibana.time_apply", "kibana.query_bar", "kibana.add_filter", "kibana.first_result", "kibana.first_trace_value", "kibana.trace_field"):
             self.assertTrue(shared["targets"][target])
 
     def test_kibana_first_run_prompts_are_suppressed(self):
@@ -77,6 +132,28 @@ class ContractTests(unittest.TestCase):
         manifest_schema = json.loads((ROOT / "learning/schemas/run-manifest.schema.json").read_text())
         scenario_key = manifest_schema["properties"]["scenario_key"]
         self.assertEqual(scenario_key, {"type": "string", "minLength": 10, "maxLength": 40})
+
+    def test_launcher_defaults_to_demonstration_and_uses_dismissible_instructions_dialog(self):
+        launcher = (ROOT / "telemetry/index.html").read_text(encoding="utf-8")
+        demonstration = '<option value="demonstration" selected>Demonstration</option>'
+        guided = '<option value="guided">Guided practice</option>'
+        challenge = '<option value="challenge">Challenge</option>'
+
+        self.assertLess(launcher.index(demonstration), launcher.index(guided))
+        self.assertLess(launcher.index(guided), launcher.index(challenge))
+        self.assertIn('<dialog id="instructions"', launcher)
+        self.assertIn("instructions.showModal()", launcher)
+        self.assertIn("localStorage.setItem(instructionsStorageKey, 'true')", launcher)
+        self.assertIn("localStorage.getItem(instructionsStorageKey) !== 'true'", launcher)
+
+    def test_launcher_assistance_options_match_the_closed_control_width(self):
+        launcher = (ROOT / "telemetry/index.html").read_text(encoding="utf-8")
+
+        self.assertIn(".select-options { position:absolute", launcher)
+        self.assertIn("left:0;right:0;width:auto;box-sizing:border-box", launcher)
+        self.assertIn("modeControl.classList.add('enhanced')", launcher)
+        self.assertIn("modeTrigger.setAttribute('aria-haspopup', 'listbox')", launcher)
+        self.assertIn("modeSelect.selectedIndex = index", launcher)
 
     def test_kibana_session_starts_automatically_without_browser_install(self):
         launcher = (ROOT / "telemetry/index.html").read_text(encoding="utf-8")
