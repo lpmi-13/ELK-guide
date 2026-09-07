@@ -13,13 +13,10 @@ function startIncidentCoach() {
   const activeSessionKey = 'incident-coach:auto-connect';
   const demonstrationTimingScale = 10;
 
-  function demonstrationReadingPause(command) {
-    const words = [command.narration, command.reasoning, command.evidence, command.concept]
-      .filter(Boolean)
-      .join(' ')
-      .trim()
-      .split(/\s+/).length;
-    return Math.min(24000, Math.max(10000, words * 250));
+  function readingPause(...texts) {
+    const words = texts.filter(Boolean).join(' ').trim().split(/\s+/).filter(Boolean).length;
+    if (!words) return 0;
+    return Math.min(15000, Math.max(5500, words * 260));
   }
 
   function wait(milliseconds, signal) {
@@ -43,12 +40,29 @@ function startIncidentCoach() {
     executionController = controller;
     try {
       const timingScale = command.mode === 'demonstration' ? demonstrationTimingScale : 1;
+      const readBeat = async text => {
+        const pause = readingPause(text);
+        coach.startCountdown(pause);
+        await wait(pause, controller.signal);
+      };
       if (command.mode === 'demonstration') {
+        // Beat 1 — what: name the next move; Beat 2 — why: the reason, each its own card.
         const target = await adapter.waitFor(command.target, 20000, controller.signal);
         coach.showCommand(command, target);
-        await wait(demonstrationReadingPause(command), controller.signal);
+        await readBeat(command.narration);
+        if (command.reasoning) {
+          coach.showWhy(command);
+          await readBeat(command.reasoning);
+        }
+        // Beat 3 — action: hand the card over to the live step's narration.
+        coach.beginActionPhase(command);
       }
       const action = await adapter.perform(command, coach, {timingScale, signal: controller.signal});
+      if (command.mode === 'demonstration') {
+        // Beat 4 — learning: summarise what the result showed before moving on.
+        coach.showLearning(command);
+        await readBeat([command.evidence, command.concept].filter(Boolean).join(' '));
+      }
       coach.finishCommand(command);
       client.acknowledge(command, 'completed', action?.state_after || {});
       if (explicitlyRequested) client.sendAction({type: 'step_demonstrated', details: {step_id: command.step_id}}, 'learner');
@@ -106,7 +120,10 @@ function startIncidentCoach() {
     observer = new KibanaActionObserver(adapter, action => client.sendAction(action, 'learner'));
     observer.start();
     coach.onPause = paused => {
-      if (paused) executionController?.abort();
+      if (paused) {
+        executionController?.abort();
+        coach.stopCountdown();
+      }
       client.send({message_type: paused ? 'pause' : 'resume'});
     };
     coach.onHint = () => client.requestHint();
