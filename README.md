@@ -1,13 +1,13 @@
 # Adaptive Kibana learning lab
 
-A self-contained Docker Compose curriculum, pinned to Elastic Stack 9.5.2, for production-style investigation and analysis in the Kibana UI. Its catalog contains 24 core scenarios across Discover/KQL, ES|QL, supplied dashboards, APM and traces, infrastructure metrics, alert triage, and SLO interpretation, plus three capability-gated extensions. The original live `slow-payments` exercise remains available as a legacy pack.
+A self-contained Docker Compose curriculum, pinned to Elastic Stack 9.5.2, for production-style investigation and analysis in the Kibana UI. Its catalog contains 22 core scenarios across Discover/KQL, ES|QL, supplied dashboards, APM and traces, infrastructure metrics, and alert triage. Every scenario uses only free, open-source Basic-tier Kibana features — no Platinum, Enterprise, or subscription-gated surface is required. The original live `slow-payments` exercise remains available as a legacy pack.
 
 The interactive experience runs directly in the learner's Kibana tab. A local same-origin gateway injects the coach runtime and proxies its authenticated learning WebSocket, so Chrome, Vivaldi, Firefox, and other modern browsers need no extension or other installation. Playwright is limited to headless reference recordings and compatibility checks; it is not a streamed learner browser. See [PLAN.md](PLAN.md) for the larger scenario catalog and delivery roadmap.
 
 ## What is implemented
 
 - A catalog-driven launcher with surface, skill, difficulty, signal, and scenario-type filters.
-- Twenty-four core and three capability-gated extension scenario packs.
+- Twenty-two core scenario packs, all using free Basic-tier Kibana features only.
 - Generic v2 scenario, goal-graph, command/observation, rubric, and run-manifest contracts.
 - Per-run Kibana Spaces, Space-local saved objects, deterministic seeded telemetry, and cleanup.
 - Concurrent run state with isolated live fault configurations.
@@ -19,7 +19,7 @@ The interactive experience runs directly in the learner's Kibana tab. A local sa
 - Demonstration, guided-practice, and challenge policies driven by one goal graph per scenario.
 - Automatic authenticated WebSocket handoff from the launcher to Kibana, plus an immediate visible stop control.
 - Application-specific Kibana adapters, normalized observations, alternative-path validation, flexible answers, and scenario-type scoring.
-- A controller-provisioned no-action alert rule and read-only SLO lifecycle, gated by runtime capability and license probes. Kibana 9.5.2 Basic enables alerting but gates the APM service map and SLO API behind Platinum or higher.
+- A controller-provisioned no-action alert rule, using only the alerting features available on the free Kibana 9.5.2 Basic license. Payment-gated surfaces (the APM service map, SLOs, and machine learning) are intentionally excluded so the lab runs entirely on free, open-source features.
 - Separate `tutorial-*` and `scenario-*` indices so learning/control telemetry does not contaminate `microservices-*` evidence.
 - A profile-gated Playwright recorder with video metadata and failure screenshots/DOM snapshots.
 

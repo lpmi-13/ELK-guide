@@ -18,11 +18,10 @@
         "sort_changed", "document_expanded", "field_inspected", "field_statistics_opened", "surrounding_documents_opened",
         "dashboard_control_changed", "panel_value_selected", "panel_drilldown_opened", "panel_inspected", "panel_underlying_data_opened",
         "apm_service_selected", "apm_environment_selected", "transaction_group_opened", "trace_sample_selected", "trace_opened",
-        "span_selected", "error_details_opened", "correlated_logs_opened", "service_map_opened", "service_map_node_selected",
+        "span_selected", "error_details_opened", "correlated_logs_opened",
         "inventory_type_selected", "infrastructure_entity_selected", "infrastructure_entities_filtered", "infrastructure_entities_grouped",
         "metric_selected", "metric_period_compared", "metrics_logs_opened", "alert_opened", "alerts_filtered",
-        "alert_reason_inspected", "alert_history_inspected", "alert_source_opened", "slo_opened", "slo_indicator_inspected",
-        "slo_error_budget_inspected", "slo_burn_rate_inspected", "map_region_selected", "synthetics_step_opened", "ml_anomaly_opened",
+        "alert_reason_inspected", "alert_history_inspected", "alert_source_opened",
         "hint_requested", "step_demonstrated", "answer_submitted", "command_acknowledged"
       ]
     },

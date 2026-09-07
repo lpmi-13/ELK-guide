@@ -318,14 +318,10 @@ def probe_capabilities():
     probes = {
         "spaces": "/api/spaces/space",
         "alerting": "/api/alerting/rule_types",
-        "slo": "/api/observability/slos?page=1&perPage=1",
     }
     for capability, path in probes.items():
         probe_status, _ = kibana_json(path, timeout=8)
         result[capability] = probe_status < 400
-    license_status, license_body = http_json(f"{ELASTICSEARCH_URL}/_license", timeout=8)
-    license_type = license_body.get("license", {}).get("type", "") if license_status < 400 else ""
-    result["service_map"] = license_type in {"platinum", "enterprise", "trial"}
     return result
 
 
@@ -508,8 +504,6 @@ def _application_document(document, application, manifest):
     elif application == "metrics":
         stream_type = "metrics"
         dataset = prepared.get("event", {}).get("dataset", "system.cpu")
-    elif application == "synthetics":
-        stream_type, dataset = "synthetics", "browser"
     else:
         return None, prepared
     prepared["data_stream"] = {"type": stream_type, "dataset": dataset, "namespace": namespace}
@@ -639,27 +633,11 @@ def create_alert_rule(manifest, resource):
     return {"kind": "alert_rule", "id": rule_id}
 
 
-def create_slo(manifest, resource):
-    slo_id = resource.get("id", f"slo-{manifest['run_id'][-12:]}")[:36]
-    payload = {
-        "id": slo_id, "name": resource.get("name", "Checkout availability"), "description": "Controller-managed read-only learning SLO",
-        "indicator": {"type": "sli.kql.custom", "params": {"index": f"lab-{manifest['run_id']}", "filter": "*", "good": "event.outcome: success", "total": "*", "timestampField": "@timestamp"}},
-        "budgetingMethod": "occurrences", "timeWindow": {"duration": "30d", "type": "rolling"}, "objective": {"target": float(resource.get("target", 0.99))},
-        "settings": {"syncDelay": "1m", "frequency": "1m", "preventInitialBackfill": False}, "tags": ["incident-lab", manifest["run_id"]],
-    }
-    status, response = kibana_json(f"/s/{manifest['space_id']}/api/observability/slos", "POST", payload, timeout=30)
-    if status not in {200, 201, 409}:
-        raise RuntimeError(f"SLO creation failed ({status}): {response}")
-    return {"kind": "slo", "id": slo_id}
-
-
 def provision_managed_resources(manifest):
     created = []
     for resource in manifest["scenario"].get("provisioning", {}).get("managed_resources", []):
         if resource["kind"] == "alert_rule":
             created.append(create_alert_rule(manifest, resource))
-        elif resource["kind"] == "slo":
-            created.append(create_slo(manifest, resource))
     return created
 
 
@@ -735,7 +713,6 @@ def cleanup_run(run, delete_data=True):
         data_streams = set(run.get("data_streams", [])) | {
             f"logs-apm.lab-{manifest['run_id']}",
             f"metrics-system.lab-{manifest['run_id']}",
-            f"synthetics-browser.lab-{manifest['run_id']}",
         }
         for index in regular_indices:
             try:

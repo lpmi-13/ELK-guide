@@ -27,18 +27,11 @@
     "kibana.trace_span": ["[data-test-subj='traceItemRowContent'][data-ebt-action='viewSpan']", "[data-test-subj='waterfall'] [aria-label^='View details for']", "[data-test-subj='spanFlyout']"],
     "kibana.trace_error": ["[data-test-subj*='errorMarker']", "button[aria-label*='error' i]"],
     "kibana.correlated_logs": ["[data-test-subj*='correlatedLogs']", "a[href*='discover'][href*='trace']"],
-    "kibana.service_map_node": ["[data-test-subj='serviceMap'] [data-test-subj*='node']", "[data-test-subj='serviceMap'] svg [role='button']"],
     "kibana.inventory_type": ["[data-test-subj='inventorySwitcher']", "button[aria-label*='inventory' i]"],
     "kibana.metric_selector": ["[data-test-subj='metricsExplorerMetricSelect']", "button[aria-label*='metric' i]"],
     "kibana.metrics_logs_link": ["[data-test-subj*='openInLogs']", "a[href*='/app/discover']"],
     "kibana.alert_row": ["[data-test-subj='alertsTable'] tbody tr", "[data-test-subj*='alertTable'] tbody tr"],
     "kibana.alert_reason": ["[data-test-subj*='alertReason']", "[data-test-subj*='reason']"],
-    "kibana.alert_source_link": ["[data-test-subj*='viewInApp']", "a[href*='/app/discover']"],
-    "kibana.slo_row": ["[data-test-subj*='sloList'] tbody tr", "a[href*='/app/observability/slos/']"],
-    "kibana.slo_error_budget": ["[data-test-subj*='errorBudget']", "[aria-label*='error budget' i]"],
-    "kibana.slo_burn_rate": ["[data-test-subj*='burnRate']", "[aria-label*='burn rate' i]"],
-    "kibana.map_region": ["[data-test-subj='mapContainer'] canvas", "[data-test-subj='mapContainer'] svg"],
-    "kibana.synthetics_step": ["[data-test-subj*='journeyStep']", "a[href*='/app/synthetics'][href*='step']"],
-    "kibana.ml_anomaly": ["[data-test-subj*='anomaly'] tbody tr", "[data-test-subj='mlAnomalyExplorer'] [role='button']"]
+    "kibana.alert_source_link": ["[data-test-subj*='viewInApp']", "a[href*='/app/discover']"]
   }
 }

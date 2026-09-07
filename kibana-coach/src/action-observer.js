@@ -75,10 +75,6 @@ class KibanaActionObserver {
       this.report({type: 'panel_drilldown_opened', details: {subject}, state_after: {app: 'dashboard'}});
     } else if (/legend|xyVisSeries|partitionVis/i.test(subject)) {
       this.report({type: 'panel_value_selected', details: {value: event.target.textContent?.trim() || subject}, state_after: {app: 'dashboard'}});
-    } else if (/serviceMap/i.test(subject) && /node/i.test(subject)) {
-      this.report({type: 'service_map_node_selected', details: {value: event.target.textContent?.trim()}, state_after: {app: 'apm'}});
-    } else if (/serviceMap/i.test(subject)) {
-      this.report({type: 'service_map_opened', details: {}, state_after: {app: 'apm'}});
     } else if (/transactionSample|traceSample/i.test(subject)) {
       this.report({type: 'trace_sample_selected', details: {value: event.target.textContent?.trim()}, state_after: {app: 'apm'}});
     } else if (/waterfall.*span|spanFlyout/i.test(subject)) {
@@ -101,16 +97,6 @@ class KibanaActionObserver {
       this.report({type: 'alert_history_inspected', details: {}, state_after: {app: 'alerts'}});
     } else if (/alert/i.test(subject) && event.target.closest?.('tr')) {
       this.report({type: 'alert_opened', details: {value: event.target.textContent?.trim()}, state_after: {app: 'alerts'}});
-    } else if (/errorBudget/i.test(subject)) {
-      this.report({type: 'slo_error_budget_inspected', details: {}, state_after: {app: 'slos'}});
-    } else if (/burnRate/i.test(subject)) {
-      this.report({type: 'slo_burn_rate_inspected', details: {}, state_after: {app: 'slos'}});
-    } else if (/slo/i.test(subject) && event.target.closest?.('tr,a')) {
-      this.report({type: 'slo_opened', details: {value: event.target.textContent?.trim()}, state_after: {app: 'slos'}});
-    } else if (/journeyStep/i.test(subject)) {
-      this.report({type: 'synthetics_step_opened', details: {}, state_after: {app: 'synthetics'}});
-    } else if (/anomaly/i.test(subject)) {
-      this.report({type: 'ml_anomaly_opened', details: {}, state_after: {app: 'ml'}});
     } else if (event.target.closest?.("a[href*='/app/apm/services/']")) {
       this.report({type: 'apm_service_selected', details: {value: event.target.textContent?.trim()}, state_after: {app: 'apm'}});
     }

@@ -1,2 +1,0 @@
-globalThis.KibanaApplicationAdapters ||= [];
-globalThis.KibanaApplicationAdapters.push({name:'synthetics',commands:new Set(['open_synthetics_step']),async perform(command,host,coach,{timingScale=1,signal}={}){const target=await host.waitFor(command.target,20000,signal);await host.pointAt(target,coach,timingScale,signal,'Open the failed journey step.',{activate:true});return {type:'synthetics_step_opened',details:command.value||{},state_after:{app:'synthetics'}};}});

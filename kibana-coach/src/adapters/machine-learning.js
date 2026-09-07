@@ -1,2 +1,0 @@
-globalThis.KibanaApplicationAdapters ||= [];
-globalThis.KibanaApplicationAdapters.push({name:'machine-learning',commands:new Set(['open_ml_anomaly']),async perform(command,host,coach,{timingScale=1,signal}={}){const target=await host.waitFor(command.target,20000,signal);await host.pointAt(target,coach,timingScale,signal,'Open the selected anomaly.',{activate:true});return {type:'ml_anomaly_opened',details:command.value||{},state_after:{app:'ml'}};}});

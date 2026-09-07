@@ -1,2 +1,0 @@
-globalThis.KibanaApplicationAdapters ||= [];
-globalThis.KibanaApplicationAdapters.push({name:'maps',commands:new Set(['select_map_region']),async perform(command,host,coach,{timingScale=1,signal}={}){const target=await host.waitFor(command.target,20000,signal);await host.pointAt(target,coach,timingScale,signal,'Select the map region.',{activate:true});return {type:'map_region_selected',details:command.value||{},state_after:{app:'maps'}};}});

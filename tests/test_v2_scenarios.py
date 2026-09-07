@@ -17,8 +17,8 @@ class ScenarioV2Tests(unittest.TestCase):
     def test_catalog_has_the_target_core_and_extension_counts(self):
         core = [item for item in self.catalog["scenarios"] if item["classification"] == "core"]
         extensions = [item for item in self.catalog["scenarios"] if item["classification"] == "extension"]
-        self.assertEqual(len(core), 24)
-        self.assertEqual(len(extensions), 3)
+        self.assertEqual(len(core), 22)
+        self.assertEqual(len(extensions), 0)
         self.assertEqual({item["type"] for item in core}, {"investigation", "analysis", "triage"})
 
     def test_all_pack_contracts_are_valid(self):
@@ -58,7 +58,7 @@ class ScenarioV2Tests(unittest.TestCase):
 
     def test_application_adapters_are_split(self):
         adapters = ROOT / "kibana-coach/src/adapters"
-        expected = {"common.js", "discover.js", "dashboard.js", "apm.js", "infrastructure.js", "alerts.js", "slo.js", "maps.js", "synthetics.js", "machine-learning.js"}
+        expected = {"common.js", "discover.js", "dashboard.js", "apm.js", "infrastructure.js", "alerts.js"}
         self.assertEqual({path.name for path in adapters.glob("*.js")}, expected)
 
     def test_launcher_is_catalog_driven(self):

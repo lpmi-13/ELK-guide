@@ -18,7 +18,7 @@ This plan targets **Kibana 9.5.2**.
 
 ## 2. Scope boundary
 
-“Kibana” in this plan means the full Kibana user interface, not only the Dashboard application. Discover, existing dashboards, APM, infrastructure views, Alerts, SLO views, and other relevant read-only investigation surfaces are in scope.
+“Kibana” in this plan means the full Kibana user interface, not only the Dashboard application. Discover, existing dashboards, APM, infrastructure views, Alerts, and other relevant read-only investigation surfaces that are available on the free Basic license are in scope. Payment-gated surfaces (the APM service map, SLOs, and machine learning) are out of scope.
 
 The learner is here to become proficient in Kibana. The following are therefore explicitly out of scope as learning objectives:
 
@@ -32,7 +32,7 @@ The learner is here to become proficient in Kibana. The following are therefore 
 - Editing Docker, Compose, or application configuration as part of a scenario.
 - Repairing the simulated production system after identifying a problem.
 - Creating, editing, arranging, or saving visualizations or dashboards.
-- Creating or editing Discover sessions, alert rules, SLOs, Cases, Maps, or other Kibana content.
+- Creating or editing Discover sessions, alert rules, Cases, or other Kibana content.
 - Configuring notification connectors, rule actions, maintenance windows, or alert suppression.
 
 Backend code may seed data, create traces, import saved objects, prepare rules, or validate an answer. That machinery must remain invisible to the learner and exist only to support an authentic Kibana interaction. A realistic-looking, deterministic data pack is preferable to elaborate infrastructure when the infrastructure itself teaches no Kibana skill.
@@ -43,7 +43,7 @@ The existing example services should be retained where live traffic and connecte
 
 ### 3.1 Teach decisions, not tours
 
-Each scenario starts with a credible operational question and ends with a defensible conclusion supported by visible evidence. It should never amount to “click every item on this screen.” A learner must understand why a time range, filter, aggregation, trace, panel, alert, or SLO view is useful.
+Each scenario starts with a credible operational question and ends with a defensible conclusion supported by visible evidence. It should never amount to “click every item on this screen.” A learner must understand why a time range, filter, aggregation, trace, panel, or alert view is useful.
 
 ### 3.2 Use authentic ambiguity
 
@@ -67,7 +67,7 @@ Difficulty should progress from finding a known field, through comparing groups 
 
 ### 3.7 Use product capabilities honestly
 
-Scenario availability must be based on a startup capability and license check. Core scenarios may use only features verified in the clean local installation. Subscription-dependent or experimental capabilities belong in an optional extension pack and must disappear cleanly when unavailable.
+Scenarios may use only free, open-source Basic-tier features verified in the clean local installation. Subscription-dependent or experimental capabilities (for example the APM service map, SLOs, and machine learning) are excluded from the curriculum entirely rather than gated behind a license check. A startup capability probe still confirms that the required free features are present before a scenario is offered.
 
 ## 4. Current architecture gaps
 
@@ -109,7 +109,7 @@ learning/
       expected/
 ```
 
-Not every directory needs every optional file. Most investigations need only seeded events and baseline saved objects; alert and SLO scenarios may also declare controller-provisioned Kibana resources.
+Not every directory needs every optional file. Most investigations need only seeded events and baseline saved objects; alert scenarios may also declare controller-provisioned Kibana resources.
 
 ### 5.1 Scenario types
 
@@ -125,10 +125,10 @@ Scenario type controls the answer form and scoring details; it must not fork the
 
 Each pack declares one of these hidden provisioning strategies:
 
-- `seeded-events` for logs, metrics, synthetic results, geo events, or historical traces.
+- `seeded-events` for logs, metrics, or historical traces.
 - `live-traffic` for scenarios where a running trace and correlated telemetry improve authenticity.
-- `saved-objects` for prebuilt data views, dashboards, visualization panels, or maps.
-- `managed-resource` for controller-created alerting rules or SLOs provisioned through public Kibana APIs.
+- `saved-objects` for prebuilt data views, dashboards, or visualization panels.
+- `managed-resource` for controller-created alerting rules provisioned through public Kibana APIs.
 - A composition of the above.
 
 All data must include a private run/scenario discriminator so validation is isolated even if two learners run the same exercise concurrently.
@@ -139,7 +139,7 @@ Use a per-run Kibana Space unless an early feasibility spike exposes a material 
 
 1. Create a namespaced Space.
 2. Import the scenario's baseline saved objects.
-3. Create any required alerting rule or preconfigured SLO through supported Kibana APIs.
+3. Create any required alerting rule through supported Kibana APIs.
 4. Seed or start the required telemetry.
 5. launch the learner at `/s/<run-space>/app/...`.
 6. Delete the Space and expire scenario data during reset or cleanup.
@@ -182,7 +182,7 @@ No mode may require terminal commands, source edits, service restarts, direct AP
 
 ## 7. Competency map and scenario catalog
 
-The following catalog is the target. All **Core** scenarios must support Demonstration, Guided, and Challenge modes. **Extension** scenarios must also support all three modes when their declared capability is available.
+The following catalog is the target. All scenarios are **Core** and must support Demonstration, Guided, and Challenge modes. Every scenario uses only free, open-source Basic-tier Kibana features; no scenario depends on a Platinum, Enterprise, or subscription-gated capability.
 
 ### 7.1 Discover and KQL foundations
 
@@ -223,7 +223,6 @@ All dashboards and panels in these scenarios are supplied by the lab. Learners i
 | `slow-dependency-trace` | 1 | Checkout latency is high. Find the downstream dependency and operation responsible. | Service overview, transaction selection, trace sample, waterfall, span details | Identify the slow dependency, affected transaction, and representative trace |
 | `trace-error-propagation` | 2 | The edge service reports a generic failure. Find where the exception originated and how it propagated. | Trace overview, error markers, span/exception details, parent-child path | Identify the originating service/span and the downstream-to-upstream failure path |
 | `retry-amplification` | 3 | Latency and dependency traffic increased without a matching rise in user traffic. | Compare traces, repeated spans, critical path, span duration, destination context | Prove that retries amplify calls and quantify a representative request's retry count |
-| `service-map-bottleneck` | 2 | Several services are degraded and ownership is unclear. Locate the shared dependency. | Service map, RED metrics, dependency filtering, service flyout, pivot to traces/logs | Identify the shared dependency and support it with a trace or correlated event |
 | `trace-log-correlation` | 2 | A failing trace contains insufficient error context. Find the exact application log for the failing request. | Navigate from trace/span to correlated logs, preserve trace ID/time, inspect log details | Link one trace to the decisive log event and error message |
 
 ### 7.5 Metrics and infrastructure views
@@ -237,30 +236,17 @@ These exercises teach Kibana's infrastructure and metric exploration views, not 
 | `hot-instance-imbalance` | 2 | Aggregate service health hides an outlier instance. | Grouping, sorting, instance/pod filtering, compare peer metrics | Identify the outlier and show that peers remain healthy |
 | `capacity-throughput-saturation` | 3 | Latency rises only above a traffic threshold. Establish the capacity relationship. | Interpret existing throughput and latency panels, dashboard filtering, metric comparison across periods | Estimate the saturation point and provide the supporting chart evidence |
 
-### 7.6 Alert triage and SLO interpretation
+### 7.6 Alert triage
 
 | ID | Level | Authentic brief | Kibana skills | Decisive outcome |
 |---|---:|---|---|---|
 | `active-alert-triage` | 1 | An alert has fired for an unfamiliar service. Decide whether it represents an active customer issue. | Alert table, status/reason, time context, alert details, pivot to source evidence | Classify the alert correctly and cite the event/trace/metric that supports the decision |
-| `slo-budget-burn` | 2 | A service is still above its monthly objective but is consuming budget too quickly. Assess urgency. | SLO overview, objective/window, error budget, burn rate, supporting data or dashboard | Explain the burn risk and identify the period and indicator driving it |
 
-The alert is prepared by the lab, not the learner. The current Compose stack already contains Kibana's alerting and alert-index plugins; its alerting APIs are blocked only because `xpack.encryptedSavedObjects.encryptionKey` is unset. Add one stable lab-only key of at least 32 characters, create a run-scoped Elasticsearch query or index-threshold rule through Kibana's supported API with `actions: []`, seed a matching event, and wait until the alert is visible before marking the scenario ready. No connector or notification action is required. This is sufficiently small and deterministic to keep `triage` as a core scenario type.
+The alert is prepared by the lab, not the learner. The current Compose stack already contains Kibana's alerting and alert-index plugins; its alerting APIs are blocked only because `xpack.encryptedSavedObjects.encryptionKey` is unset. Add one stable lab-only key of at least 32 characters, create a run-scoped Elasticsearch query or index-threshold rule through Kibana's supported API with `actions: []`, seed a matching event, and wait until the alert is visible before marking the scenario ready. No connector or notification action is required. This is sufficiently small and deterministic to keep `triage` as a core scenario type. Kibana's rule framework and alert views are available on the free Basic license.
 
-The SLO is likewise provisioned by the controller and exposed read-only. Learners inspect its indicator, objective, error budget, and burn-rate evidence without creating, editing, resetting, or attaching it to a dashboard.
+### 7.7 Coverage summary
 
-### 7.7 Optional extension pack
-
-These scenarios are valuable but must be capability-gated. They should not block the core release.
-
-| ID | Level | Authentic brief | Kibana skills | Capability gate |
-|---|---:|---|---|---|
-| `regional-outage-map` | 2 | Failures cluster geographically. Identify the region and drill into its events. | Maps layers, tooltip, spatial/region filter, dashboard/Discover drilldown | Maps and required map assets available |
-| `synthetics-regional-failure` | 2 | A browser journey fails only from one location. Find the failed step and timing cause. | Synthetics overview, monitor/location filtering, journey steps, waterfall/timing/TLS details | Synthetics UI and compatible seeded results verified |
-| `ml-latency-anomaly` | 3 | A subtle latency anomaly is difficult to find with a static threshold. Investigate the detected deviation. | Anomaly Explorer, Single Metric Viewer, influencer/time analysis, pivot to source records | Required machine-learning subscription and job APIs available |
-
-### 7.8 Coverage summary
-
-The target catalog contains **24 core scenarios** and **3 optional scenarios**. Every core scenario has a clear investigative outcome, and no scenario requires learners to author Kibana content or operate Elasticsearch and the surrounding stack.
+The target catalog contains **22 core scenarios**. Every scenario has a clear investigative outcome, uses only free open-source Basic-tier Kibana features, and requires no learner to author Kibana content or operate Elasticsearch and the surrounding stack. Payment-gated surfaces (the APM service map, SLOs, machine learning) and the previously proposed Maps and Synthetics extensions are intentionally excluded.
 
 ## 8. Semantic command and observation model
 
@@ -311,8 +297,6 @@ The current command schema must be expanded into a versioned vocabulary. Command
 - `select_span`
 - `open_error_details`
 - `navigate_to_correlated_logs`
-- `open_service_map`
-- `select_service_map_node`
 
 ### 8.5 Metrics and infrastructure actions
 
@@ -324,26 +308,22 @@ The current command schema must be expanded into a versioned vocabulary. Command
 - `compare_metric_period`
 - `navigate_from_metrics_to_logs`
 
-### 8.6 Alert and SLO actions
+### 8.6 Alert actions
 
 - `open_alert`
 - `filter_alerts`
 - `inspect_alert_reason`
 - `inspect_alert_history`
 - `navigate_from_alert_to_source`
-- `open_slo`
-- `inspect_slo_indicator`
-- `inspect_slo_error_budget`
-- `inspect_slo_burn_rate`
 
 ### 8.8 Normalized observations
 
 Browser listeners must publish normalized actions independently of mode, including:
 
 - Query submitted, filter state changed, time range changed, data view selected.
-- Document, field statistics, trace, span, service, alert, or SLO opened.
+- Document, field statistics, trace, span, service, or alert opened.
 - Dashboard control changed, chart value selected, drilldown followed, panel inspected.
-- Alert reason/history or SLO indicator/error-budget/burn-rate details inspected.
+- Alert reason/history details inspected.
 
 Goal evaluation consumes these observations plus resulting Kibana state. It must not depend on raw CSS selectors or coordinates.
 
@@ -384,7 +364,7 @@ Important schema changes:
 
 - `fault`, `traffic`, and fixed `root_service` fields become optional provisioning details rather than universal requirements.
 - `readiness_validators` is a list of reusable checks, not a controller branch keyed by scenario ID.
-- `truth.assertions` can express field values, comparisons, time bounds, trace paths, alert state, and SLO state.
+- `truth.assertions` can express field values, comparisons, time bounds, trace paths, and alert state.
 - `answer_schema` defines the response appropriate to the scenario type.
 - `required_capabilities` controls launcher visibility and provisioning.
 - `starting_view` resolves the initial Kibana application and saved object without hard-coded controller URLs.
@@ -440,7 +420,7 @@ Playbooks must not contain learner-visible truth in titles, narration shown befo
 Use the least invasive reliable source for each goal:
 
 1. **Browser/Kibana state** — query text, filters, time range, selected entity, current app, or visible result.
-2. **Public Kibana API state** — verify that the controller-provisioned alert, rule, SLO, or baseline saved object is ready and matches the scenario declaration.
+2. **Public Kibana API state** — verify that the controller-provisioned alert, rule, or baseline saved object is ready and matches the scenario declaration.
 3. **Hidden evidence query** — verify that the current filter/result actually contains the scenario evidence.
 4. **Baseline saved-object inspection** — understand the supplied dashboard's panels, controls, and drilldowns so learner interactions can be validated semantically.
 
@@ -454,10 +434,9 @@ Build reusable validators for:
 - KQL/ES|QL is syntactically valid and produces a required subset or aggregation.
 - Filter contains/excludes expected fields and values.
 - Result set contains a truth document, trace, group, or comparison.
-- A required document, field, trace, span, service, alert, or SLO was inspected.
+- A required document, field, trace, span, service, or alert was inspected.
 - An existing dashboard was narrowed with the expected controls/filters and a relevant panel value, drilldown, inspection view, or underlying result was opened.
 - A pre-generated alert was found with the expected status, reason, time, and source evidence.
-- A preconfigured SLO was opened and its indicator, objective, window, error budget, and burn state were interpreted correctly.
 - Resource state is isolated to the learner's run.
 
 ### 11.3 Answer types
@@ -512,7 +491,7 @@ Each scenario pack defines:
 
 ### 12.3 Live versus seeded telemetry
 
-Use live application traffic for trace topology, waterfall behavior, retry relationships, and trace/log correlation. Use seeded telemetry for longer time histories, regional comparisons, cardinality exercises, alert history, SLO windows, and resource trends. Hybrid packs may combine a live trace with seeded historical context.
+Use live application traffic for trace topology, waterfall behavior, retry relationships, and trace/log correlation. Use seeded telemetry for longer time histories, cardinality exercises, alert history, and resource trends. Hybrid packs may combine a live trace with seeded historical context.
 
 Do not simulate operational complexity merely to claim that a dataset is “live.” Learner-visible authenticity and determinism are the deciding criteria.
 
@@ -529,8 +508,7 @@ Baseline objects should use current Kibana 9.5.2 formats. Maintainers may use Le
 - Dashboards with intentional but realistic investigation affordances.
 - Prebuilt visualization panels used only through Dashboard view mode.
 - Dashboard controls, links, drilldowns, and annotations.
-- Maps resources for the optional map scenario.
-- Run-scoped alerting rules and SLOs created through supported APIs by the controller where applicable.
+- Run-scoped alerting rules created through supported APIs by the controller where applicable.
 
 The coach must not direct learners into edit mode or expose create, configure, clone, save, delete, mute, snooze, acknowledge, or reset operations. The lab validates filters, selections, drilldowns, inspected evidence, and submitted conclusions. Reset removes controller-created resources and recreates the baseline; there should be no learner-created content to clean up.
 
@@ -546,10 +524,6 @@ coach/adapters/
   apm.ts
   infrastructure.ts
   alerts.ts
-  slo.ts
-  maps.ts              # extension
-  synthetics.ts        # extension
-  machine_learning.ts  # extension
 ```
 
 Each adapter owns:
@@ -578,23 +552,23 @@ Each card should show title, realistic brief, skills, difficulty, estimated dura
 
 A later progress view may summarize competency coverage, but it is secondary to building and validating the scenario catalog.
 
-## 16. Capability and license handling
+## 16. Capability handling
 
-Add a startup probe that records which Kibana applications, alerting rule types, Spaces features, SLO APIs, Maps capabilities, Synthetics views, and machine-learning features are usable in the running 9.5.2 installation.
+Add a startup probe that records which free Basic-tier Kibana applications, alerting rule types, and Spaces features are usable in the running 9.5.2 installation.
 
 Rules:
 
-- The core catalog must pass on the project's documented default license and configuration.
+- The catalog must pass on the free Basic license with the project's documented default configuration; no scenario may depend on a paid or subscription-gated feature.
 - Feature availability must be determined programmatically, not assumed from navigation labels.
 - A pack declares every required capability and is enabled only when all are present.
-- Optional subscriptions must never be necessary for basic Discover, Dashboard, logs, traces, or metrics progression.
+- Payment-gated surfaces (the APM service map, SLOs, and machine learning) are excluded from the curriculum, so no progression path can require them.
 - Alert triage must not depend on an external connector. The controller creates a conventional Kibana alerting rule with an empty actions list; action configuration is outside the curriculum.
 - Set one stable, lab-only `xpack.encryptedSavedObjects.encryptionKey` value of at least 32 characters in the Kibana service. A generated startup key is insufficient because Kibana blocks alerting functions when no explicit key is configured.
 - Provision the alert rule inside the run's Space through `POST /s/<space-id>/api/alerting/rule/<rule-id>`, using an Elasticsearch query or index-threshold rule and `actions: []`. Seed a uniquely tagged matching event, then poll until the rule succeeds and its alert is visible through the supported Kibana alert view/API.
 - Delete the run-scoped rule and Space during cleanup. Do not write directly to Kibana's internal alert indices.
 - Experimental UIs, including any trace-explorer functionality marked experimental in 9.5.2, should not be required by core scenarios.
 
-Before implementation, run focused feasibility spikes for Spaces isolation, APM seeded/live data, infrastructure views, pre-generated alerts, read-only SLO views, Maps, Synthetics, and machine learning. Record the actual license/API result in a compatibility manifest. The current running stack has already established that the alerting plugins are present and that the missing encryption key is the only reported alerting API blocker; the spike must confirm the complete create-match-display-cleanup cycle after that key is configured.
+Before implementation, run focused feasibility spikes for Spaces isolation, APM seeded/live data, infrastructure views, and pre-generated alerts. Record the actual API result in a compatibility manifest. The current running stack has already established that the alerting plugins are present and that the missing encryption key is the only reported alerting API blocker; the spike must confirm the complete create-match-display-cleanup cycle after that key is configured.
 
 ## 17. Implementation phases
 
@@ -604,9 +578,9 @@ Before implementation, run focused feasibility spikes for Spaces isolation, APM 
 2. Inventory enabled applications, licenses, public APIs, and current saved-object versions.
 3. Verify the feasibility spikes listed above.
 4. Add the explicit learner-scope boundary to project documentation.
-5. Classify all planned scenarios as Core, Extension, or deferred based on evidence from the local stack.
+5. Confirm all planned scenarios rely only on free Basic-tier capabilities verified in the local stack.
 
-Exit criteria: the compatibility manifest identifies every core capability, and no core scenario relies on an unverified or paid-only feature.
+Exit criteria: the compatibility manifest identifies every required capability, and no scenario relies on an unverified or paid-only feature.
 
 ### Phase 1 — Generalize the scenario engine
 
@@ -645,19 +619,13 @@ Implement the five APM/trace and four metrics/infrastructure scenarios. Reuse li
 
 Exit criteria: correlation paths preserve time and identifying context; all packs have representative deterministic traces/entities; no learner task asks for service or cluster repair.
 
-### Phase 6 — Add alert triage and SLO interpretation
+### Phase 6 — Add alert triage
 
-Add the stable encrypted-saved-objects key, implement the controller's run-scoped no-action alert rule lifecycle, and prove that a matching event produces a visible alert. Then implement active alert triage and read-only SLO budget burn, with the alert and SLO prepared before the learner enters Kibana.
+Add the stable encrypted-saved-objects key, implement the controller's run-scoped no-action alert rule lifecycle, and prove that a matching event produces a visible alert. Then implement active alert triage, with the alert prepared before the learner enters Kibana. This uses only the free Basic-tier alerting framework.
 
-Exit criteria: the scenarios work without external connectors, the learner never sees a creation or configuration task, controller-created resources cannot leak between runs, and reset restores the baseline state.
+Exit criteria: the scenario works without external connectors, the learner never sees a creation or configuration task, controller-created resources cannot leak between runs, and reset restores the baseline state.
 
-### Phase 7 — Add capability-gated extensions
-
-Implement Maps, Synthetics, and machine-learning packs only where the compatibility manifest proves support.
-
-Exit criteria: each enabled extension passes the same three-mode and isolation standards as core scenarios; unavailable extensions do not affect core tests or learner navigation.
-
-### Phase 8 — Hardening and curriculum release
+### Phase 7 — Hardening and curriculum release
 
 1. Run the complete scenario-by-mode test matrix.
 2. Review difficulty, hints, scoring thresholds, and debrief clarity with novice users.
@@ -713,14 +681,13 @@ Read-only scenarios still need structural assertions for the content prepared by
 - Supplied dashboard panels, controls, links, drilldowns, and expected underlying data.
 - Starting Discover view query, columns, sort, and data view.
 - Controller-created rule query/condition, lookback, interval, successful execution, and resulting visible alert.
-- Preconfigured SLO indicator, objective, window, and calculated budget/burn state.
 - Absence of learner-created or learner-modified Kibana content after every mode run.
 
 ## 19. Acceptance criteria
 
 The expansion is accepted when:
 
-1. All 24 core scenarios appear in the catalog and run in Demonstration, Guided, and Challenge modes.
+1. All 22 core scenarios appear in the catalog and run in Demonstration, Guided, and Challenge modes.
 2. Each scenario starts and finishes entirely within the Kibana UI from the learner's perspective.
 3. No learner objective concerns cluster, index, ingestion-pipeline, agent, snapshot, upgrade, or security administration.
 4. Each scenario has deterministic provisioning, readiness, reset, and cleanup.
@@ -729,7 +696,7 @@ The expansion is accepted when:
 7. Challenge scoring accepts documented alternative valid paths and produces an evidence-based debrief.
 8. Every scenario is read-only from the learner's perspective and contains realistic distractors; no playbook enters a create, edit, configure, or save workflow.
 9. Concurrent runs cannot see each other's controller-created Kibana resources.
-10. Capability-gated scenarios cannot launch when prerequisites are unavailable.
+10. A scenario cannot launch when its declared free-tier capabilities are unavailable in the running installation.
 11. The full core matrix passes against the pinned Kibana 9.5.2 environment.
 12. A new scenario can be added as a pack plus reusable validators/adapters, without adding scenario-ID conditionals to the controller or evaluator.
 
@@ -738,7 +705,7 @@ The expansion is accepted when:
 A scenario is not complete until it has:
 
 - A credible production brief and an explicit Kibana competency outcome.
-- Core/Extension classification and declared capabilities.
+- Core classification and declared free-tier capabilities.
 - Scenario, playbook, rubric, truth assertions, and answer schema.
 - Seeded/live telemetry with realistic noise and relative timestamps.
 - Starting saved objects that do not reveal the answer.
@@ -758,8 +725,7 @@ The most efficient implementation order is:
 2. Deliver Discover/KQL and ES|QL, because they establish query, filter, time, evidence, and validator primitives used everywhere else.
 3. Deliver read-only Dashboard scenarios, because they introduce controls, panel interpretation, inspection, and drilldowns into reusable analysis views.
 4. Deliver APM and metrics, reusing the query, time, drilldown, and evidence foundations.
-5. Deliver alert triage and SLO interpretation once per-run controller-resource isolation is proven.
-6. Add optional capabilities last, after they can be gated without complicating the core path.
+5. Deliver alert triage once per-run controller-resource isolation is proven.
 
 This order produces useful learner breadth early while avoiding a proliferation of hard-coded scenarios.
 
@@ -785,13 +751,10 @@ Implementation details should be checked against the pinned 9.5.2 UI and the cur
 - [Panels and visualizations](https://www.elastic.co/docs/explore-analyze/visualize)
 - [Explore dashboards](https://www.elastic.co/docs/explore-analyze/dashboards/using)
 - [APM service overview](https://www.elastic.co/docs/solutions/observability/apm/service-overview)
-- [APM service map](https://www.elastic.co/docs/solutions/observability/apm/service-map)
 - [APM traces](https://www.elastic.co/docs/solutions/observability/apm/traces-ui)
 - [Alerting](https://www.elastic.co/docs/explore-analyze/alerts-cases/alerts/alerting-getting-started)
 - [View alerts](https://www.elastic.co/docs/explore-analyze/alerting/alerts/view-alerts)
 - [Create a rule API](https://www.elastic.co/docs/api/doc/kibana/operation/operation-post-alerting-rule-id)
 - [Alerting configuration](https://www.elastic.co/docs/reference/kibana/configuration-reference/alerting-settings)
-- [Service-level objectives](https://www.elastic.co/docs/solutions/observability/incident-management/service-level-objectives-slos)
-- [Anomaly detection results](https://www.elastic.co/docs/explore-analyze/machine-learning/anomaly-detection/ml-ad-view-results)
 
 The documentation is guidance; the automated adapter contract tests against Kibana 9.5.2 are the final authority for the lab.

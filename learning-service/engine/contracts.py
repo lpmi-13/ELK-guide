@@ -70,8 +70,8 @@ def validate_catalog(learning_dir):
     identifiers = [entry["id"] for entry in entries]
     if len(identifiers) != len(set(identifiers)):
         errors.append("catalog contains duplicate scenario IDs")
-    if len([entry for entry in entries if entry["classification"] == "core"]) != 24:
-        errors.append("catalog must contain exactly 24 core scenarios")
+    if len([entry for entry in entries if entry["classification"] == "core"]) != 22:
+        errors.append("catalog must contain exactly 22 core scenarios")
 
     for entry in entries:
         pack = learning_dir / entry["pack"].removeprefix("scenarios/")

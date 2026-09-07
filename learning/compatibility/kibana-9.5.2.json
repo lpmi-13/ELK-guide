@@ -8,20 +8,15 @@
     "esql": {"supported": true, "core": true},
     "dashboard": {"supported": true, "core": true},
     "apm": {"supported": true, "core": true},
-    "service_map": {"supported": false, "core": true, "reason": "Kibana 9.5.2 displays a Platinum-license requirement for the APM service map; the runtime license probe enables this pack on Platinum, Enterprise, or trial installations."},
     "infrastructure": {"supported": true, "core": true},
     "spaces": {"supported": true, "core": true, "api": "POST /api/spaces/space"},
     "saved_objects": {"supported": true, "core": true, "api": "POST /s/{space_id}/api/saved_objects/_import"},
-    "alerting": {"supported": true, "core": true, "api": "POST /s/{space_id}/api/alerting/rule/{id}", "actions_required": false},
-    "slo": {"supported": false, "core": true, "api": "POST /s/{space_id}/api/observability/slos", "reason": "The pinned local Basic license returns HTTP 403 and requires Platinum or higher; the runtime probe enables this pack on licensed installations."},
-    "maps": {"supported": false, "core": false, "reason": "Extension feasibility must be confirmed against local map assets."},
-    "synthetics": {"supported": false, "core": false, "reason": "Extension requires compatible Synthetics result documents and UI verification."},
-    "machine_learning": {"supported": false, "core": false, "reason": "Extension requires a machine-learning subscription and job APIs."}
+    "alerting": {"supported": true, "core": true, "api": "POST /s/{space_id}/api/alerting/rule/{id}", "actions_required": false}
   },
   "notes": [
+    "Every catalog scenario uses only free Basic-tier Kibana features; no Platinum, Enterprise, or subscription-gated surface is required.",
     "Core learner workflows are read-only; controller APIs create and clean up resources.",
     "APM traces and infrastructure support are verified through adapter contracts and must be rechecked if the pinned Stack version changes.",
-    "The service-map and SLO packs remain in the target core curriculum but are unavailable on the default Basic license; capability probing enables them when licensed.",
-    "Optional extensions remain unavailable until an environment probe and end-to-end test pass."
+    "Payment-gated surfaces (APM service map, SLOs, machine learning) and the unverified Maps and Synthetics extensions were removed so the application ships only free open-source features."
   ]
 }

@@ -24,11 +24,10 @@ COMMAND_OBSERVATIONS = {
     "expand_document":"document_expanded", "inspect_field":"field_inspected", "set_dashboard_control":"dashboard_control_changed",
     "interact_with_panel_value":"panel_value_selected", "view_panel_underlying_data":"panel_underlying_data_opened", "select_apm_service":"apm_service_selected",
     "select_trace_sample":"trace_sample_selected", "select_span":"span_selected", "open_error_details":"error_details_opened", "navigate_to_correlated_logs":"correlated_logs_opened",
-    "select_service_map_node":"service_map_node_selected", "select_inventory_type":"inventory_type_selected", "select_metric":"metric_selected",
+    "select_inventory_type":"inventory_type_selected", "select_metric":"metric_selected",
     "navigate_from_metrics_to_logs":"metrics_logs_opened", "open_alert":"alert_opened", "inspect_alert_reason":"alert_reason_inspected",
-    "navigate_from_alert_to_source":"alert_source_opened", "open_slo":"slo_opened", "inspect_slo_error_budget":"slo_error_budget_inspected",
-    "inspect_slo_burn_rate":"slo_burn_rate_inspected", "select_map_region":"map_region_selected", "open_synthetics_step":"synthetics_step_opened",
-    "open_ml_anomaly":"ml_anomaly_opened", "navigate_to_app":"app_navigated", "request_answer":"answer_submitted"
+    "navigate_from_alert_to_source":"alert_source_opened",
+    "navigate_to_app":"app_navigated", "request_answer":"answer_submitted"
 }
 
 

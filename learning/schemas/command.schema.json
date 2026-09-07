@@ -15,10 +15,9 @@
       "add_column", "remove_column", "sort_column", "expand_document", "inspect_field", "open_field_statistics", "open_surrounding_documents",
       "set_dashboard_control", "interact_with_panel_value", "open_panel_drilldown", "inspect_panel", "view_panel_underlying_data",
       "select_apm_service", "select_apm_environment", "open_transaction_group", "select_trace_sample", "open_trace", "select_span", "open_error_details",
-      "navigate_to_correlated_logs", "open_service_map", "select_service_map_node", "select_inventory_type", "select_infrastructure_entity",
+      "navigate_to_correlated_logs", "select_inventory_type", "select_infrastructure_entity",
       "filter_infrastructure_entities", "group_infrastructure_entities", "select_metric", "compare_metric_period", "navigate_from_metrics_to_logs",
-      "open_alert", "filter_alerts", "inspect_alert_reason", "inspect_alert_history", "navigate_from_alert_to_source", "open_slo", "inspect_slo_indicator",
-      "inspect_slo_error_budget", "inspect_slo_burn_rate", "select_map_region", "open_synthetics_step", "open_ml_anomaly", "request_answer",
+      "open_alert", "filter_alerts", "inspect_alert_reason", "inspect_alert_history", "navigate_from_alert_to_source", "request_answer",
       "request_diagnosis", "show_debrief", "pause", "resume"
     ]},
     "target": {"type": "string"}, "value": {}, "expected_page": {"type": "string"},

@@ -8,7 +8,7 @@ Validators are registered in `learning-service/engine/evaluator.py` and composed
 - `result_assertion`: connects current investigation state to a hidden evidence query.
 - `result_count`: checks a visible result threshold.
 - `detail_equals` / `state_equals`: checks normalized observation or application state.
-- `inspected` / `selected_entity`: verifies a document, field, trace element, service, alert, or SLO was inspected.
+- `inspected` / `selected_entity`: verifies a document, field, trace element, service, or alert was inspected.
 - `app_is`: verifies application context.
 - `resource_isolated`: verifies the controller-managed resource belongs to the run.
 - `answer_submitted`: completes the structured deliverable goal.
