@@ -9,22 +9,35 @@ for (const key of [
 
 // Kibana surfaces a "Help us improve Elastic" feedback survey in the lower corner
 // on its own schedule. It exposes no reliable configuration or storage switch, so
-// remove its portal the moment it mounts — the same net effect as a learner clicking
+// hide its portal the moment it mounts — the same net effect as a learner clicking
 // "Not now" — to keep it out of demonstrations and recordings.
+//
+// The survey is a React/EuiPortal overlay that Kibana still owns. Removing its node
+// from the DOM makes React throw on its next reconcile or unmount (EuiPortal's own
+// teardown calls document.body.removeChild on the now-missing node), which Kibana's
+// error boundary renders as a full-page "Unable to load page" fault — landing right
+// at the end of a demonstration, when the survey tends to appear and dismiss itself.
+// Hiding with CSS instead never touches the tree structure React manages, so the
+// overlay disappears without ever provoking that crash.
 (function suppressFeedbackSurvey() {
   const surveyText = /improve elastic/i;
   // The survey is portalled beside the app, never inside it; guard the app shell so
-  // we only ever discard a floating overlay, never Kibana's own content.
+  // we only ever hide a floating overlay, never Kibana's own content.
   const appShell = '#kibana-body, [data-test-subj="kibanaChrome"], .kbnAppWrapper, #app-fixed-viewport';
 
-  const removeSurvey = () => {
+  const hideSurvey = () => {
     const body = document.body;
     if (!body) return;
     for (const child of Array.from(body.children)) {
       if (child.nodeType !== 1) continue;
       if (child.tagName === 'SCRIPT' || child.tagName === 'STYLE') continue;
+      if (child.style.display === 'none') continue;
       if (child.matches(appShell) || child.querySelector(appShell)) continue;
-      if (surveyText.test(child.textContent || '')) child.remove();
+      if (surveyText.test(child.textContent || '')) {
+        // Neutralise, do not detach: React keeps managing the node, so its later
+        // updates and unmount stay valid. !important overrides the survey's own styles.
+        child.style.setProperty('display', 'none', 'important');
+      }
     }
   };
 
@@ -32,7 +45,7 @@ for (const key of [
     let scheduled = false;
     const sweep = () => {
       scheduled = false;
-      removeSurvey();
+      hideSurvey();
     };
     const observer = new MutationObserver(() => {
       if (scheduled) return;
@@ -40,7 +53,7 @@ for (const key of [
       requestAnimationFrame(sweep);
     });
     observer.observe(document.body, { childList: true, subtree: true });
-    removeSurvey();
+    hideSurvey();
   };
 
   if (document.body) start();

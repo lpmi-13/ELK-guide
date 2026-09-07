@@ -350,6 +350,34 @@ def create_space(manifest):
         raise RuntimeError(f"space creation failed ({status}): {response}")
 
 
+# Kibana apps address a saved object by the type of object they open.
+STARTING_VIEW_OBJECT_TYPES = {"discover": "search", "dashboards": "dashboard", "dashboard": "dashboard"}
+
+
+def rebind_starting_view(manifest, id_map):
+    """Point the run's starting view at the id the import assigned to its saved object.
+
+    Scenarios declare a stable saved-object id (for example ``incident-investigation``),
+    but importing regenerates that id per space. Left unrewritten, the starting URL opens
+    a saved object that does not exist, and Discover/Dashboard turn that miss into a fatal
+    "Unable to load page" error boundary. Rewriting the manifest keeps ``starting_url`` and
+    every downstream investigation URL resolvable.
+    """
+    starting = manifest["scenario"].get("starting_view", {})
+    original = starting.get("saved_object")
+    if not original:
+        return
+    object_type = STARTING_VIEW_OBJECT_TYPES.get(starting.get("app", "discover"))
+    destination = id_map.get((object_type, original)) if object_type else None
+    if not destination:
+        destination = next((value for (_type, source), value in id_map.items() if source == original), None)
+    if not destination or destination == original:
+        return
+    starting["saved_object"] = destination
+    if starting.get("path"):
+        starting["path"] = starting["path"].replace(original, destination)
+
+
 def import_saved_objects(manifest):
     if not SAVED_OBJECTS_FILE.is_file():
         return
@@ -368,7 +396,12 @@ def import_saved_objects(manifest):
         raise RuntimeError(f"saved-object import failed ({error.code}): {error.read().decode(errors='replace')}") from error
     if not result.get("success", False):
         raise RuntimeError(f"saved-object import failed: {result.get('errors', result)}")
-    imported_data_view = next((item for item in result.get("successResults", []) if item.get("type") == "index-pattern"), {})
+    imported = result.get("successResults", [])
+    # The import regenerates the id of every shareable saved-object type so each run's
+    # space owns an isolated copy. Record what each original id became so the run's
+    # starting view can point at the copy that actually exists in this space.
+    id_map = {(item.get("type"), item.get("id")): (item.get("destinationId") or item.get("id")) for item in imported}
+    imported_data_view = next((item for item in imported if item.get("type") == "index-pattern"), {})
     data_view_id = imported_data_view.get("destinationId") or imported_data_view.get("id")
     if not data_view_id:
         raise RuntimeError("saved-object import did not return the baseline data view ID")
@@ -380,6 +413,8 @@ def import_saved_objects(manifest):
     )
     if status >= 400:
         raise RuntimeError(f"run data-view update failed ({status}): {result}")
+    rebind_starting_view(manifest, id_map)
+    update_run(manifest["run_id"], saved_object_ids={f"{obj_type}:{obj_id}": destination for (obj_type, obj_id), destination in id_map.items()})
 
 
 def create_live_data_alias(manifest):

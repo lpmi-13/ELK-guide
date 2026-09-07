@@ -111,8 +111,10 @@ async function main() {
   await mkdir(outputDir, {recursive: true});
   const startedAt = new Date().toISOString();
   const created = await jsonRequest(`${learningUrl}/api/runs`, {method: 'POST', body: JSON.stringify({scenario, seed, mode: 'demonstration'})});
-  await waitReady(created.run.run_id);
-  const publicInvestigation = new URL(created.session.investigation_url);
+  // The create-time session URL still names the scenario's fixed saved-object id; the
+  // import remaps that id per run, so read the ready run's resolved investigation URL.
+  const readyRun = await waitReady(created.run.run_id);
+  const publicInvestigation = new URL(readyRun.investigation_url || created.session.investigation_url);
   const internalKibana = new URL(kibanaUrl);
   internalKibana.pathname = publicInvestigation.pathname;
   internalKibana.search = publicInvestigation.search;
