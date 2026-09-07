@@ -7,6 +7,46 @@ for (const key of [
   localStorage.setItem(key, JSON.stringify(true));
 }
 
+// Kibana surfaces a "Help us improve Elastic" feedback survey in the lower corner
+// on its own schedule. It exposes no reliable configuration or storage switch, so
+// remove its portal the moment it mounts — the same net effect as a learner clicking
+// "Not now" — to keep it out of demonstrations and recordings.
+(function suppressFeedbackSurvey() {
+  const surveyText = /improve elastic/i;
+  // The survey is portalled beside the app, never inside it; guard the app shell so
+  // we only ever discard a floating overlay, never Kibana's own content.
+  const appShell = '#kibana-body, [data-test-subj="kibanaChrome"], .kbnAppWrapper, #app-fixed-viewport';
+
+  const removeSurvey = () => {
+    const body = document.body;
+    if (!body) return;
+    for (const child of Array.from(body.children)) {
+      if (child.nodeType !== 1) continue;
+      if (child.tagName === 'SCRIPT' || child.tagName === 'STYLE') continue;
+      if (child.matches(appShell) || child.querySelector(appShell)) continue;
+      if (surveyText.test(child.textContent || '')) child.remove();
+    }
+  };
+
+  const start = () => {
+    let scheduled = false;
+    const sweep = () => {
+      scheduled = false;
+      removeSurvey();
+    };
+    const observer = new MutationObserver(() => {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(sweep);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    removeSurvey();
+  };
+
+  if (document.body) start();
+  else document.addEventListener('DOMContentLoaded', start, { once: true });
+})();
+
 // The launcher hands the selected run to this tab in one-use query parameters.
 // Consume them before Kibana starts, then remove the token from the address bar.
 const activeSessionKey = 'incident-coach:auto-connect';
