@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"cpu-saturation-playbook","extends":"infrastructure.json","variables":{"title":"CPU-saturation investigation","inventory":"hosts","metric":"CPU usage"}}

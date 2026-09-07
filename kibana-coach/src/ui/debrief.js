@@ -7,8 +7,11 @@ class IncidentDebrief {
     const dialog = document.createElement('dialog');
     dialog.className = 'incident-debrief';
     const components = Object.entries(feedback.components || {}).map(([name, score]) => `<li><span>${name.replaceAll('_', ' ')}</span><strong>${score}</strong></li>`).join('');
+    const result = feedback.scored === false
+      ? `Completion: ${feedback.completion ?? 'unscored walkthrough'}${feedback.completion != null ? '%' : ''}`
+      : `Score: ${feedback.total}/100`;
     dialog.innerHTML = `<form method="dialog"><button class="dialog-close" aria-label="Close debrief">×</button></form>
-      <h2>Incident debrief</h2><p>${feedback.summary}</p><p class="total">Score: ${feedback.total}/100</p>
+      <h2>Investigation debrief</h2><p>${feedback.summary}</p><p class="total">${result}</p>
       <ul>${components}</ul><p>Assistance: ${feedback.assistance.hints} hints; ${feedback.assistance.demonstrated_steps} demonstrated steps.</p>
       <p><strong>Reference route:</strong> ${feedback.reference_route.join(' → ')}</p>`;
     this.root.append(dialog);

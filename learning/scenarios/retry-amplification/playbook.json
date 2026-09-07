@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"retry-amplification-playbook","extends":"apm.json","variables":{"title":"Retry-amplification analysis","service":"orders","inspect_command":"select_span","inspect_target":"kibana.trace_span","inspect_label":"the repeated payment spans"}}

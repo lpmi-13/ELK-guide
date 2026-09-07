@@ -66,7 +66,7 @@ function startIncidentCoach() {
     const summary = command.value;
     try {
       await client.submitDiagnosis({
-        ...summary.diagnosis,
+        ...(summary.answer || summary.diagnosis),
         evidence: summary.evidence,
       });
       coach.debrief.showDemonstration(summary);

@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"hot-instance-imbalance-playbook","extends":"infrastructure.json","variables":{"title":"Instance-imbalance analysis","inventory":"hosts","metric":"CPU usage"}}

@@ -13,10 +13,11 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 from urllib.request import Request, urlopen
 
-from engine.evaluator import evaluate_action, score_session
+from engine.evaluator import evaluate_action, playbook_goals, score_session
+from engine.contracts import assert_catalog_valid
 
 PORT = int(os.getenv("PORT", "8091"))
 CONTROLLER_URL = os.getenv("SCENARIO_CONTROLLER_URL", "http://scenario-controller:8092").rstrip("/")
@@ -44,6 +45,38 @@ def load_definition(folder, identifier):
     path = LEARNING_DIR / folder / f"{identifier}.json"
     with path.open(encoding="utf-8") as stream:
         return json.load(stream)
+
+
+def load_manifest_definition(manifest, kind):
+    identifier = manifest[kind]
+    if manifest.get("schema_version") == 2:
+        path = LEARNING_DIR / "scenarios" / identifier
+        if path.is_file():
+            with path.open(encoding="utf-8") as stream:
+                definition = json.load(stream)
+            if definition.get("extends"):
+                template_path = LEARNING_DIR / "templates" / f"{kind}s" / definition["extends"]
+                with template_path.open(encoding="utf-8") as stream:
+                    template = json.load(stream)
+                variables = definition.get("variables", {})
+
+                def expand(value):
+                    if isinstance(value, str):
+                        for key, item in variables.items():
+                            value = value.replace(f"${{var.{key}}}", str(item))
+                        return value
+                    if isinstance(value, list):
+                        return [expand(item) for item in value]
+                    if isinstance(value, dict):
+                        return {key: expand(item) for key, item in value.items()}
+                    return value
+
+                result = expand(template)
+                result.update(definition.get("overrides", {}))
+                result["id"] = definition.get("id", result["id"])
+                return result
+            return definition
+    return load_definition(f"{kind}s", identifier)
 
 
 def http_json(url, method="GET", payload=None, timeout=10):
@@ -81,8 +114,8 @@ def emit(session, action, evaluation=None):
 
 def create_session(run_response, mode):
     manifest = run_response["manifest"]
-    playbook = load_definition("playbooks", manifest["playbook"])
-    rubric = load_definition("rubrics", manifest["rubric"])
+    playbook = load_manifest_definition(manifest, "playbook")
+    rubric = load_manifest_definition(manifest, "rubric")
     session_id = f"session-{uuid.uuid4().hex[:12]}"
     session = {
         "id": session_id,
@@ -112,16 +145,19 @@ def create_session(run_response, mode):
 
 
 def session_public(session, include_connection=False):
+    scenario = session["manifest"]["scenario"]
     result = {
         "session_id": session["id"],
         "run_id": session["run_id"],
         "mode": session["mode"],
         "policy": session["policy"],
-        "brief": session["manifest"]["scenario"]["brief"],
-        "investigation_url": "http://localhost:5601/app/discover#/view/incident-investigation",
+        "brief": scenario["brief"],
+        "scenario": {key: scenario.get(key) for key in ("id", "title", "type", "difficulty", "estimated_minutes", "skills")},
+        "answer_schema": scenario.get("answer_schema", {"type": "diagnosis", "fields": []}),
+        "investigation_url": run_investigation_url(session["manifest"]),
         "completed_goals": sorted(session["completed_goals"]),
         "step": current_step_index(session),
-        "step_count": len(session["playbook"]["steps"]),
+        "step_count": len(playbook_goals(session)),
     }
     if include_connection:
         result["connection_token"] = session["controller_token"]
@@ -130,10 +166,22 @@ def session_public(session, include_connection=False):
 
 
 def current_step_index(session):
-    for index, step in enumerate(session["playbook"]["steps"]):
-        if step["goal"] not in session["completed_goals"]:
+    for index, goal in enumerate(playbook_goals(session)):
+        if goal["id"] not in session["completed_goals"]:
             return index
-    return len(session["playbook"]["steps"])
+    return len(playbook_goals(session))
+
+
+def run_investigation_url(manifest):
+    space_id = manifest.get("space_id")
+    starting = manifest["scenario"].get("starting_view", {})
+    path = starting.get("path") or f"/app/{starting.get('app', 'discover')}"
+    path = path.replace("${run_id}", manifest["run_id"]).replace("${space_id}", space_id or "")
+    if starting.get("app") == "apm" and "environment=" not in path:
+        separator = "&" if "?" in path else "?"
+        path = f"{path}{separator}environment={quote(manifest['run_id'], safe='')}&rangeFrom=now-1h&rangeTo=now"
+    prefix = f"/s/{space_id}" if space_id else ""
+    return f"http://localhost:5601{prefix}{path}"
 
 
 def substitute(value, session):
@@ -145,15 +193,19 @@ def substitute(value, session):
         ),
         "the selected trace",
     )
-    expected = session["manifest"]["expected"]
+    expected = session["manifest"].get("expected", {})
+    truth = session["manifest"]["scenario"].get("truth", {})
     replacements = {
         "${run_id}": session["run_id"],
-        "${expected_service}": expected["service"],
-        "${expected_fault_type}": expected["fault_type"],
-        "${expected_route}": expected["route"],
-        "${minimum_duration_ns}": expected["minimum_duration_ns"],
+        "${space_id}": session["manifest"].get("space_id", ""),
+        "${expected_service}": expected.get("service", ""),
+        "${expected_fault_type}": expected.get("fault_type", ""),
+        "${expected_route}": expected.get("route", ""),
+        "${minimum_duration_ns}": expected.get("minimum_duration_ns", 0),
         "${trace_id}": trace_id,
     }
+    for key, item in truth.get("answers", {}).items():
+        replacements[f"${{truth.{key}}}"] = item
     if isinstance(value, str):
         for source, replacement in replacements.items():
             value = value.replace(source, str(replacement))
@@ -169,21 +221,24 @@ def next_command(session):
     if not session["run_ready"] or session["paused"]:
         return None
     index = current_step_index(session)
-    if index >= len(session["playbook"]["steps"]):
+    goals = playbook_goals(session)
+    if index >= len(goals):
         return None
     if session["pending_command"] and session["pending_command"]["step_index"] == index:
         return session["pending_command"]
-    step = session["playbook"]["steps"][index]
+    step = goals[index]
     session["last_command_sequence"] += 1
-    command_type = step["action"]
-    command_value = substitute(step.get("value"), session)
-    if session["mode"] == "demonstration" and command_type == "request_diagnosis":
+    reference = step.get("reference_action", {})
+    command_type = reference.get("command", step.get("action"))
+    command_value = substitute(reference.get("arguments", step.get("value")), session)
+    if session["mode"] == "demonstration" and command_type in {"request_diagnosis", "request_answer"}:
         command_type = "show_debrief"
         command_value = substitute(session["playbook"]["demonstration_summary"], session)
-    if session["mode"] == "challenge" and command_type != "request_diagnosis":
+    if session["mode"] == "challenge" and command_type not in {"request_diagnosis", "request_answer"}:
         command_type = "orient"
+        command_value = None
     command = {
-        "protocol_version": 1,
+        "protocol_version": 2,
         "message_type": "command",
         "command_id": f"{session['id']}-{step['id']}-{session['last_command_sequence']}",
         "run_id": session["run_id"],
@@ -191,16 +246,17 @@ def next_command(session):
         "sequence": session["last_command_sequence"],
         "step_id": step["id"],
         "step_index": index,
-        "step_count": len(session["playbook"]["steps"]),
+        "step_count": len(goals),
         "type": command_type,
-        "target": step["target"],
+        "target": reference.get("target", step.get("target", "coach.answer")),
         "value": command_value,
-        "expected_page": "discover",
+        "expected_page": session["manifest"]["scenario"].get("starting_view", {}).get("app", "discover"),
         "mode": session["mode"],
-        "narration": step["narration"] if session["policy"]["show_narration"] else session["manifest"]["scenario"]["brief"],
-        "reasoning": step["reasoning"] if session["mode"] == "demonstration" else "",
-        "evidence": step["evidence"] if session["mode"] == "demonstration" else "",
-        "concept": step["concept"] if session["mode"] == "demonstration" else "",
+        "narration": step.get("narration", step.get("title", "")) if session["policy"]["show_narration"] else session["manifest"]["scenario"]["brief"],
+        "reasoning": step.get("reasoning", "") if session["mode"] == "demonstration" else "",
+        "evidence": step.get("evidence", "") if session["mode"] == "demonstration" else "",
+        "concept": step.get("concept", "") if session["mode"] == "demonstration" else "",
+        "answer_schema": session["manifest"]["scenario"].get("answer_schema", {}),
     }
     session["pending_command"] = command
     return command
@@ -220,7 +276,8 @@ def transition_run(session, state):
 
 
 def wait_run_ready(session):
-    deadline = time.monotonic() + session["manifest"]["scenario"]["readiness"]["timeout_seconds"] + 30
+    validators = session["manifest"]["scenario"].get("provisioning", {}).get("readiness_validators", [])
+    deadline = time.monotonic() + max([int(item.get("timeout_seconds", 90)) for item in validators] or [90]) + 30
     while time.monotonic() < deadline:
         if refresh_run_ready(session):
             return True
@@ -228,30 +285,38 @@ def wait_run_ready(session):
     return False
 
 
-def elastic_search(query):
-    status, result = http_json(f"{ELASTICSEARCH_URL}/microservices-*/_search?allow_no_indices=true", "POST", query)
+def elastic_search(query, index="microservices-*"):
+    status, result = http_json(f"{ELASTICSEARCH_URL}/{index}/_search?allow_no_indices=true", "POST", query)
     return result if status < 400 else {}
 
 
 def action_evidence(session, action):
-    expected = session["manifest"]["expected"]
-    base_filters = [{"match_phrase": {"scenario.id": session["run_id"]}}]
-    slow_query = {"size": 0, "query": {"bool": {"filter": base_filters + [{"range": {"event.duration": {"gte": 2_000_000_000}}}]}}}
-    service_query = {"size": 0, "query": {"bool": {"filter": base_filters + [{"match_phrase": {"service.name": expected["service"]}}, {"range": {"event.duration": {"gte": expected["minimum_duration_ns"]}}}]}}}
-    evidence = {
-        "slow_events": elastic_search(slow_query).get("hits", {}).get("total", {}).get("value", 0) > 0,
-        "service_events": elastic_search(service_query).get("hits", {}).get("total", {}).get("value", 0) > 0,
-        "trace_services": 0,
-    }
+    evidence = {"assertions": {}, "trace_services": 0}
     details = action.get("details") or {}
     trace_id = details.get("trace_id") or (action.get("state_after") or {}).get("trace_id")
-    if trace_id:
-        trace_query = {
-            "size": 0,
-            "query": {"bool": {"filter": base_filters + [{"match_phrase": {"trace.id": str(trace_id)}}]}},
-            "aggs": {"services": {"cardinality": {"field": "service.name.keyword"}}},
-        }
-        evidence["trace_services"] = elastic_search(trace_query).get("aggregations", {}).get("services", {}).get("value", 0)
+    for assertion in session["manifest"]["scenario"].get("truth", {}).get("assertions", []):
+        kind = assertion.get("kind")
+        index = substitute(assertion.get("index", f"lab-{session['run_id']}"), session)
+        if kind in {"es_count", "es_cardinality"}:
+            query = {"size": 0, "query": substitute(assertion.get("query", {"match_all": {}}), session)}
+            if kind == "es_cardinality":
+                query["aggs"] = {"value": {"cardinality": {"field": assertion["field"]}}}
+            result = elastic_search(query, index)
+            if kind == "es_cardinality":
+                value = result.get("aggregations", {}).get("value", {}).get("value", 0)
+            else:
+                total = result.get("hits", {}).get("total", 0)
+                value = total.get("value", 0) if isinstance(total, dict) else total
+            evidence["assertions"][assertion["id"]] = value >= assertion.get("minimum", 1)
+        elif kind == "trace_from_action" and trace_id:
+            run_filter = {"match_phrase": {"scenario.id": session["run_id"]}} if index.startswith("microservices") else {"match_phrase": {"lab.run_id": session["run_id"]}}
+            trace_query = {"size": 0, "query": {"bool": {"filter": [run_filter, {"match_phrase": {"trace.id": str(trace_id)}}]}}, "aggs": {"services": {"cardinality": {"field": "service.name.keyword"}}}}
+            count = elastic_search(trace_query, index).get("aggregations", {}).get("services", {}).get("value", 0)
+            evidence["trace_services"] = count
+            evidence["assertions"][assertion["id"]] = count >= assertion.get("minimum", 1)
+        elif kind == "resource_isolated":
+            evidence["assertions"][assertion["id"]] = bool(session["manifest"].get("space_id"))
+    evidence.update(evidence["assertions"])
     return evidence
 
 
@@ -261,7 +326,7 @@ def record_action(session, action):
         raise ValueError("action sequence must increase monotonically")
     if action.get("run_id") != session["run_id"] or action.get("session_id") != session["id"]:
         raise ValueError("action run_id and session_id must match the connected session")
-    if int(action.get("protocol_version", 0)) != 1:
+    if int(action.get("protocol_version", 0)) not in {1, 2}:
         raise ValueError("unsupported protocol version")
     session["last_action_sequence"] = sequence
     if action.get("type") == "hint_requested":
@@ -341,6 +406,10 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/health":
             self.respond(200, {"status": "ok", "sessions": len(sessions)})
+            return
+        if parsed.path in {"/api/catalog", "/api/capabilities"}:
+            status, result = http_json(f"{CONTROLLER_URL}{parsed.path}")
+            self.respond(status, result)
             return
         parts = parsed.path.strip("/").split("/")
         if len(parts) == 3 and parts[:2] == ["api", "runs"]:
@@ -431,13 +500,22 @@ class Handler(BaseHTTPRequestHandler):
                         return
                     session["answer"] = payload
                     actor = "tutorial" if session["mode"] == "demonstration" else "learner"
-                    synthetic = {"protocol_version": 1, "run_id": session["run_id"], "session_id": session["id"], "sequence": session["last_action_sequence"] + 1, "type": "diagnosis_submitted", "actor": actor, "observed_at": now_iso(), "details": payload}
+                    synthetic = {"protocol_version": 2, "run_id": session["run_id"], "session_id": session["id"], "sequence": session["last_action_sequence"] + 1, "type": "answer_submitted", "actor": actor, "observed_at": now_iso(), "details": payload}
                     record_action(session, synthetic)
-                    trace_valid = action_evidence(session, {"details": {"trace_id": payload.get("trace_id")}})["trace_services"] >= 3
-                    session["feedback"] = score_session(session, trace_is_valid=trace_valid)
+                    answer_evidence = action_evidence(session, {"details": {"trace_id": payload.get("trace_id")}})
+                    trace_valid = answer_evidence["trace_services"] >= 3
+                    session["feedback"] = score_session(session, trace_is_valid=trace_valid, evidence=answer_evidence)
                     transition_run(session, "COMPLETED")
                     self.respond(200, session["feedback"])
                     return
+        self.respond(404, {"error": "not found"})
+
+    def do_DELETE(self):
+        parts = urlparse(self.path).path.strip("/").split("/")
+        if len(parts) == 3 and parts[:2] == ["api", "runs"]:
+            status, result = http_json(f"{CONTROLLER_URL}/api/runs/{parts[2]}", "DELETE", timeout=30)
+            self.respond(status, result)
+            return
         self.respond(404, {"error": "not found"})
 
     def websocket(self, session_id, query):
@@ -491,12 +569,17 @@ class Handler(BaseHTTPRequestHandler):
                     send_frame(connection, json.dumps({"message_type": "acknowledged", "command_id": message.get("command_id")}))
                 elif message_type == "hint":
                     index = current_step_index(session)
-                    if index < len(session["playbook"]["steps"]):
-                        step = session["playbook"]["steps"][index]
-                        level = min(session["hint_level"].get(step["id"], 0), len(step["hints"]) - 1)
+                    goals = playbook_goals(session)
+                    if index < len(goals):
+                        step = goals[index]
+                        hints = step.get("hints", [])
+                        if not hints:
+                            send_frame(connection, json.dumps({"message_type": "hint", "step_id": step["id"], "level": 0, "text": "No additional hint is available for this goal."}))
+                            continue
+                        level = min(session["hint_level"].get(step["id"], 0), len(hints) - 1)
                         session["hint_level"][step["id"]] = level + 1
                         session["assistance"]["hints"] += 1
-                        send_frame(connection, json.dumps({"message_type": "hint", "step_id": step["id"], "level": level + 1, "text": substitute(step["hints"][level], session)}))
+                        send_frame(connection, json.dumps({"message_type": "hint", "step_id": step["id"], "level": level + 1, "text": substitute(hints[level], session)}))
                 elif message_type == "pause":
                     session["paused"] = True
                     send_frame(connection, json.dumps({"message_type": "status", "paused": True}))
@@ -537,4 +620,5 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    assert_catalog_valid(LEARNING_DIR)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

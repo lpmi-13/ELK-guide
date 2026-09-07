@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"discover-time-window-playbook","extends":"discover.json","variables":{"title":"Incident-window analysis","window":"10m","field":"http.response.status_code","query":"http.response.status_code >= 500"}}

@@ -84,7 +84,7 @@ def main():
     learning = args.learning_url.rstrip("/")
     elasticsearch = args.elasticsearch_url.rstrip("/")
 
-    status, created = request_json(f"{learning}/api/runs", "POST", {"scenario": "slow-payments", "seed": args.seed, "mode": "guided"})
+    status, created = request_json(f"{learning}/api/runs", "POST", {"scenario": "slow-payments", "seed": args.seed, "mode": "challenge"})
     expect(status, created)
     run_id = created["run"]["run_id"]
     session_id = created["session"]["session_id"]
@@ -95,8 +95,7 @@ def main():
     actions = [
         action(run_id, session_id, 1, "time_range_changed", {"from": "now-10m", "to": "now"}, {"time_from": "now-10m"}),
         action(run_id, session_id, 2, "query_submitted", {"query": f'scenario.id: "{run_id}" and event.duration >= 2000000000'}),
-        action(run_id, session_id, 3, "filter_added", {"field": "service.name", "value": "payments"}),
-        action(run_id, session_id, 4, "trace_opened", {"trace_id": trace_id}, {"trace_id": trace_id}),
+        action(run_id, session_id, 3, "document_expanded", {"trace_id": trace_id}),
     ]
     for observed in actions:
         status, result = request_json(f"{learning}/api/sessions/{session_id}/actions", "POST", observed, token)
@@ -104,7 +103,14 @@ def main():
         if result["evaluation"]["outcome"] != "accepted":
             raise RuntimeError(f"action was not accepted: {result}")
 
-    answer = {"service": "payments", "fault_type": "latency", "affected_route": "/checkout", "trace_id": trace_id, "evidence": "The payments transaction dominates a trace shared with orders and the API gateway."}
+    answer = {
+        "finding": "payments",
+        "scope": "/checkout",
+        "conclusion": "Payments latency is the bottleneck propagating through the checkout request.",
+        "trace_id": trace_id,
+        "evidence_refs": ["signal", "corroboration"],
+        "evidence": "The payment transaction dominates the correlated checkout trace.",
+    }
     status, feedback = request_json(f"{learning}/api/sessions/{session_id}/answer", "POST", answer, token)
     expect(status, feedback, (200,))
     if not feedback["diagnosis_correct"] or feedback["total"] != 100:
@@ -113,7 +119,20 @@ def main():
     expect(status, completed, (200,))
     if completed["state"] != "COMPLETED":
         raise RuntimeError(f"run did not complete: {completed}")
-    print(json.dumps({"run_id": run_id, "ready_state": ready["state"], "final_state": completed["state"], "affected_traces": ready["evidence"]["affected_traces"], "trace_id": trace_id, "score": feedback["total"]}, indent=2))
+    status, cleaned = request_json(f"{learning}/api/runs/{run_id}", "DELETE")
+    expect(status, cleaned, (200,))
+    if not cleaned.get("aborted"):
+        raise RuntimeError(f"run cleanup failed: {cleaned}")
+    status, remaining = request_json(
+        f"{elasticsearch}/microservices-*/_count?allow_no_indices=true",
+        "POST",
+        {"query": {"term": {"scenario.id.keyword": run_id}}},
+    )
+    expect(status, remaining, (200,))
+    if remaining.get("count"):
+        raise RuntimeError(f"run telemetry was not cleaned: {remaining}")
+    validators = ready["evidence"].get("validators", {})
+    print(json.dumps({"run_id": run_id, "ready_state": ready["state"], "final_state": completed["state"], "readiness": validators, "trace_id": trace_id, "score": feedback["total"], "cleaned": True}, indent=2))
 
 
 if __name__ == "__main__":

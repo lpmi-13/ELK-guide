@@ -1,62 +1,18 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://elk-guide.local/schemas/scenario.schema.json",
-  "title": "Incident scenario template",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["schema_version", "id", "title", "fault", "traffic", "readiness", "truth", "playbook", "rubric"],
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://elk-guide.local/schemas/scenario.schema.json",
+  "title": "Scenario pack declaration v2", "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "id", "version", "title", "type", "classification", "difficulty", "estimated_minutes", "brief", "skills", "required_capabilities", "provisioning", "starting_view", "truth", "answer_schema", "playbook", "rubric", "cleanup"],
   "properties": {
-    "schema_version": {"const": 1},
-    "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]+$"},
-    "version": {"type": "integer", "minimum": 1},
-    "title": {"type": "string", "minLength": 1},
-    "difficulty": {"enum": ["beginner", "intermediate", "advanced"]},
-    "brief": {"type": "string", "minLength": 1},
-    "fault": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["service", "type", "delay_ms", "probability", "paths"],
-      "properties": {
-        "service": {"type": "string", "minLength": 1},
-        "type": {"enum": ["latency", "error", "unavailable"]},
-        "delay_ms": {"type": "integer", "minimum": 0, "maximum": 30000},
-        "probability": {"type": "number", "minimum": 0, "maximum": 1},
-        "paths": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^/"}}
-      }
-    },
-    "traffic": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["entrypoint", "path", "requests_per_second"],
-      "properties": {
-        "entrypoint": {"type": "string", "minLength": 1},
-        "path": {"type": "string", "pattern": "^/"},
-        "requests_per_second": {"type": "number", "exclusiveMinimum": 0, "maximum": 20}
-      }
-    },
-    "readiness": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["timeout_seconds", "minimum_affected_traces", "expected_service", "minimum_duration_ms"],
-      "properties": {
-        "timeout_seconds": {"type": "integer", "minimum": 5},
-        "minimum_affected_traces": {"type": "integer", "minimum": 1},
-        "expected_service": {"type": "string", "minLength": 1},
-        "minimum_duration_ms": {"type": "integer", "minimum": 1}
-      }
-    },
-    "truth": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["root_cause_service", "fault_type", "affected_route", "evidence"],
-      "properties": {
-        "root_cause_service": {"type": "string"},
-        "fault_type": {"type": "string"},
-        "affected_route": {"type": "string"},
-        "evidence": {"type": "array", "minItems": 1, "items": {"type": "string"}}
-      }
-    },
-    "playbook": {"type": "string", "minLength": 1},
-    "rubric": {"type": "string", "minLength": 1}
+    "schema_version": {"const": 2}, "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]+$"}, "version": {"type": "integer", "minimum": 1},
+    "title": {"type": "string", "minLength": 1}, "type": {"enum": ["investigation", "analysis", "triage"]}, "classification": {"enum": ["core", "extension", "legacy"]},
+    "difficulty": {"type": "integer", "minimum": 1, "maximum": 3}, "estimated_minutes": {"type": "integer", "minimum": 5}, "brief": {"type": "string", "minLength": 1},
+    "skills": {"type": "array", "minItems": 1, "items": {"type": "string"}}, "required_capabilities": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "provisioning": {"type": "object", "required": ["strategies", "readiness_validators"], "properties": {"strategies": {"type": "array", "minItems": 1, "items": {"enum": ["seeded-events", "live-traffic", "saved-objects", "managed-resource"]}}, "seeded_events": {"type": "object"}, "live_traffic": {"type": "object"}, "managed_resources": {"type": "array", "items": {"type": "object"}}, "readiness_validators": {"type": "array", "items": {"type": "object", "required": ["id", "kind"]}}}},
+    "starting_view": {"type": "object", "required": ["app", "path"], "properties": {"app": {"type": "string"}, "saved_object": {"type": "string"}, "path": {"type": "string", "pattern": "^/app/"}}},
+    "truth": {"type": "object", "required": ["answers", "assertions"], "properties": {"answers": {"type": "object"}, "assertions": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["id", "kind"]}}}},
+    "answer_schema": {"type": "object", "required": ["type", "fields"], "properties": {"type": {"enum": ["diagnosis", "comparison", "triage_decision"]}, "fields": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["id", "label", "kind"]}}}},
+    "playbook": {"type": "string", "pattern": "^[^/]+\\.json$"}, "rubric": {"type": "string", "pattern": "^[^/]+\\.json$"},
+    "cleanup": {"type": "object", "required": ["delete_space", "delete_run_data", "managed_resources"], "properties": {"delete_space": {"const": true}, "delete_run_data": {"const": true}, "managed_resources": {"type": "array"}}},
+    "demonstration_conclusion": {"type": "string"}
   }
 }

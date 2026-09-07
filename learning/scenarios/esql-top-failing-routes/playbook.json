@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"esql-top-failing-routes-playbook","extends":"esql.json","variables":{"title":"Failing-route ranking","field":"url.path","query":"FROM lab-${run_id} | STATS total = COUNT(*), failures = COUNT(*) WHERE event.outcome == \"failure\" BY url.path | SORT failures DESC | LIMIT 10"}}

@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"synthetics-regional-failure-playbook","extends":"extension.json","variables":{"title":"Synthetics journey investigation","app":"synthetics","observation":"synthetics_step_opened","command":"open_synthetics_step","target":"kibana.synthetics_step"}}

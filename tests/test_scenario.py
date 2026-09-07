@@ -27,8 +27,9 @@ class ScenarioTests(unittest.TestCase):
         first = self.controller.materialize(self.template, 20260822, run_id="run-aaaaaaaaaaaa")
         second = self.controller.materialize(self.template, 20260822, run_id="run-bbbbbbbbbbbb")
         self.assertNotEqual(first["run_id"], second["run_id"])
-        first_without_identity = {key: value for key, value in first.items() if key not in {"run_id", "created_at"}}
-        second_without_identity = {key: value for key, value in second.items() if key not in {"run_id", "created_at"}}
+        first_without_identity = {key: value for key, value in first.items() if key not in {"run_id", "space_id", "created_at"}}
+        second_without_identity = {key: value for key, value in second.items() if key not in {"run_id", "space_id", "created_at"}}
+        self.assertNotEqual(first["space_id"], second["space_id"])
         self.assertEqual(first_without_identity, second_without_identity)
         self.assertGreaterEqual(first["scenario"]["fault"]["delay_ms"], 3000)
 

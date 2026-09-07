@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"http-error-regression-playbook","extends":"discover.json","variables":{"title":"HTTP regression investigation","window":"15m","field":"url.path","query":"http.response.status_code >= 500 and url.path: *"}}

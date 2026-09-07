@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"auth-rejection-surge-playbook","extends":"discover.json","variables":{"title":"Authentication rejection investigation","window":"20m","field":"authentication.rejection_reason","query":"event.outcome: failure and authentication.rejection_reason: * and not authentication.rejection_reason: bad_password"}}

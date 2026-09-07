@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"slow-payments-playbook","extends":"discover.json","variables":{"title":"Slow checkout investigation","window":"10m","field":"event.duration","query":"scenario.id: \"${run_id}\" and event.duration >= 2000000000"}}

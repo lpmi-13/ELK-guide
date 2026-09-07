@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"schema-drift-data-quality-playbook","extends":"discover.json","variables":{"title":"Schema-drift analysis","window":"1h","field":"schema.route_present","query":"not http.route: * and telemetry.producer: *"}}

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
 SERVICE = os.getenv("SERVICE_NAME", "unknown-service")
@@ -21,7 +21,7 @@ LOG_FILE = Path(os.getenv("LOG_DIR", "/tmp")) / f"{SERVICE}.json"
 LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 write_lock = threading.Lock()
 fault_lock = threading.Lock()
-fault_state = None
+fault_states = {}
 
 
 def now_iso():
@@ -84,28 +84,39 @@ def normalize_fault(payload):
 
 
 def set_fault(payload):
-    global fault_state
     normalized = normalize_fault(payload)
+    key = normalized["scenario_id"] or "default"
     with fault_lock:
-        fault_state = normalized
+        fault_states[key] = normalized
     return normalized.copy()
 
 
-def clear_fault():
-    global fault_state
+def clear_fault(scenario_id=None):
     with fault_lock:
-        previous = fault_state
-        fault_state = None
-    return previous.copy() if previous else None
+        if scenario_id:
+            previous = fault_states.pop(scenario_id, None)
+            return previous.copy() if previous else None
+        previous = next(iter(fault_states.values()), None)
+        fault_states.clear()
+        return previous.copy() if previous else None
 
 
-def get_fault():
+def get_fault(scenario_id=None):
     with fault_lock:
-        return fault_state.copy() if fault_state else None
+        if scenario_id:
+            configured = fault_states.get(scenario_id)
+            return configured.copy() if configured else None
+        configured = next(iter(fault_states.values()), None)
+        return configured.copy() if configured else None
+
+
+def get_faults():
+    with fault_lock:
+        return {key: value.copy() for key, value in fault_states.items()}
 
 
 def matching_fault(path, scenario_id):
-    configured = get_fault()
+    configured = get_fault(scenario_id or "default")
     if not configured or path not in configured["paths"]:
         return None
     if configured["scenario_id"] and configured["scenario_id"] != scenario_id:
@@ -134,7 +145,7 @@ class Handler(BaseHTTPRequestHandler):
             self.respond_json(200, {"status": "ok", "service": SERVICE})
             return
         if path == "/_control/state":
-            self.respond_json(200, {"service": SERVICE, "fault": get_fault()})
+            self.respond_json(200, {"service": SERVICE, "fault": get_fault(), "faults": get_faults()})
             return
         if path.startswith("/_control/"):
             self.respond_json(404, {"error": "unknown control endpoint"})
@@ -160,7 +171,8 @@ class Handler(BaseHTTPRequestHandler):
         if urlparse(self.path).path != "/_control/fault":
             self.respond_json(404, {"error": "not found"})
             return
-        previous = clear_fault()
+        scenario_id = parse_qs(urlparse(self.path).query).get("scenario_id", [None])[0]
+        previous = clear_fault(scenario_id)
         if previous:
             emit("runtime fault cleared", **scenario_fields(previous["scenario_id"], previous["scenario_name"]), **{"event.action": "fault_cleared", "fault.type": previous["fault"]})
         self.respond_json(200, {"service": SERVICE, "cleared": previous is not None})

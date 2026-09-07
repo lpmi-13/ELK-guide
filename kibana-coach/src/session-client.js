@@ -55,7 +55,7 @@ class IncidentSessionClient {
     this.sequence += 1;
     this.save();
     const action = {
-      protocol_version: 1,
+      protocol_version: 2,
       run_id: this.runId,
       session_id: this.sessionId,
       sequence: this.sequence,

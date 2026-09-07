@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"regional-outage-map-playbook","extends":"extension.json","variables":{"title":"Regional map investigation","app":"maps","observation":"map_region_selected","command":"select_map_region","target":"kibana.map_region"}}

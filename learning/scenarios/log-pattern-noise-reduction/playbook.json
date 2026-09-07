@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"log-pattern-noise-reduction-playbook","extends":"discover.json","variables":{"title":"Log-pattern investigation","window":"30m","field":"message","query":"service.name: payments and event.outcome: failure and not message: \"heartbeat delayed\""}}

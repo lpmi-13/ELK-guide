@@ -1,27 +1,13 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://elk-guide.local/schemas/rubric.schema.json",
-  "title": "Investigation scoring rubric",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["schema_version", "id", "version", "goals", "weights", "reference_action_cost"],
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://elk-guide.local/schemas/rubric.schema.json",
+  "title": "Scenario rubric v2", "type": "object", "additionalProperties": false,
+  "required": ["schema_version"],
+  "oneOf": [{"required": ["extends"]}, {"required": ["id", "version", "scenario_type", "goals", "weights", "reference_action_cost"]}],
   "properties": {
-    "schema_version": {"const": 1},
-    "id": {"type": "string"},
-    "version": {"type": "integer", "minimum": 1},
-    "goals": {"type": "array", "minItems": 1, "items": {"type": "object"}},
-    "weights": {
-      "type": "object",
-      "required": ["diagnosis", "evidence", "coverage", "relevance", "efficiency"],
-      "properties": {
-        "diagnosis": {"type": "number"},
-        "evidence": {"type": "number"},
-        "coverage": {"type": "number"},
-        "relevance": {"type": "number"},
-        "efficiency": {"type": "number"}
-      }
-    },
-    "reference_action_cost": {"type": "number", "exclusiveMinimum": 0},
-    "action_costs": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0}}
+    "schema_version": {"const": 2}, "extends": {"type": "string", "pattern": "^[^/]+\\.json$"}, "variables": {"type": "object"}, "overrides": {"type": "object"}, "id": {"type": "string"}, "version": {"type": "integer", "minimum": 1},
+    "scenario_type": {"enum": ["investigation", "analysis", "triage"]}, "goals": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["id"]}},
+    "weights": {"type": "object", "additionalProperties": false, "required": ["correctness", "evidence", "coverage", "relevance", "efficiency"], "properties": {"correctness": {"const": 40}, "evidence": {"const": 20}, "coverage": {"const": 20}, "relevance": {"const": 10}, "efficiency": {"const": 10}}},
+    "reference_action_cost": {"type": "number", "exclusiveMinimum": 0}, "action_costs": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0}},
+    "hint_penalty": {"type": "number", "minimum": 0}, "demonstration_penalty": {"type": "number", "minimum": 0}, "maximum_assistance_penalty": {"type": "number", "minimum": 0}
   }
 }

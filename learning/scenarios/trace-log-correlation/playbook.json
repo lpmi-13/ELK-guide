@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"trace-log-correlation-playbook","extends":"apm.json","variables":{"title":"Trace-log correlation","service":"payments","inspect_command":"navigate_to_correlated_logs","inspect_target":"kibana.correlated_logs","inspect_label":"correlated logs for the failing span"}}

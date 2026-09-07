@@ -1,0 +1,5 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://elk-guide.local/schemas/catalog.schema.json",
+  "title": "Scenario catalog v2", "type": "object", "additionalProperties": false, "required": ["schema_version", "kibana_version", "scenarios"],
+  "properties": {"schema_version": {"const": 2}, "kibana_version": {"const": "9.5.2"}, "scenarios": {"type": "array", "minItems": 24, "items": {"type": "object", "required": ["id", "title", "brief", "type", "classification", "difficulty", "estimated_minutes", "surface", "signal_type", "skills", "required_capabilities", "pack"], "properties": {"id": {"type": "string"}, "title": {"type": "string"}, "brief": {"type": "string"}, "type": {"enum": ["investigation", "analysis", "triage"]}, "classification": {"enum": ["core", "extension", "legacy"]}, "difficulty": {"type": "integer"}, "estimated_minutes": {"type": "integer"}, "surface": {"type": "string"}, "signal_type": {"type": "string"}, "skills": {"type": "array"}, "required_capabilities": {"type": "array"}, "pack": {"type": "string"}}}}}
+}

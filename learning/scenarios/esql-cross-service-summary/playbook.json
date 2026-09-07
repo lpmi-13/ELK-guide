@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"esql-cross-service-summary-playbook","extends":"esql.json","variables":{"title":"Cross-service summary","field":"service.name","query":"FROM lab-${run_id} | STATS volume = COUNT(*), failures = COUNT(*) WHERE event.outcome == \"failure\", p95 = PERCENTILE(event.duration, 95) BY service.name | SORT failures DESC"}}

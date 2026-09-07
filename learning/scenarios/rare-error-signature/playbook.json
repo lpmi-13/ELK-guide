@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"rare-error-signature-playbook","extends":"discover.json","variables":{"title":"Rare-error investigation","window":"30m","field":"error.type","query":"service.name: catalog and event.outcome: failure and error.type: *"}}

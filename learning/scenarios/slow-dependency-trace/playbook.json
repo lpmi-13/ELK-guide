@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"slow-dependency-trace-playbook","extends":"apm.json","variables":{"title":"Slow-dependency investigation","service":"checkout","inspect_command":"select_span","inspect_target":"kibana.trace_span","inspect_label":"the longest dependency span"}}

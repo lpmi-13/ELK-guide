@@ -54,6 +54,31 @@ class IncidentCoachPanel {
     });
   }
 
+  renderAnswerSchema(schema = {}) {
+    const form = this.root.querySelector('#diagnosis');
+    const submit = form.querySelector('button[type="submit"]');
+    for (const node of [...form.querySelectorAll('label')]) node.remove();
+    const fields = schema.fields?.length ? schema.fields : [
+      {id: 'service', label: 'Faulty service', kind: 'string'},
+      {id: 'fault_type', label: 'Failure type', kind: 'string'},
+      {id: 'affected_route', label: 'Affected route', kind: 'string'},
+      {id: 'trace_id', label: 'Trace ID', kind: 'string'},
+      {id: 'evidence', label: 'Evidence', kind: 'text'},
+    ];
+    for (const field of fields) {
+      const label = document.createElement('label');
+      label.textContent = field.label || field.id.replaceAll('_', ' ');
+      const input = field.kind === 'text' ? document.createElement('textarea') : document.createElement('input');
+      input.name = field.id;
+      input.required = field.required !== false;
+      if (field.kind === 'number') input.type = 'number';
+      if (field.placeholder) input.placeholder = field.placeholder;
+      label.append(input);
+      form.insertBefore(label, submit);
+    }
+    submit.textContent = schema.type === 'triage_decision' ? 'Submit triage decision' : schema.type === 'comparison' ? 'Submit comparison' : 'Submit diagnosis';
+  }
+
   showCommand(command, target) {
     this.host.hidden = false;
     this.panel.hidden = false;
@@ -74,7 +99,8 @@ class IncidentCoachPanel {
     this.root.querySelector('.progress span').style.width = `${100 * command.step_index / command.step_count}%`;
     this.root.querySelector('#demonstrate').hidden = command.mode !== 'guided';
     this.root.querySelector('#hint').hidden = command.mode === 'demonstration';
-    this.root.querySelector('#diagnosis').hidden = command.type !== 'request_diagnosis' || command.mode === 'demonstration';
+    if (command.type === 'request_diagnosis' || command.type === 'request_answer') this.renderAnswerSchema(command.answer_schema);
+    this.root.querySelector('#diagnosis').hidden = !['request_diagnosis', 'request_answer'].includes(command.type) || command.mode === 'demonstration';
     if (target && command.mode !== 'challenge') this.spotlight.show(target); else this.spotlight.hide();
     requestAnimationFrame(() => this.placeAwayFrom(target));
   }

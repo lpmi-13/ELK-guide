@@ -1,19 +1,29 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://elk-guide.local/schemas/playbook.schema.json",
-  "title": "Semantic investigation playbook",
+  "title": "Goal graph playbook v2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "id", "version", "starting_view", "demonstration_summary", "steps"],
+  "required": ["schema_version"],
+  "oneOf": [
+    {"required": ["extends", "variables"]},
+    {"required": ["id", "version", "starting_view", "demonstration_summary", "goals"]}
+  ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
+    "extends": {"type": "string", "pattern": "^[^/]+\\.json$"},
+    "variables": {"type": "object"},
+    "overrides": {"type": "object"},
     "id": {"type": "string"},
     "version": {"type": "integer", "minimum": 1},
-    "starting_view": {"type": "string"},
+    "starting_view": {
+      "type": "object",
+      "required": ["app"],
+      "properties": {"app": {"type": "string"}, "saved_object": {"type": "string"}}
+    },
     "demonstration_summary": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["title", "summary", "checks", "evidence", "conclusion", "diagnosis"],
+      "required": ["title", "summary", "checks", "evidence", "conclusion", "answer"],
       "properties": {
         "title": {"type": "string"},
         "summary": {"type": "string"},
@@ -22,45 +32,50 @@
           "minItems": 1,
           "items": {
             "type": "object",
-            "additionalProperties": false,
             "required": ["title", "detail"],
             "properties": {"title": {"type": "string"}, "detail": {"type": "string"}}
           }
         },
         "evidence": {"type": "string"},
         "conclusion": {"type": "string"},
-        "diagnosis": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["service", "fault_type", "affected_route", "trace_id"],
-          "properties": {
-            "service": {"type": "string"},
-            "fault_type": {"type": "string"},
-            "affected_route": {"type": "string"},
-            "trace_id": {"type": "string"}
-          }
-        }
+        "answer": {"type": "object"},
+        "diagnosis": {"type": "object"}
       }
     },
-    "steps": {
+    "goals": {
       "type": "array",
       "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "goal", "narration", "reasoning", "evidence", "concept", "target", "action", "validation", "hints"],
+        "required": ["id", "title", "concept", "requires", "accepts", "reference_action", "hints"],
         "properties": {
           "id": {"type": "string"},
-          "goal": {"type": "string"},
+          "title": {"type": "string"},
+          "concept": {"type": "string"},
           "narration": {"type": "string"},
           "reasoning": {"type": "string"},
           "evidence": {"type": "string"},
-          "concept": {"type": "string"},
-          "target": {"type": "string"},
-          "action": {"type": "string"},
-          "value": {},
-          "validation": {"type": "object"},
-          "hints": {"type": "array", "items": {"type": "string"}}
+          "requires": {"type": "array", "items": {"type": "string"}},
+          "accepts": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["action", "validators"],
+              "properties": {
+                "action": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
+                "validators": {"type": "array", "items": {"type": "object", "required": ["kind"]}}
+              }
+            }
+          },
+          "reference_action": {
+            "type": "object",
+            "required": ["command", "target"],
+            "properties": {"command": {"type": "string"}, "target": {"type": "string"}, "arguments": {}}
+          },
+          "hints": {"type": "array", "minItems": 3, "items": {"type": "string"}},
+          "scored": {"type": "boolean"}
         }
       }
     }

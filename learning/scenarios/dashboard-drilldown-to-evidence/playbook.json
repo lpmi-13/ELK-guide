@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"dashboard-drilldown-to-evidence-playbook","extends":"dashboard.json","variables":{"title":"Dashboard drilldown investigation","field":"service.name"}}

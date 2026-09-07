@@ -60,6 +60,14 @@
     button.dialog-close { margin:0;padding:2px 8px;background:transparent;color:#c6d4df;font-size:26px;font-weight:400;line-height:1; }
     button.dialog-close:hover { color:#fff;background:#203447; }
     .dialog-actions { display:flex;justify-content:flex-end; }
+    .catalog-filters { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px; }
+    .catalog-filters label { margin-top:8px;font-size:12px;color:#aebfcd; }
+    .scenario-catalog { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:16px 0;max-height:390px;overflow:auto;padding-right:4px; }
+    .scenario-card { display:block;width:100%;margin:0;padding:14px;text-align:left;border:1px solid #3d566b;border-radius:8px;background:#10202e;color:#eef5fb; }
+    .scenario-card:hover:not(:disabled),.scenario-card.selected { border-color:#43d7a0;box-shadow:inset 0 0 0 1px #43d7a0; }
+    .scenario-card:disabled { opacity:.55;cursor:not-allowed; }
+    .scenario-card strong,.scenario-card span { display:block; }.scenario-card span { margin-top:5px;color:#b8c8d4;font-size:12px;line-height:1.4; }
+    .scenario-card .meta { color:#76cdb0; }.scenario-card .unavailable { color:#ffad9f; }
     @media(max-width:760px){
       body{padding:22px 14px}
       header{display:block;margin-bottom:24px}
@@ -67,6 +75,7 @@
       .connection-statuses{align-items:flex-start;flex-wrap:wrap;gap:6px 14px;margin-top:10px}
       .connection-status{white-space:normal}
       main,main:has(#session-card:not([hidden])){grid-template-columns:1fr;justify-content:stretch}
+      .catalog-filters,.scenario-catalog{grid-template-columns:1fr}
       .field-row{grid-template-columns:1fr}
       .dialog-content{padding:20px}
     }
@@ -83,11 +92,19 @@
   <main>
     <section>
       <div class="section-heading">
-        <h2>Start an investigation</h2>
+        <h2>Choose a Kibana scenario</h2>
         <button id="show-instructions" class="secondary-button" type="button">How it works</button>
       </div>
-      <p>A fault will affect the real checkout request path. The lab waits for enough indexed evidence before it lets the investigation begin.</p>
+      <p>Choose a production question, then investigate it in Kibana using demonstration, guided practice, or challenge mode. All learner workflows are read-only.</p>
       <form id="start-form">
+        <div class="catalog-filters" aria-label="Scenario filters">
+          <label>Surface<select id="surface-filter"><option value="">All surfaces</option></select></label>
+          <label>Skill<select id="skill-filter"><option value="">All skills</option></select></label>
+          <label>Difficulty<select id="difficulty-filter"><option value="">All levels</option><option value="1">Level 1</option><option value="2">Level 2</option><option value="3">Level 3</option></select></label>
+          <label>Signal<select id="signal-filter"><option value="">All signals</option></select></label>
+          <label>Scenario type<select id="type-filter"><option value="">All types</option><option value="investigation">Investigation</option><option value="analysis">Analysis</option><option value="triage">Triage</option></select></label>
+        </div>
+        <div id="scenario-catalog" class="scenario-catalog" role="listbox" aria-label="Available scenarios" aria-live="polite"></div>
         <label id="mode-label" for="mode">Assistance mode</label>
         <span class="select-control">
           <select id="mode"><option value="demonstration" selected>Demonstration</option><option value="guided">Guided practice</option><option value="challenge">Challenge</option></select>
@@ -98,9 +115,9 @@
           <button id="new-key" type="button">New key</button>
         </div>
         <p class="field-help" id="scenario-key-help">Use any 10–40 characters. Reuse the same key to replay this incident variation.</p>
-        <button id="start" type="submit">Activate slow-checkout incident</button>
+        <button id="start" type="submit" disabled>Start selected scenario</button>
       </form>
-      <p class="muted">The briefing intentionally does not name the faulty service.</p>
+      <p class="muted">Capability-gated extensions are disabled with a reason when the local Kibana installation cannot support them.</p>
     </section>
     <section id="session-card" hidden>
       <h2>Incident preparing</h2>
@@ -140,6 +157,12 @@
     const modeLabel = document.querySelector('#mode-label');
     const card = document.querySelector('#session-card');
     const scenarioKey = document.querySelector('#scenario-key');
+    const scenarioCatalog = document.querySelector('#scenario-catalog');
+    const surfaceFilter = document.querySelector('#surface-filter');
+    const skillFilter = document.querySelector('#skill-filter');
+    const difficultyFilter = document.querySelector('#difficulty-filter');
+    const signalFilter = document.querySelector('#signal-filter');
+    const typeFilter = document.querySelector('#type-filter');
     const evidenceProgress = document.querySelector('#evidence-progress');
     const evidenceProgressContainer = document.querySelector('.evidence-progress');
     const readiness = document.querySelector('#readiness');
@@ -151,6 +174,67 @@
     let sessionConnection = null;
     let socket;
     let coachRuntimeReady = false;
+    let catalogEntries = [];
+    let selectedScenario = '';
+
+    function addOptions(select, values) {
+      for (const value of [...new Set(values)].sort()) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value.replaceAll('-', ' ');
+        select.append(option);
+      }
+    }
+
+    function renderCatalog() {
+      const filtered = catalogEntries.filter(item =>
+        (!surfaceFilter.value || item.surface === surfaceFilter.value) &&
+        (!skillFilter.value || item.skills.includes(skillFilter.value)) &&
+        (!difficultyFilter.value || String(item.difficulty) === difficultyFilter.value) &&
+        (!signalFilter.value || item.signal_type === signalFilter.value) &&
+        (!typeFilter.value || item.type === typeFilter.value));
+      scenarioCatalog.replaceChildren();
+      for (const item of filtered) {
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = `scenario-card${selectedScenario === item.id ? ' selected' : ''}`;
+        card.disabled = !item.available;
+        card.setAttribute('role', 'option');
+        card.setAttribute('aria-selected', String(selectedScenario === item.id));
+        const title = document.createElement('strong');
+        title.textContent = item.title;
+        const brief = document.createElement('span');
+        brief.textContent = item.brief;
+        const meta = document.createElement('span');
+        meta.className = 'meta';
+        meta.textContent = `${item.surface} · level ${item.difficulty} · ${item.estimated_minutes} min · ${item.skills.join(', ')}`;
+        card.append(title, brief, meta);
+        if (!item.available) {
+          const reason = document.createElement('span');
+          reason.className = 'unavailable';
+          reason.textContent = item.reason;
+          card.append(reason);
+        }
+        card.onclick = () => { selectedScenario = item.id; renderCatalog(); document.querySelector('#start').disabled = false; };
+        scenarioCatalog.append(card);
+      }
+      if (!filtered.length) scenarioCatalog.textContent = 'No scenarios match these filters.';
+    }
+
+    async function loadCatalog() {
+      const response = await fetch(`${learningUrl}/api/catalog`, {cache: 'no-store'});
+      const catalog = await response.json();
+      if (!response.ok) throw new Error(catalog.error || 'Scenario catalog unavailable');
+      catalogEntries = catalog.scenarios;
+      addOptions(surfaceFilter, catalogEntries.map(item => item.surface));
+      addOptions(skillFilter, catalogEntries.flatMap(item => item.skills));
+      addOptions(signalFilter, catalogEntries.map(item => item.signal_type));
+      for (const filter of [surfaceFilter, skillFilter, difficultyFilter, signalFilter, typeFilter]) filter.addEventListener('change', renderCatalog);
+      const first = catalogEntries.find(item => item.available && item.classification === 'core');
+      selectedScenario = first?.id || '';
+      document.querySelector('#start').disabled = !selectedScenario;
+      renderCatalog();
+    }
 
     const modeTrigger = document.createElement('button');
     modeTrigger.id = 'mode-trigger';
@@ -357,8 +441,8 @@
         const run = await response.json();
         state.textContent = run.state;
         state.className = run.state.toLowerCase();
-        const count = run.evidence?.affected_traces || 0;
-        const required = run.evidence?.required || 10;
+        const count = run.evidence?.completed ?? run.evidence?.affected_traces ?? 0;
+        const required = run.evidence?.required || 1;
         updateEvidenceProgress(count, required);
         if (run.state === 'READY') {
           document.querySelector('#session-card h2').textContent = 'Incident evidence is ready';
@@ -398,7 +482,8 @@
       openKibana.disabled = true;
       openKibanaHelp.textContent = 'Available when the evidence bar is full.';
       try {
-        const response = await fetch(`${learningUrl}/api/runs`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario:'slow-payments',mode:modeSelect.value,scenario_key:scenarioKey.value})});
+        if (!selectedScenario) throw new Error('Select an available scenario first.');
+        const response = await fetch(`${learningUrl}/api/runs`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario:selectedScenario,mode:modeSelect.value,scenario_key:scenarioKey.value})});
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || `Start failed (${response.status})`);
         card.hidden = false;
@@ -418,7 +503,7 @@
         card.hidden = false;
         start.disabled = false;
       } finally {
-        start.textContent = 'Activate slow-checkout incident';
+        start.textContent = 'Start selected scenario';
         newKey.disabled = false;
         scenarioKey.readOnly = false;
       }
@@ -432,6 +517,7 @@
     });
     scenarioKey.value = generateScenarioKey();
     detectCoachRuntime();
+    loadCatalog().catch(error => { scenarioCatalog.textContent = error.message; });
     connectTelemetry();
   </script>
 </body>

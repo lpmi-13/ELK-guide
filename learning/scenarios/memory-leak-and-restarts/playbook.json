@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"memory-leak-and-restarts-playbook","extends":"infrastructure.json","variables":{"title":"Memory and restart investigation","inventory":"Kubernetes pods","metric":"Memory usage"}}

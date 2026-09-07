@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"deployment-version-regression-playbook","extends":"discover.json","variables":{"title":"Deployment-version investigation","window":"30m","field":"service.version","query":"service.name: orders and service.version: *"}}

@@ -1,0 +1,68 @@
+{
+  "schema_version": 2,
+  "id": "service-map-bottleneck-playbook",
+  "version": 1,
+  "starting_view": {"app": "apm"},
+  "demonstration_summary": {
+    "title": "Service-map investigation complete",
+    "summary": "The walkthrough followed the degraded services to their shared dependency and corroborated the bottleneck with trace context.",
+    "checks": [
+      {"title": "Topology", "detail": "The service map exposed the shared dependency."},
+      {"title": "Affected path", "detail": "The degraded services converged on the same node."},
+      {"title": "Corroboration", "detail": "Trace evidence confirmed the dependency delay."}
+    ],
+    "evidence": "The shared service-map node and its trace context support the conclusion.",
+    "conclusion": "${truth.conclusion}",
+    "answer": {"finding": "${truth.finding}", "scope": "${truth.scope}", "conclusion": "${truth.conclusion}", "evidence_refs": "signal,corroboration", "evidence": "The topology and trace context identify the shared bottleneck."}
+  },
+  "goals": [
+    {
+      "id": "scope",
+      "title": "Orient in the service topology",
+      "concept": "A service map makes shared dependencies and fan-in relationships visible.",
+      "narration": "Open the degraded portion of the service map.",
+      "reasoning": "Topology narrows the investigation to nodes shared by affected services.",
+      "evidence": "The map shows the checkout and orders paths.",
+      "requires": [],
+      "accepts": [{"action": ["service_map_opened", "service_map_node_selected"], "validators": [{"kind": "result_assertion", "assertion": "signal"}]}],
+      "reference_action": {"command": "open_service_map", "target": "kibana.service_map_node", "arguments": {}},
+      "hints": ["Start with the service map topology.", "Follow edges from the degraded services.", "Open the shared portion of the map; Show me can point it out."]
+    },
+    {
+      "id": "isolate",
+      "title": "Select the shared dependency",
+      "concept": "A node reached by multiple degraded services is a stronger candidate than an isolated downstream call.",
+      "narration": "Select the node shared by the affected paths.",
+      "reasoning": "The common node explains correlated degradation across services.",
+      "evidence": "The selected node is connected to both affected services.",
+      "requires": ["scope"],
+      "accepts": [{"action": "service_map_node_selected", "validators": [{"kind": "result_assertion", "assertion": "signal"}]}],
+      "reference_action": {"command": "select_service_map_node", "target": "kibana.service_map_node", "arguments": {"node": "${truth.finding}"}},
+      "hints": ["Look for fan-in from checkout and orders.", "Compare candidate dependency nodes.", "Select ${truth.finding}; Show me can select it."]
+    },
+    {
+      "id": "inspect",
+      "title": "Corroborate the topology with detail",
+      "concept": "Topology suggests a bottleneck; timing detail establishes whether it is actually slow.",
+      "narration": "Inspect the selected dependency context.",
+      "reasoning": "Corroboration prevents treating connectivity alone as causation.",
+      "evidence": "The selected dependency has corroborating slow trace activity.",
+      "requires": ["isolate"],
+      "accepts": [{"action": ["service_map_node_selected", "trace_sample_selected", "span_selected"], "validators": [{"kind": "result_assertion", "assertion": "corroboration"}]}],
+      "reference_action": {"command": "select_service_map_node", "target": "kibana.service_map_node", "arguments": {"node": "${truth.finding}"}},
+      "hints": ["Inspect timing for the shared node.", "Use trace context if the map detail offers it.", "Re-open the dependency detail; Show me can inspect it."]
+    },
+    {
+      "id": "submit",
+      "title": "Submit the shared-bottleneck conclusion",
+      "concept": "A strong conclusion names the dependency, affected services, and corroborating evidence.",
+      "narration": "Record the dependency and affected scope.",
+      "reasoning": "The conclusion separates the common cause from its upstream symptoms.",
+      "evidence": "The answer cites topology and trace context.",
+      "requires": ["isolate", "inspect"],
+      "accepts": [{"action": "answer_submitted", "validators": [{"kind": "answer_submitted"}]}],
+      "reference_action": {"command": "request_answer", "target": "coach.answer", "arguments": {}},
+      "hints": ["Name the shared dependency.", "Include both affected services.", "Submit finding, scope, conclusion, and evidence references."]
+    }
+  ]
+}

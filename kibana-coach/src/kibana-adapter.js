@@ -55,9 +55,11 @@ class KibanaAdapter {
 
   async perform(command, coach, {timingScale = 1, signal} = {}) {
     if (command.type === 'orient') return null;
-    if (command.type === 'request_diagnosis') return null;
+    if (command.type === 'request_diagnosis' || command.type === 'request_answer') return null;
     this.performing = true;
     try {
+      const applicationAdapter = (globalThis.KibanaApplicationAdapters || []).find(item => item.commands.has(command.type));
+      if (applicationAdapter) return await applicationAdapter.perform(command, this, coach, {timingScale, signal});
       const target = await this.waitFor(command.target, 20000, signal);
       if (command.type === 'set_time_range') return await this.setTimeRange(command, target, coach, timingScale, signal);
       if (command.type === 'enter_query') return await this.enterQuery(command.value, coach, timingScale, signal, target);

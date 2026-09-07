@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"ml-latency-anomaly-playbook","extends":"extension.json","variables":{"title":"ML anomaly investigation","app":"ml","observation":"ml_anomaly_opened","command":"open_ml_anomaly","target":"kibana.ml_anomaly"}}

@@ -1,0 +1,1 @@
+{"schema_version":2,"id":"esql-before-after-deploy-playbook","extends":"esql.json","variables":{"title":"Before/after deployment analysis","field":"service.version","query":"FROM lab-${run_id} | STATS requests = COUNT(*), p95 = PERCENTILE(event.duration, 95) BY service.version | SORT p95 DESC"}}

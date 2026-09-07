@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "kibana_version": "9.5.2",
   "targets": {
     "kibana.time_picker": ["[data-test-subj='dateRangePickerControlButton']", "[data-test-subj='dateRangePickerInput']", "[data-test-subj='superDatePickerToggleQuickMenuButton']", "button[aria-label*='date picker' i]"],
@@ -13,6 +13,32 @@
     "kibana.add_filter": ["[data-test-subj='addFilter']", "button[aria-label*='add filter' i]"],
     "kibana.first_result": ["[data-test-subj='docTableExpandToggleColumn'] button", "[data-test-subj='docTableExpandToggleColumn']"],
     "kibana.first_trace_value": ["[data-gridcell-column-id='trace.id'][data-gridcell-row-index='0'] [data-datagrid-cellcontent='true']"],
-    "kibana.trace_field": ["[data-test-subj='tableDocViewRow-trace.id-value']", "[data-test-subj*='trace.id']"]
+    "kibana.trace_field": ["[data-test-subj='tableDocViewRow-trace.id-value']", "[data-test-subj*='trace.id']"],
+    "kibana.app_navigation": ["[data-test-subj='collapsibleNavAppLink']", "nav a[href*='/app/']"],
+    "kibana.query_language": ["[data-test-subj='queryLanguageSwitcher']", "button[aria-label*='query language' i]"],
+    "kibana.esql_editor": ["textarea[data-test-subj='ESQLEditor']", "[data-test-subj='ESQLEditor'] textarea", "textarea[aria-label*='ES|QL' i]"],
+    "kibana.esql_first_result": ["[data-test-subj='discoverDocTable'] [data-gridcell-row-index='0']", "[data-test-subj='esqlResults'] tbody tr:first-child"],
+    "kibana.dashboard_control": ["[data-test-subj^='control-frame-']", "[data-test-subj='controls-group-wrapper'] button", "button[aria-label*='control' i]"],
+    "kibana.dashboard_panel_value": ["[data-test-subj='embeddablePanel'] [data-test-subj*='legend'] button", "[data-test-subj='embeddablePanel'] svg [role='button']", "[data-test-subj='embeddablePanel'] canvas"],
+    "kibana.panel_menu": ["[data-test-subj='embeddablePanelToggleMenuIcon']", "button[aria-label*='panel options' i]"],
+    "kibana.apm_service": ["[data-test-subj='apmServiceList'] a", "a[data-test-subj*='serviceName']", "a[href*='/app/apm/services/']"],
+    "kibana.transaction_group": ["[data-test-subj='transactionsGroupTable'] a[data-test-subj='apmTransactionDetailLinkLink']", "a[data-test-subj='apmTransactionDetailLinkLink']", "a[href*='/transactions/view'][href*='transactionName=']"],
+    "kibana.trace_sample": ["nav[aria-label='Trace sample pages'] button[data-test-subj='pagination-button-next']", "[data-test-subj='apmTraceSamplesTabButton']", "[data-test-subj='traceSamplesTable'] tbody tr a", "[data-test-subj*='transactionSample']", "a[href*='/traces/']"],
+    "kibana.trace_span": ["[data-test-subj='traceItemRowContent'][data-ebt-action='viewSpan']", "[data-test-subj='waterfall'] [aria-label^='View details for']", "[data-test-subj='spanFlyout']"],
+    "kibana.trace_error": ["[data-test-subj*='errorMarker']", "button[aria-label*='error' i]"],
+    "kibana.correlated_logs": ["[data-test-subj*='correlatedLogs']", "a[href*='discover'][href*='trace']"],
+    "kibana.service_map_node": ["[data-test-subj='serviceMap'] [data-test-subj*='node']", "[data-test-subj='serviceMap'] svg [role='button']"],
+    "kibana.inventory_type": ["[data-test-subj='inventorySwitcher']", "button[aria-label*='inventory' i]"],
+    "kibana.metric_selector": ["[data-test-subj='metricsExplorerMetricSelect']", "button[aria-label*='metric' i]"],
+    "kibana.metrics_logs_link": ["[data-test-subj*='openInLogs']", "a[href*='/app/discover']"],
+    "kibana.alert_row": ["[data-test-subj='alertsTable'] tbody tr", "[data-test-subj*='alertTable'] tbody tr"],
+    "kibana.alert_reason": ["[data-test-subj*='alertReason']", "[data-test-subj*='reason']"],
+    "kibana.alert_source_link": ["[data-test-subj*='viewInApp']", "a[href*='/app/discover']"],
+    "kibana.slo_row": ["[data-test-subj*='sloList'] tbody tr", "a[href*='/app/observability/slos/']"],
+    "kibana.slo_error_budget": ["[data-test-subj*='errorBudget']", "[aria-label*='error budget' i]"],
+    "kibana.slo_burn_rate": ["[data-test-subj*='burnRate']", "[aria-label*='burn rate' i]"],
+    "kibana.map_region": ["[data-test-subj='mapContainer'] canvas", "[data-test-subj='mapContainer'] svg"],
+    "kibana.synthetics_step": ["[data-test-subj*='journeyStep']", "a[href*='/app/synthetics'][href*='step']"],
+    "kibana.ml_anomaly": ["[data-test-subj*='anomaly'] tbody tr", "[data-test-subj='mlAnomalyExplorer'] [role='button']"]
   }
 }
