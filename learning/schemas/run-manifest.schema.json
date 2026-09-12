@@ -6,6 +6,7 @@
     "schema_version": {"const": 2}, "run_id": {"type": "string", "pattern": "^run-[a-f0-9]+$"}, "space_id": {"type": "string", "pattern": "^[a-z0-9_-]+$"},
     "template_id": {"type": "string"}, "template_version": {"type": "integer", "minimum": 1}, "template_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "seed": {"type": "integer", "minimum": 0}, "scenario_key": {"type": "string", "minLength": 10, "maxLength": 40}, "generator_version": {"const": 2},
-    "created_at": {"type": "string", "format": "date-time"}, "scenario": {"type": "object"}, "expected": {"type": "object"}, "playbook": {"type": "string"}, "rubric": {"type": "string"}
+    "created_at": {"type": "string", "format": "date-time"}, "scenario": {"type": "object"}, "expected": {"type": "object"}, "playbook": {"type": "string"}, "rubric": {"type": "string"},
+    "parameters": {"type": "object", "description": "Concrete per-run values chosen from the template's declared parameters; reproducible from seed."}
   }
 }

@@ -1,5 +1,7 @@
 # Full Kibana Scenario Expansion Plan
 
+> **Status — long-term goal, deferred (2026-09-09).** This document is **not the current MVP target.** As of the scope reset in [PLAN.md](PLAN.md), near-term development is narrowed to a single randomizing application-error log hunt in Discover, shipped in Demonstration, Guided, and Solo modes. The 22-scenario breadth below is **retained as the long-term goal** — the scope we intend to build back toward once the single-scenario loop is fast to iterate on — and everything it describes stays in the tree, held at its current state rather than removed. Read this as the destination, not the next sprint; the reduced MVP and the rationale live in PLAN.md, and the delivery order in §21 is the intended path back. Nothing here should be deleted to serve the MVP.
+
 ## 1. Objective
 
 Expand the lab from a single latency investigation into a broad, realistic Kibana learning environment. The finished lab should teach learners how production engineers use the Kibana user interface to explore data, investigate incidents, interpret existing visualizations and dashboards, work with traces and metrics, triage alerts, assess existing service objectives, and record incident evidence in their conclusions.

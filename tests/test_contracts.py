@@ -41,7 +41,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('"concept": step.get("concept", "")', learning_service)
         self.assertIn("command.mode === 'demonstration'", coach)
         self.assertIn('const demonstrationTimingScale = 10', content)
-        self.assertIn("demonstrationReadingPause(command)", content)
+        self.assertIn("readBeat(command.reasoning)", content)
         self.assertIn('placeAwayFrom(target)', coach)
 
     def test_demonstration_cursor_is_snappy_and_form_values_are_typed(self):
@@ -68,8 +68,9 @@ class ContractTests(unittest.TestCase):
         self.assertIn("trace.id", trace_step["narration"])
         self.assertIn('const traceQuery = `scenario.id:', adapter)
         self.assertIn("replace the service filter with this trace ID", adapter)
-        for section in ("How to read the evidence", "In plain language", "Current action"):
-            self.assertIn(section, coach)
+        # The refactored demonstration pages distinct explain -> act -> learn beats.
+        for beat in ("showWhy", "beginActionPhase", "showLearning", "Doing it now", "What we learned"):
+            self.assertIn(beat, coach)
 
     def test_saved_objects_are_ndjson_with_stable_ids(self):
         objects = [json.loads(line) for line in (ROOT / "kibana/saved-objects.ndjson").read_text().splitlines() if line]

@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import struct
 import threading
@@ -41,6 +42,47 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+PARAM_TOKEN = re.compile(r"\$\{param\.([A-Za-z0-9_.]+)\}")
+
+
+def _param_lookup(parameters, dotted):
+    current = parameters
+    for part in dotted.split("."):
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return None
+    return current
+
+
+def resolve_parameters(value, parameters):
+    """Resolve ``${param.<path>}`` tokens using the run's chosen parameters.
+
+    Playbook and rubric templates are expanded from a pack's static ``variables``,
+    but those variables can reference per-run parameters (for example the KQL that
+    isolates the run's decisive signal). Resolving them here keeps the demonstrated
+    query, accepted filters, validators, and hints aligned with the seeded data.
+    """
+    if not parameters:
+        return value
+    if isinstance(value, str):
+        whole = PARAM_TOKEN.fullmatch(value)
+        if whole:
+            resolved = _param_lookup(parameters, whole.group(1))
+            return resolved if resolved is not None else value
+
+        def replace(match):
+            resolved = _param_lookup(parameters, match.group(1))
+            return match.group(0) if resolved is None else str(resolved)
+
+        return PARAM_TOKEN.sub(replace, value)
+    if isinstance(value, dict):
+        return {key: resolve_parameters(item, parameters) for key, item in value.items()}
+    if isinstance(value, list):
+        return [resolve_parameters(item, parameters) for item in value]
+    return value
+
+
 def load_definition(folder, identifier):
     path = LEARNING_DIR / folder / f"{identifier}.json"
     with path.open(encoding="utf-8") as stream:
@@ -48,6 +90,7 @@ def load_definition(folder, identifier):
 
 
 def load_manifest_definition(manifest, kind):
+    parameters = manifest.get("parameters", {})
     identifier = manifest[kind]
     if manifest.get("schema_version") == 2:
         path = LEARNING_DIR / "scenarios" / identifier
@@ -74,9 +117,9 @@ def load_manifest_definition(manifest, kind):
                 result = expand(template)
                 result.update(definition.get("overrides", {}))
                 result["id"] = definition.get("id", result["id"])
-                return result
-            return definition
-    return load_definition(f"{kind}s", identifier)
+                return resolve_parameters(result, parameters)
+            return resolve_parameters(definition, parameters)
+    return resolve_parameters(load_definition(f"{kind}s", identifier), parameters)
 
 
 def http_json(url, method="GET", payload=None, timeout=10):

@@ -1,18 +1,80 @@
 # Adaptive Kibana Incident-Learning System Plan
 
-This project should evolve into an **interactive incident lab**, rather than merely adding cursor animation to the current dashboard.
+> **Scope reset — 2026-09-09.** The MVP is now deliberately narrowed to **one scenario type: tracking down the specific logs behind an application error.** It still ships in all three modes — **Demonstration, Guided, and Solo** — and it still **randomizes the specifics of every run**, so the exercise never collapses into clicking the same places and typing the same KQL from memory. The broader multi-surface curriculum described later in this document, and in full in [FULL_SCENARIO_PLAN.md](FULL_SCENARIO_PLAN.md), is **retained as a long-term goal rather than the current target** — see the [Addendum](#addendum--the-full-lab-is-a-retained-long-term-goal). This narrowing is a deliberate trade: a smaller near-term surface to recover speed of iteration during development, while preserving the option to build back out to something of similar breadth.
 
-The system should:
+This project is an **interactive incident lab**, not a scripted cursor animation over a dashboard. For the MVP, a single run should:
 
-1. Select and activate an authentic failure scenario.
-2. Generate realistic traffic, logs, and traces affected by that failure.
+1. Activate one authentic **application-error** scenario with randomized specifics.
+2. Generate realistic error logs, plus benign background noise, affected by that error.
 3. Wait until Elasticsearch has ingested enough evidence.
-4. Open a known, provisioned Kibana view.
-5. Guide the learner through a deterministic investigation.
-6. Confirm that each investigative step produced the expected result.
-7. Explain the diagnosis and optionally let the learner try again independently.
+4. Open a known, provisioned Kibana **Discover** view.
+5. Demonstrate or guide the learner to the specific error logs — or, in Solo mode, let them investigate independently.
+6. Confirm that each investigative step reached the expected Kibana / Elasticsearch state.
+7. Explain the finding and let the learner replay with fresh randomized specifics.
 
-The important distinction is that the tutorial should be driven by the **state of the incident and Kibana**, not by a fixed sequence of screen coordinates.
+The tutorial is driven by the **state of the incident and Kibana** — never a fixed sequence of screen coordinates, and for the MVP never a fixed set of field values either.
+
+---
+
+## MVP — one scenario, three modes, randomized specifics
+
+### The one scenario: *find the logs behind an application error*
+
+The entire MVP is a single **log-hunt investigation** in Discover. An application error has begun somewhere in the simulated system; the learner must locate the specific log records that explain it and state a supported conclusion. This is the `investigation` type already modelled by the `http-error-regression` and `rare-error-signature` packs on the shared `discover` playbook template — generalized into one randomizing scenario rather than a catalog of fixed ones.
+
+Every run follows the same four-goal arc (the existing Discover goal graph):
+
+1. **Scope** — set the time window around the reported problem.
+2. **Isolate** — use KQL (or an equivalent filter pill) to narrow to the error signal: an error level / failed `event.outcome` / 5xx status, then the responsible service, route, or error type.
+3. **Inspect** — open a representative record (row expansion, field statistics, or surrounding documents) and read the corroborating fields.
+4. **Submit** — record the finding, its scope, the conclusion, and the evidence that connects them.
+
+The arc is the lesson: *scope → isolate → inspect → conclude with evidence.* It never changes. Everything the learner actually types and clicks does.
+
+### What randomizes, and what stays fixed
+
+Randomization exists so the exercise trains an investigative habit rather than a memorized macro. Each seeded run materializes different concrete values, so the exact time range, the exact KQL, and the exact target row differ every time.
+
+**Varies per run (seeded, reproducible):**
+
+- The culprit **service** — drawn from a fixed topology catalog, not renamed ad hoc.
+- The **error signature**: exception / `error.type`, message text, and log level.
+- The **failure surface**: `http.response.status_code` (e.g. 500 / 502 / 503) and `event.outcome`.
+- The affected **route** (`url.path`) and, where relevant, the **release** (`service.version`).
+- The **incident window**: start offset within the range, and event volume.
+- The **distractor mix**: which benign warnings and normal errors appear, and from which other services.
+
+Because these drive the brief, the seeded data, the validators, the hints, and the expected answer from one manifest, the learner cannot reuse a remembered `service.name: payments` or a remembered row position — they must read the evidence each time.
+
+**Fixed (the assessed lesson):**
+
+- The four-goal arc and the `diagnosis` answer shape (finding, scope, conclusion, evidence).
+- The `decisive` / `corroboration` evidence labelling that drives validation.
+- A difficulty band that keeps the signal discoverable against the noise (see §14 — a value must stay visible against normal noise and the current time bucket).
+
+**Reproducibility** uses the mechanism already in place: the launcher turns a scenario key into a numeric seed, so the *same key reproduces the same randomized run*, while a unique run ID keeps historical evidence from leaking into a replay. §14 (Parameterized Scenario Contract) is the contract the MVP relies on; the MVP simply commits to exactly one template built on it.
+
+### The three modes
+
+One playbook, three assistance policies — same randomized data, same goals, same reference solution. (Existing code and the sections below call the third mode *challenge*; the product name is **Solo**.)
+
+- **Demonstration.** The coach performs scope → isolate → inspect → submit against *this run's* randomized values, explaining the question behind each action before it acts, and closes with an evidence-and-conclusion summary. Narration stays terse and paged rather than dumping a paragraph per step. Unscored.
+- **Guided.** The learner performs the arc; the coach highlights the next outcome and offers a progressive hint ladder — restate the objective, name the control, explain the field/concept, show a partial query template, then optionally demonstrate. Completion is detected from Kibana / Elasticsearch state, and equivalent routes (KQL vs. filter pill, row expansion vs. field statistics) are accepted.
+- **Solo.** Only the brief is shown. Hints are on demand with a transparent score consequence. The run is scored on correctness, evidence, goal coverage, relevance, and efficiency, and ends with an evidence-based debrief and replay choices (same key, or a new key for fresh specifics).
+
+A mode changes *who acts, when help appears, and when validation is disclosed*; it must never swap in easier data.
+
+### Build on what exists; hold the rest
+
+The current implementation already contains everything this MVP needs. **Reuse as-is:** the launcher and per-run Kibana Spaces; seeded telemetry with bounded noise; declared readiness validators; the Discover adapter and normalized observations; the authenticated coach handoff and visible Stop control; the goal-graph engine, three-mode policies, and scenario-type scoring; run manifests and key→seed reproducibility; and the `tutorial-*` / `scenario-*` index separation that keeps coaching telemetry out of the evidence.
+
+**Hold at current state (do not invest further for the MVP):** the other 21 scenario packs and the ES|QL, Dashboard, APM/trace, infrastructure-metrics, and alert-triage surfaces and adapters; OpenTelemetry/APM trace fidelity; and the Playwright recorder as a CI gate (keep it available, don't grow it). The launcher should default to presenting the single log-hunt scenario; the remaining packs stay in the tree, held, per the Addendum.
+
+**Randomization — implemented.** The log-hunt packs (`http-error-regression`, `rare-error-signature`) no longer hard-code their specifics. A template now declares a `parameters` block (the §14 contract: `choose` / `integer` / `decimal`); `materialize()` selects values seeded from the run's seed and substitutes `${param.…}` through the brief, seeded signal, distractors, companions, and truth, recording the choices in `manifest.parameters`; the learning service resolves the same `${param.…}` tokens when it expands the playbook, so the demonstrated/accepted KQL, the decisive field, the hints, and the expected answer all track the run. The result: the culprit service, error type, message, status, route, release, and time window differ each run, two seeds need different filters and land on a different record, and the same scenario key reproduces the same run. Remaining near-term work is to make that one loop fast and pleasant to iterate on, and (optionally) widen the incident catalog inside the `parameters` block.
+
+The sections below (1–20) remain the architectural reference for both the MVP and the long-term goal. Where a section describes a broad scenario catalog or additional Kibana surfaces, read it as **deferred** per the Addendum; where it describes the engine, provisioning, coaching, randomization (§14), validation, and telemetry, it applies directly to the MVP.
+
+---
 
 ## 1. Current Foundation
 
@@ -128,7 +190,9 @@ The following initial fault types would provide good investigative variety:
 | Queue backlog | Growing processing lag | Time series → lag field → worker/service |
 | Memory pressure | Periodic pauses or simulated restarts | Host/service metrics and restart logs |
 
-For authenticity, faults should affect the actual request path rather than merely producing fabricated error messages. A latency scenario should really sleep before responding, causing the caller's measured duration to increase and potentially triggering upstream timeouts.
+**MVP note:** the reduced MVP exercises only the **elevated-errors / error-signature** row above — the fault that produces the application-error logs the learner must track down. The other fault types are retained for the long-term goal (see the Addendum) and are not part of the near-term build.
+
+For authenticity, faults should affect the actual request path rather than merely producing fabricated error messages. Even for a log-only MVP, an error scenario should make the affected service really emit failed responses with a consistent error signature, not fabricate a single stray message.
 
 ### C. Kibana Provisioning
 
@@ -485,24 +549,25 @@ For example:
 
 ## 9. Suggested Implementation Phases
 
-### Phase 1 — Deterministic Vertical Slice
+> **MVP note.** The engine, provisioning, coach, and three-mode framework already exist, so the MVP is no longer about proving the architecture — it is about narrowing the product to one randomizing log-hunt scenario and making that loop fast to iterate on. For the MVP, implement **Phase 1 only**; Phases 2–5 are retained for the long-term goal (see the Addendum).
 
-Implement one scenario only:
+### Phase 1 — The randomizing log-hunt scenario (MVP)
 
-- `slow-payments`;
-- fault-control endpoint;
-- targeted checkout traffic;
-- `scenario.id` propagation;
-- Kibana saved data view and dashboard;
-- one semantic playbook executed in the learner's Kibana tab by the built-in coach adapter;
-- a five-step investigation that can demonstrate actions or wait for the learner;
-- normalized learner-action telemetry;
-- a structured diagnosis submission and basic evidence-based debrief;
-- one reproducible headless Playwright recording of the same scenario as a reference artifact.
+Ship exactly one scenario type — *find the logs behind an application error* — in all three modes:
 
-This proves the entire architecture before introducing randomness.
+- one error-signature fault-control activation on a randomly chosen service;
+- targeted error traffic plus bounded background noise;
+- `scenario.id` and run-ID propagation, so replays never leak historical evidence;
+- the provisioned Kibana Discover starting view;
+- one semantic playbook (the existing scope → isolate → inspect → submit arc) executed in the learner's Kibana tab by the built-in coach adapter;
+- **per-run randomization** of service, error type, message, status, route, release, window, and distractors from a seeded manifest — replacing today's hard-coded packs so no two runs share the same KQL or target row;
+- Demonstration, Guided (progressive hints), and Solo (scored, with debrief) policies over that one goal graph;
+- normalized learner-action telemetry and a structured diagnosis submission with an evidence-based debrief;
+- one reproducible headless Playwright recording of a fixed seed as a reference artifact.
 
-### Phase 2 — Scenario Framework
+Success is a single command that starts a randomized error-log hunt, runnable repeatedly with fresh specifics, in each mode.
+
+### Phase 2 — Scenario Framework *(deferred — long-term goal)*
 
 - YAML/JSON scenario definitions.
 - Random selection with reproducible seed.
@@ -711,22 +776,23 @@ Mitigation:
 
 The best next milestone is:
 
-> Start the stack, activate a reproducible slow-payments scenario, wait until at least ten affected traces have been indexed, open a provisioned Kibana investigation view, and use one semantic playbook to either demonstrate or guide an investigation that narrows the time range, applies a slow-duration filter, isolates the payments service, opens a trace, accepts a diagnosis, and explains why payments is the bottleneck.
+> Start the stack, activate a reproducible but **randomized** application-error scenario, wait until at least ten matching error records have been indexed, open the provisioned Kibana Discover view, and use one semantic playbook to demonstrate, guide, or silently observe an investigation that narrows the time range, isolates the error signal by status/outcome and the responsible service or error type, inspects a representative error document, accepts a diagnosis, and explains — from the log evidence — which service failed and why. Two runs with different keys must require different KQL and land on a different target record.
 
-That milestone exercises all essential capabilities without prematurely building a large scenario catalog.
+That milestone exercises all essential capabilities against exactly one scenario type, with randomization carrying the variety that a large catalog used to.
 
 Define success as:
 
 - One command starts the complete experience.
 - No manual Kibana data-view creation is required.
 - The learner is not told the culprit in advance.
+- The specifics (service, error, route, status, window) are randomized per run, so muscle memory cannot solve it.
 - The tutorial never begins before evidence is available.
 - Every tutorial step is state-validated.
-- The final diagnosis is supported by correlated trace evidence.
+- The final diagnosis is supported by the specific error-log evidence the learner found.
 - Meaningful learner actions are recorded independently of raw mouse movement.
 - The debrief distinguishes diagnosis correctness from investigation efficiency.
-- The same scenario can be reset and replayed.
-- An end-to-end test completes the investigation automatically.
+- The same scenario key reproduces the same run; a new key produces fresh specifics.
+- An end-to-end test completes the investigation automatically for a fixed seed.
 
 ## 13. Learner Experience Contract
 
@@ -1064,6 +1130,8 @@ Important invariants:
 
 The earlier phases describe the broad sequence. The following backlog makes the next work independently testable.
 
+> **MVP note.** For the reduced MVP, Milestones **A–D apply but narrowed to the single log-hunt scenario** (contracts, a randomizing deterministic incident, the learner-browser loop, and Solo scoring/debrief for that one scenario). Milestone **E** (headless recording) is worth one reference video but is not a CI gate, and Milestone **F** (scenario catalog and real traces) is **deferred to the long-term goal** — see the Addendum.
+
 ### Milestone A — Contracts and Provisioning
 
 - Pin the supported Elastic and browser versions.
@@ -1158,3 +1226,28 @@ These choices should be made explicitly as implementation begins:
 | Tutorial telemetry | Dedicated data stream/index | Prevents learner activity from polluting incident evidence |
 
 Before multi-learner or hosted deployment, decide whether the primary target is a local single-learner lab, a hosted workshop, or both. That decision changes authentication, session tenancy, TLS, retention, and gateway isolation. It does not need to block the local same-origin vertical slice.
+
+## Addendum — the full lab is a retained long-term goal
+
+The scope reset at the top of this document narrows the **near-term MVP** to a single randomizing application-error log hunt. It does **not** discard the breadth already built. That breadth is the long-term goal, and this addendum records the intent to return to it.
+
+**What "the full lab" means here.** The current implementation and [FULL_SCENARIO_PLAN.md](FULL_SCENARIO_PLAN.md) describe a 22-scenario catalog spanning Discover/KQL, ES|QL, supplied dashboards, APM and distributed tracing, infrastructure metrics, and alert triage — all on free Basic-tier Kibana. That breadth is exactly what we want the product to reach again. We like it; it is not the problem. The problem is that maintaining and evolving all of it at once is slowing iteration during development, so we are choosing to move fast on one scenario first.
+
+**What is retained, not removed.** Nothing in this reset should delete existing scenario packs, adapters, validators, saved objects, or tests for the broader surfaces. They stay in the tree, held at their current state:
+
+- the generic v2 scenario / goal-graph / command / rubric / run-manifest contracts;
+- the scenario-pack layout under `learning/`;
+- per-run Kibana Space isolation, provisioning, readiness validators, and cleanup;
+- the application adapters (Discover, Dashboard, APM, infrastructure, alerts) and the semantic command/observation vocabulary;
+- the scoring, debrief, and three-mode engine;
+- the docs under `docs/` and the maintainer references in the README.
+
+The README and implementation therefore still document the fuller build; that is intentional. This plan governs the **development focus**, not a deletion of what exists.
+
+**The path back.** Once the single log-hunt loop is fast and pleasant to iterate on, re-enable the wider surface incrementally rather than all at once — following the delivery order in FULL_SCENARIO_PLAN.md §21 (Discover/KQL and ES|QL first, then dashboards, then APM and metrics, then alert triage). The aim is to rebuild toward something of **similar breadth and spirit, if not identical functionality** — the reduced MVP should make that rebuild cheaper, because a genuinely randomizing single scenario forces the engine, validators, and coaching to stay general rather than special-cased.
+
+**Guardrails while narrowed.**
+
+- Keep the generic engine generic: solve the MVP with the shared contracts and the randomization framework (§14), never with a one-off code path that would have to be unwound later.
+- Keep the held packs and their tests runnable; if a shared change would break them, fix the shared layer rather than forking the MVP away from it.
+- Treat the catalog launcher as still present but defaulting to the single scenario, so re-enabling additional packs is a configuration change, not a rebuild.

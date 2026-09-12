@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import secrets
 import threading
 import time
@@ -211,6 +212,68 @@ def _legacy_to_v2(scenario):
     return scenario
 
 
+PARAM_TOKEN = re.compile(r"\$\{param\.([A-Za-z0-9_.]+)\}")
+
+
+def _param_lookup(parameters, dotted):
+    """Resolve a dotted path such as ``incident.finding`` inside chosen parameters."""
+    current = parameters
+    for part in dotted.split("."):
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return None
+    return current
+
+
+def _choose_parameter(spec, generator):
+    """Deterministically select one value for a declared scenario parameter.
+
+    Supported declarations mirror the Parameterized Scenario Contract in PLAN.md §14:
+    ``choose`` picks one entry (a scalar or a correlated bundle) uniformly, while
+    ``integer``/``decimal`` pick from an inclusive stepped range. Anything else is a
+    literal constant shared by every run.
+    """
+    if isinstance(spec, dict) and "choose" in spec:
+        return copy.deepcopy(generator.choice(spec["choose"]))
+    if isinstance(spec, dict) and "integer" in spec:
+        bounds = spec["integer"]
+        step = max(1, int(bounds.get("step", 1)))
+        return generator.choice(list(range(int(bounds["min"]), int(bounds["max"]) + 1, step)))
+    if isinstance(spec, dict) and "decimal" in spec:
+        bounds = spec["decimal"]
+        step = float(bounds.get("step", 0.1))
+        steps = int(round((float(bounds["max"]) - float(bounds["min"])) / step))
+        return round(float(bounds["min"]) + generator.randint(0, max(0, steps)) * step, 6)
+    return copy.deepcopy(spec)
+
+
+def _apply_parameters(value, parameters):
+    """Substitute ``${param.<path>}`` tokens, preserving the native type of whole-token strings."""
+    if isinstance(value, str):
+        whole = PARAM_TOKEN.fullmatch(value)
+        if whole:
+            resolved = _param_lookup(parameters, whole.group(1))
+            return resolved if resolved is not None else value
+
+        def replace(match):
+            resolved = _param_lookup(parameters, match.group(1))
+            return match.group(0) if resolved is None else str(resolved)
+
+        return PARAM_TOKEN.sub(replace, value)
+    if isinstance(value, dict):
+        return {key: _apply_parameters(item, parameters) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_apply_parameters(item, parameters) for item in value]
+    return value
+
+
+def choose_parameters(param_specs, seed):
+    """Choose a concrete value for every declared parameter, seeded for reproducibility."""
+    generator = random.Random(f"parameters:{seed}")
+    return {name: _choose_parameter(spec, generator) for name, spec in param_specs.items()}
+
+
 def materialize(template, seed, run_id=None, scenario_key=None):
     canonical = json.dumps(template, sort_keys=True, separators=(",", ":")).encode()
     generator = random.Random(seed)
@@ -221,6 +284,14 @@ def materialize(template, seed, run_id=None, scenario_key=None):
         scenario["fault"]["probability"] = generator.choice([0.85, 0.9, 0.95])
         scenario["readiness"]["minimum_duration_ms"] = min(scenario["readiness"]["minimum_duration_ms"], scenario["fault"]["delay_ms"] - 100)
         scenario = _legacy_to_v2(scenario)
+    # Randomize the run's specifics from the template's declared parameters so two
+    # seeds need different filters and land on a different record. The chosen values
+    # flow into the brief, seeded signal, truth, and (via the manifest) the playbook.
+    parameters = {}
+    param_specs = scenario.pop("parameters", None)
+    if param_specs:
+        parameters = choose_parameters(param_specs, seed)
+        scenario = _apply_parameters(scenario, parameters)
     identifier = run_id or f"run-{uuid.uuid4().hex[:12]}"
     space_id = f"lab-{identifier.removeprefix('run-')}"
     manifest = {
@@ -244,6 +315,8 @@ def materialize(template, seed, run_id=None, scenario_key=None):
     }
     if scenario_key:
         manifest["scenario_key"] = scenario_key
+    if parameters:
+        manifest["parameters"] = parameters
     return manifest
 
 

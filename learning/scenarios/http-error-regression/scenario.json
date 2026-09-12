@@ -1,1 +1,84 @@
-{"schema_version":2,"id":"http-error-regression","version":1,"title":"HTTP error regression","type":"investigation","classification":"core","difficulty":1,"estimated_minutes":12,"brief":"HTTP 5xx responses increased after a release. Find the affected endpoint and a representative error.","skills":["kql","filters","documents"],"required_capabilities":["discover","spaces","saved_objects"],"provisioning":{"strategies":["seeded-events","saved-objects"],"seeded_events":{"signal_count":32,"noise_count":90,"signal":{"labels":{"signal":"decisive"},"service":{"name":"orders","version":"2.4.1"},"event":{"outcome":"failure"},"http":{"response":{"status_code":500}},"url":{"path":"/api/orders"},"error":{"type":"OrderValidationError"},"message":"order validation failed after release"},"companions":[{"count":3,"event":{"labels":{"corroboration":true},"service":{"name":"orders","version":"2.4.1"},"url":{"path":"/api/orders"},"error":{"type":"OrderValidationError"},"message":"representative order request failed"}}]},"readiness_validators":[{"id":"seeded-signal","kind":"es_count","minimum":20,"query":{"term":{"labels.signal.keyword":"decisive"}}}]},"starting_view":{"app":"discover","saved_object":"incident-investigation","path":"/app/discover#/view/incident-investigation"},"truth":{"answers":{"finding":"/api/orders","scope":"HTTP 5xx","conclusion":"OrderValidationError on /api/orders is the post-release regression."},"assertions":[{"id":"signal","kind":"es_count","minimum":20,"query":{"term":{"labels.signal.keyword":"decisive"}}},{"id":"corroboration","kind":"es_count","minimum":1,"query":{"term":{"labels.corroboration":true}}}]},"answer_schema":{"type":"diagnosis","fields":[{"id":"finding","label":"Affected endpoint","kind":"string","weight":2},{"id":"scope","label":"Status family","kind":"string","weight":1},{"id":"conclusion","label":"Error conclusion","kind":"string","weight":1},{"id":"evidence_refs","label":"Evidence references","kind":"string","scored":false},{"id":"evidence","label":"Representative document","kind":"text","scored":false}]},"playbook":"playbook.json","rubric":"rubric.json","cleanup":{"delete_space":true,"delete_run_data":true,"managed_resources":[]}}
+{
+  "schema_version": 2,
+  "id": "http-error-regression",
+  "version": 2,
+  "title": "HTTP error regression",
+  "type": "investigation",
+  "classification": "core",
+  "difficulty": 1,
+  "estimated_minutes": 12,
+  "brief": "HTTP server errors increased after a release. Identify the failing endpoint or service and a representative error.",
+  "skills": ["kql", "filters", "documents"],
+  "required_capabilities": ["discover", "spaces", "saved_objects"],
+  "parameters": {
+    "incident": {
+      "choose": [
+        {"service": "orders", "route_path": "/api/orders", "signal_field": "url.path", "finding": "/api/orders", "status": 500, "status_family": "HTTP 5xx", "error_type": "OrderValidationError", "message": "order validation failed after release", "version": "2.4.1"},
+        {"service": "orders", "route_path": "/api/orders/refund", "signal_field": "url.path", "finding": "/api/orders/refund", "status": 500, "status_family": "HTTP 5xx", "error_type": "RefundLedgerError", "message": "refund ledger write failed after release", "version": "2.6.0"},
+        {"service": "payments", "route_path": "/api/payments/authorize", "signal_field": "service.name", "finding": "payments", "status": 502, "status_family": "HTTP 502", "error_type": "PaymentGatewayTimeout", "message": "payment authorization timed out after release", "version": "3.1.0"},
+        {"service": "payments", "route_path": "/api/payments/capture", "signal_field": "url.path", "finding": "/api/payments/capture", "status": 502, "status_family": "HTTP 502", "error_type": "CaptureGatewayError", "message": "capture gateway rejected the request after release", "version": "3.2.1"},
+        {"service": "catalog", "route_path": "/api/catalog/search", "signal_field": "url.path", "finding": "/api/catalog/search", "status": 503, "status_family": "HTTP 503", "error_type": "CatalogBackendUnavailable", "message": "catalog backend unavailable after release", "version": "1.9.2"},
+        {"service": "auth", "route_path": "/api/auth/token", "signal_field": "service.name", "finding": "auth", "status": 500, "status_family": "HTTP 5xx", "error_type": "TokenSigningError", "message": "token signing failed after release", "version": "4.0.3"}
+      ]
+    },
+    "window": {"choose": ["15m", "30m", "45m", "1h"]}
+  },
+  "provisioning": {
+    "strategies": ["seeded-events", "saved-objects"],
+    "seeded_events": {
+      "signal_count": 32,
+      "noise_count": 90,
+      "signal": {
+        "labels": {"signal": "decisive"},
+        "service": {"name": "${param.incident.service}", "version": "${param.incident.version}"},
+        "event": {"outcome": "failure"},
+        "http": {"response": {"status_code": "${param.incident.status}"}},
+        "url": {"path": "${param.incident.route_path}"},
+        "error": {"type": "${param.incident.error_type}"},
+        "message": "${param.incident.message}"
+      },
+      "companions": [
+        {
+          "count": 3,
+          "event": {
+            "labels": {"corroboration": true},
+            "service": {"name": "${param.incident.service}", "version": "${param.incident.version}"},
+            "event": {"outcome": "failure"},
+            "http": {"response": {"status_code": "${param.incident.status}"}},
+            "url": {"path": "${param.incident.route_path}"},
+            "error": {"type": "${param.incident.error_type}"},
+            "message": "representative ${param.incident.error_type} request failed"
+          }
+        }
+      ]
+    },
+    "readiness_validators": [
+      {"id": "seeded-signal", "kind": "es_count", "minimum": 20, "query": {"term": {"labels.signal.keyword": "decisive"}}}
+    ]
+  },
+  "starting_view": {"app": "discover", "saved_object": "incident-investigation", "path": "/app/discover#/view/incident-investigation"},
+  "truth": {
+    "answers": {
+      "finding": "${param.incident.finding}",
+      "scope": "${param.incident.status_family}",
+      "conclusion": "${param.incident.error_type} on ${param.incident.service} is the post-release regression."
+    },
+    "assertions": [
+      {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"labels.signal.keyword": "decisive"}}},
+      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"labels.corroboration": true}}}
+    ]
+  },
+  "answer_schema": {
+    "type": "diagnosis",
+    "fields": [
+      {"id": "finding", "label": "Affected endpoint or service", "kind": "string", "weight": 2},
+      {"id": "scope", "label": "Status family", "kind": "string", "weight": 1},
+      {"id": "conclusion", "label": "Error conclusion", "kind": "string", "weight": 1},
+      {"id": "evidence_refs", "label": "Evidence references", "kind": "string", "scored": false},
+      {"id": "evidence", "label": "Representative document", "kind": "text", "scored": false}
+    ]
+  },
+  "playbook": "playbook.json",
+  "rubric": "rubric.json",
+  "cleanup": {"delete_space": true, "delete_run_data": true, "managed_resources": []}
+}
