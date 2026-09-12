@@ -41,6 +41,17 @@ class RandomizationTests(unittest.TestCase):
     def materialize(self, pack, seed):
         return self.controller.materialize(self.template(pack), seed, run_id=f"run-{seed:012d}")
 
+    @staticmethod
+    def _isolate_target(isolate):
+        """Return (targeted_text, signature) for the isolate demo action, whether the
+        pack demonstrates a filter (add_filter dict arguments) or a query (enter_kql
+        string arguments). ``targeted_text`` contains the decisive field and value;
+        ``signature`` is a hashable form that differs when the demonstrated narrowing does."""
+        arguments = isolate["reference_action"]["arguments"]
+        if isinstance(arguments, dict):
+            return " ".join(str(value) for value in arguments.values()), json.dumps(arguments, sort_keys=True)
+        return arguments, arguments
+
     def test_same_seed_is_reproducible_but_independent_of_run_identity(self):
         for pack in LOG_HUNT_PACKS:
             first = self.controller.materialize(self.template(pack), 424242, run_id="run-aaaaaaaaaaaa")
@@ -65,7 +76,7 @@ class RandomizationTests(unittest.TestCase):
         signal = manifest["scenario"]["provisioning"]["seeded_events"]["signal"]
         playbook = self.server.load_manifest_definition(manifest, "playbook")
         isolate = next(goal for goal in playbook["goals"] if goal["id"] == "isolate")
-        query = isolate["reference_action"]["arguments"]
+        targeted, _ = self._isolate_target(isolate)
 
         self.assertEqual(signal["service"]["name"], incident["service"])
         self.assertEqual(signal["error"]["type"], incident["error_type"])
@@ -73,9 +84,9 @@ class RandomizationTests(unittest.TestCase):
         self.assertEqual(signal["http"]["response"]["status_code"], incident["status"])
         self.assertIsInstance(signal["http"]["response"]["status_code"], int)
         self.assertEqual(manifest["scenario"]["truth"]["answers"]["finding"], incident["finding"])
-        # The demonstrated/accepted query targets this run's decisive field and value.
-        self.assertIn(incident["signal_field"], query)
-        self.assertIn(incident["finding"], query)
+        # The demonstrated isolate action (here a filter) targets this run's decisive field and value.
+        self.assertIn(incident["signal_field"], targeted)
+        self.assertIn(incident["finding"], targeted)
         self.assertEqual(isolate["accepts"][0]["validators"][0].get("fields"), [incident["signal_field"]])
 
     def test_specifics_and_required_filters_vary_across_seeds(self):
@@ -86,10 +97,11 @@ class RandomizationTests(unittest.TestCase):
                 findings.add(manifest["scenario"]["truth"]["answers"]["finding"])
                 playbook = self.server.load_manifest_definition(manifest, "playbook")
                 isolate = next(goal for goal in playbook["goals"] if goal["id"] == "isolate")
-                queries.add(isolate["reference_action"]["arguments"])
+                _, signature = self._isolate_target(isolate)
+                queries.add(signature)
             with self.subTest(pack=pack):
                 self.assertGreater(len(findings), 1, "findings should differ across seeds")
-                self.assertGreater(len(queries), 1, "required KQL should differ across seeds")
+                self.assertGreater(len(queries), 1, "the demonstrated narrowing should differ across seeds")
 
     def test_a_randomized_run_is_internally_consistent_and_solvable(self):
         # Drive the resolved playbook against the materialized (concrete) truth the way the

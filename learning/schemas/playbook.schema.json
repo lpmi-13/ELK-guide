@@ -14,6 +14,22 @@
     "extends": {"type": "string", "pattern": "^[^/]+\\.json$"},
     "variables": {"type": "object"},
     "overrides": {"type": "object"},
+    "goal_overrides": {
+      "type": "object",
+      "description": "Per-goal patches merged into the extended template's goals by id, e.g. to vary a demo's reference_action while keeping the shared goal graph, hints, and accepted routes.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "narration": {"type": "string"},
+          "reference_action": {
+            "type": "object",
+            "required": ["command", "target"],
+            "properties": {"command": {"type": "string"}, "target": {"type": "string"}, "arguments": {}}
+          },
+          "hints": {"type": "array", "minItems": 3, "items": {"type": "string"}}
+        }
+      }
+    },
     "id": {"type": "string"},
     "version": {"type": "integer", "minimum": 1},
     "starting_view": {

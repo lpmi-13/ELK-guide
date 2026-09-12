@@ -115,6 +115,10 @@ def load_manifest_definition(manifest, kind):
                     return value
 
                 result = expand(template)
+                goal_overrides = {goal_id: expand(patch) for goal_id, patch in definition.get("goal_overrides", {}).items()}
+                for goal in result.get("goals", []):
+                    if goal["id"] in goal_overrides:
+                        goal.update(goal_overrides[goal["id"]])
                 result.update(definition.get("overrides", {}))
                 result["id"] = definition.get("id", result["id"])
                 return resolve_parameters(result, parameters)
