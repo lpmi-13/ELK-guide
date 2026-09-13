@@ -48,6 +48,15 @@ SCENARIO_KEY_MIN_LENGTH = 10
 SCENARIO_KEY_MAX_LENGTH = 40
 SCENARIO_KEY_UNSET = object()
 PROHIBITED_LEARNER_TARGETS = {"shell", "terminal", "dev_tools", "elasticsearch_admin", "external_application"}
+# The scaled-down MVP surfaces only the Discover log-hunt pattern. The deferred
+# long-term lab packs stay in the catalog (and are still runnable by explicit id)
+# but are hidden from the launcher and the "random" selection. Removing this tag
+# from catalog.json re-exposes a pack when the full lab is rebuilt.
+MVP_TRACK = os.getenv("SCENARIO_TRACK", "mvp")
+
+
+def in_mvp_track(entry):
+    return entry.get("track") == MVP_TRACK
 
 
 def now_iso():
@@ -109,9 +118,9 @@ def load_template(name):
     selected = name
     catalog = load_catalog().get("scenarios", [])
     if name == "random":
-        available = [item for item in catalog if item.get("classification") == "core" and scenario_availability(item)["available"]]
+        available = [item for item in catalog if in_mvp_track(item) and scenario_availability(item)["available"]]
         if not available:
-            raise ValueError("no enabled core scenarios are available")
+            raise ValueError("no enabled MVP scenarios are available")
         selected = random.SystemRandom().choice(available)["id"]
     pack_path = LEARNING_DIR / "scenarios" / selected / "scenario.json"
     path = pack_path if pack_path.is_file() else LEGACY_SCENARIO_DIR / f"{selected}.json"
@@ -408,6 +417,8 @@ def catalog_public():
     capabilities = probe_capabilities()
     entries = []
     for item in load_catalog().get("scenarios", []):
+        if not in_mvp_track(item):
+            continue
         availability = scenario_availability(item, capabilities)
         entries.append({**item, **availability})
     return {"schema_version": 2, "kibana_version": "9.5.2", "capabilities": capabilities, "scenarios": entries}

@@ -60,10 +60,12 @@ class KibanaAdapter {
     try {
       const applicationAdapter = (globalThis.KibanaApplicationAdapters || []).find(item => item.commands.has(command.type));
       if (applicationAdapter) return await applicationAdapter.perform(command, this, coach, {timingScale, signal});
+      // add_filter drives the Add-filter popover and resolves its own targets, so it must not
+      // pre-resolve command.target (packs historically point it at the unregistered filter bar).
+      if (command.type === 'add_filter') return await this.addFilter(command.value, coach, timingScale, signal);
       const target = await this.waitFor(command.target, 20000, signal);
       if (command.type === 'set_time_range') return await this.setTimeRange(command, target, coach, timingScale, signal);
       if (command.type === 'enter_query') return await this.enterQuery(command.value, coach, timingScale, signal, target);
-      if (command.type === 'add_filter') return await this.addFilter(command.value, coach, timingScale, signal, target);
       if (command.type === 'open_trace') return await this.openTrace(command, target, coach, timingScale, signal);
       throw new Error(`Unsupported semantic command: ${command.type}`);
     } finally {
@@ -124,12 +126,51 @@ class KibanaAdapter {
     return {type: 'query_submitted', details: {query}, state_after: {query}};
   }
 
-  async addFilter(filter, coach, timingScale, signal, existingInput = null) {
-    const input = existingInput || await this.waitFor('kibana.query_bar', 20000, signal);
-    const clause = `${filter.field}: "${filter.value}"`;
-    const query = input.value.trim() ? `(${input.value.trim()}) and ${clause}` : clause;
-    await this.enterQuery(query, coach, timingScale, signal, input, `Click the query bar and add ${clause} to the slow-results query.`);
-    return {type: 'filter_added', details: filter, state_after: {query}};
+  async addFilter(filter, coach, timingScale, signal) {
+    // Kibana 9.5.2 encodes negation in the operator ("is not"); honour an explicit negate flag
+    // or a "not" operator. Verified popover selectors: addFilter -> filterFieldSuggestionList ->
+    // filterOperatorList -> filterParams -> saveFilter. Any failure falls back to a KQL clause.
+    const negate = filter.negate === true || /\bnot\b/i.test(String(filter.operator || ''));
+    try {
+      return await this.addFilterViaPopover(filter, negate, coach, timingScale, signal);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      const input = await this.waitFor('kibana.query_bar', 20000, signal);
+      const clause = `${negate ? 'not ' : ''}${filter.field}: "${filter.value}"`;
+      const query = input.value.trim() ? `(${input.value.trim()}) and ${clause}` : clause;
+      await this.enterQuery(query, coach, timingScale, signal, input, `Add ${clause} to the query.`);
+      return {type: 'filter_added', details: filter, state_after: {query, filters: [{field: filter.field, value: filter.value, negate}]}};
+    }
+  }
+
+  async addFilterViaPopover(filter, negate, coach, timingScale, signal) {
+    const addButton = await this.waitFor('kibana.add_filter', 20000, signal);
+    await this.pointAt(addButton, coach, timingScale, signal, 'Open Add filter.', {activate: true});
+    const fieldInput = await this.waitFor('kibana.filter_field', 8000, signal);
+    await this.pointAt(fieldInput, coach, timingScale, signal, `Choose the ${filter.field} field.`, {activate: true});
+    await this.typeValue(fieldInput, filter.field, signal);
+    await this.pickComboOption(filter.field, signal);
+    const operatorLabel = negate ? 'is not' : 'is';
+    const operatorInput = await this.waitFor('kibana.filter_operator', 8000, signal);
+    await this.pointAt(operatorInput, coach, timingScale, signal, `Set the operator to "${operatorLabel}".`, {activate: true});
+    await this.typeValue(operatorInput, operatorLabel, signal);
+    await this.pickComboOption(operatorLabel, signal, true);
+    const valueInput = await this.waitFor('kibana.filter_params', 8000, signal);
+    await this.pointAt(valueInput, coach, timingScale, signal, `Enter the value ${filter.value}.`, {activate: true});
+    await this.typeValue(valueInput, String(filter.value), signal);
+    const save = await this.waitFor('kibana.filter_save', 8000, signal);
+    await this.pointAt(save, coach, timingScale, signal, `Apply the ${negate ? 'is not' : 'is'} filter.`, {activate: true});
+    await this.wait(400 * timingScale, signal);
+    return {type: 'filter_added', details: filter, state_after: {filters: [{field: filter.field, value: filter.value, negate}]}};
+  }
+
+  async pickComboOption(text, signal, exact = false) {
+    await this.wait(400, signal);
+    const options = [...document.querySelectorAll("[data-test-subj^='comboBoxOptionsList'] [role='option'], .euiComboBoxOption__content")];
+    const norm = value => String(value).trim().toLowerCase();
+    const match = options.find(option => exact ? norm(option.textContent) === norm(text) : norm(option.textContent).includes(norm(text))) || options[0];
+    if (!match) throw new Error(`No combo option matched "${text}"`);
+    match.click();
   }
 
   async openTrace(command, toggle, coach, timingScale, signal) {

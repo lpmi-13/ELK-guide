@@ -1,1 +1,85 @@
-{"schema_version":2,"id":"auth-rejection-surge","version":1,"title":"Authentication rejection surge","type":"investigation","classification":"core","difficulty":1,"estimated_minutes":12,"brief":"Sign-in failures have risen, but normal rejection types are mixed into the data. Isolate the abnormal reason and affected client.","skills":["boolean-kql","include-exclude","top-values"],"required_capabilities":["discover","spaces","saved_objects"],"provisioning":{"strategies":["seeded-events","saved-objects"],"seeded_events":{"signal_count":30,"noise_count":100,"signal":{"labels":{"signal":"decisive"},"service":{"name":"auth"},"event":{"outcome":"failure"},"http":{"response":{"status_code":401}},"client":{"application":{"name":"mobile-web"}},"authentication":{"rejection_reason":"expired_nonce"},"message":"sign-in rejected: expired nonce"},"distractors":[{"authentication":{"rejection_reason":"bad_password"},"client":{"application":{"name":"public-web"}}},{"authentication":{"rejection_reason":"account_locked"},"client":{"application":{"name":"admin"}}}],"companions":[{"count":2,"event":{"labels":{"corroboration":true},"service":{"name":"auth"},"client":{"application":{"name":"mobile-web"}},"authentication":{"rejection_reason":"expired_nonce"},"message":"mobile web nonce validation failed"}}]},"readiness_validators":[{"id":"seeded-signal","kind":"es_count","minimum":20,"query":{"term":{"labels.signal.keyword":"decisive"}}}]},"starting_view":{"app":"discover","saved_object":"incident-investigation","path":"/app/discover#/view/incident-investigation"},"truth":{"answers":{"finding":"expired_nonce","scope":"mobile-web","conclusion":"Expired nonce rejections are abnormally concentrated in the mobile-web client."},"assertions":[{"id":"signal","kind":"es_count","minimum":20,"query":{"term":{"labels.signal.keyword":"decisive"}}},{"id":"corroboration","kind":"es_count","minimum":1,"query":{"term":{"labels.corroboration":true}}}]},"answer_schema":{"type":"diagnosis","fields":[{"id":"finding","label":"Rejection reason","kind":"string","weight":2},{"id":"scope","label":"Affected client","kind":"string","weight":1},{"id":"conclusion","label":"Conclusion","kind":"string","weight":1},{"id":"evidence_refs","label":"Evidence references","kind":"string","scored":false},{"id":"evidence","label":"Evidence","kind":"text","scored":false}]},"playbook":"playbook.json","rubric":"rubric.json","cleanup":{"delete_space":true,"delete_run_data":true,"managed_resources":[]}}
+{
+  "schema_version": 2,
+  "id": "auth-rejection-surge",
+  "version": 2,
+  "title": "Authentication rejection surge",
+  "type": "investigation",
+  "classification": "core",
+  "difficulty": 1,
+  "estimated_minutes": 12,
+  "brief": "Sign-in failures have risen, but normal rejection types are mixed into the data. Isolate the abnormal reason and affected client.",
+  "skills": ["boolean-kql", "include-exclude", "top-values"],
+  "required_capabilities": ["discover", "spaces", "saved_objects"],
+  "parameters": {
+    "incident": {
+      "choose": [
+        {"reason": "expired_nonce", "client": "mobile-web", "message": "sign-in rejected: expired nonce", "noise_reason_a": "bad_password", "noise_client_a": "public-web", "noise_reason_b": "account_locked", "noise_client_b": "admin", "corroboration_message": "mobile web nonce validation failed"},
+        {"reason": "mfa_timeout", "client": "ios-app", "message": "sign-in rejected: MFA challenge timed out", "noise_reason_a": "rate_limited", "noise_client_a": "partner-api", "noise_reason_b": "bad_password", "noise_client_b": "public-web", "corroboration_message": "ios app MFA challenge expired"},
+        {"reason": "token_reuse", "client": "partner-api", "message": "sign-in rejected: replayed refresh token", "noise_reason_a": "account_locked", "noise_client_a": "admin", "noise_reason_b": "bad_password", "noise_client_b": "public-web", "corroboration_message": "partner api replayed a refresh token"},
+        {"reason": "device_untrusted", "client": "desktop-app", "message": "sign-in rejected: device not trusted", "noise_reason_a": "session_expired", "noise_client_a": "mobile-web", "noise_reason_b": "bad_password", "noise_client_b": "public-web", "corroboration_message": "desktop app blocked an untrusted device"}
+      ]
+    },
+    "window": {"choose": ["15m", "20m", "30m", "45m"]}
+  },
+  "provisioning": {
+    "strategies": ["seeded-events", "saved-objects"],
+    "seeded_events": {
+      "signal_count": 30,
+      "noise_count": 100,
+      "signal": {
+        "labels": {"signal": "decisive"},
+        "service": {"name": "auth"},
+        "event": {"outcome": "failure"},
+        "http": {"response": {"status_code": 401}},
+        "client": {"application": {"name": "${param.incident.client}"}},
+        "authentication": {"rejection_reason": "${param.incident.reason}"},
+        "message": "${param.incident.message}"
+      },
+      "distractors": [
+        {"authentication": {"rejection_reason": "${param.incident.noise_reason_a}"}, "client": {"application": {"name": "${param.incident.noise_client_a}"}}},
+        {"authentication": {"rejection_reason": "${param.incident.noise_reason_b}"}, "client": {"application": {"name": "${param.incident.noise_client_b}"}}}
+      ],
+      "companions": [
+        {
+          "count": 2,
+          "event": {
+            "labels": {"corroboration": true},
+            "service": {"name": "auth"},
+            "event": {"outcome": "failure"},
+            "client": {"application": {"name": "${param.incident.client}"}},
+            "authentication": {"rejection_reason": "${param.incident.reason}"},
+            "message": "${param.incident.corroboration_message}"
+          }
+        }
+      ]
+    },
+    "readiness_validators": [
+      {"id": "seeded-signal", "kind": "es_count", "minimum": 20, "query": {"term": {"labels.signal.keyword": "decisive"}}}
+    ]
+  },
+  "starting_view": {"app": "discover", "saved_object": "incident-investigation", "path": "/app/discover#/view/incident-investigation"},
+  "truth": {
+    "answers": {
+      "finding": "${param.incident.reason}",
+      "scope": "${param.incident.client}",
+      "conclusion": "${param.incident.reason} rejections are abnormally concentrated in the ${param.incident.client} client."
+    },
+    "assertions": [
+      {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"labels.signal.keyword": "decisive"}}},
+      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"labels.corroboration": true}}}
+    ]
+  },
+  "answer_schema": {
+    "type": "diagnosis",
+    "fields": [
+      {"id": "finding", "label": "Rejection reason", "kind": "string", "weight": 2},
+      {"id": "scope", "label": "Affected client", "kind": "string", "weight": 1},
+      {"id": "conclusion", "label": "Conclusion", "kind": "string", "weight": 1},
+      {"id": "evidence_refs", "label": "Evidence references", "kind": "string", "scored": false},
+      {"id": "evidence", "label": "Evidence", "kind": "text", "scored": false}
+    ]
+  },
+  "playbook": "playbook.json",
+  "rubric": "rubric.json",
+  "cleanup": {"delete_space": true, "delete_run_data": true, "managed_resources": []}
+}

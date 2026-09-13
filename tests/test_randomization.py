@@ -17,7 +17,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "learning-service"))
 sys.path.insert(0, str(ROOT / "learning-service" / "engine"))
 
-LOG_HUNT_PACKS = ("http-error-regression", "rare-error-signature")
+LOG_HUNT_PACKS = (
+    "http-error-regression",
+    "rare-error-signature",
+    "auth-rejection-surge",
+    "deployment-version-regression",
+    "log-pattern-noise-reduction",
+    "discover-time-window",
+    "schema-drift-data-quality",
+)
 
 
 def load_module(name, path):
