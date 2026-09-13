@@ -1,6 +1,7 @@
 """Dependency-free HTTP service with correlated logs and runtime fault injection."""
 
 import json
+import logging
 import os
 import random
 import threading
@@ -8,6 +9,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
@@ -19,6 +21,19 @@ INTERVAL = float(os.getenv("LOG_INTERVAL_SECONDS", "2"))
 DEPENDENCIES = [value.rstrip("/") for value in os.getenv("DEPENDENCIES", "").split(",") if value]
 LOG_FILE = Path(os.getenv("LOG_DIR", "/tmp")) / f"{SERVICE}.json"
 LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+# Cap on-disk log growth: without rotation these append-only files grow without
+# bound (multiple GB), which is what fills the shared disk. RotatingFileHandler
+# renames on rollover, which Logstash's file input follows by inode.
+LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", str(100 * 1024 * 1024)))
+LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "1"))
+_log_writer = logging.getLogger(f"microservice.{SERVICE}")
+_log_writer.setLevel(logging.INFO)
+_log_writer.propagate = False
+_log_handler = RotatingFileHandler(
+    LOG_FILE, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding="utf-8"
+)
+_log_handler.setFormatter(logging.Formatter("%(message)s"))
+_log_writer.addHandler(_log_handler)
 write_lock = threading.Lock()
 fault_lock = threading.Lock()
 fault_states = {}
@@ -39,8 +54,8 @@ def emit(message, level="INFO", **fields):
         **{key: value for key, value in fields.items() if value is not None},
     }
     line = json.dumps(event, separators=(",", ":"))
-    with write_lock, LOG_FILE.open("a", encoding="utf-8") as stream:
-        stream.write(line + "\n")
+    with write_lock:
+        _log_writer.info(line)
     print(line, flush=True)
 
 

@@ -31,6 +31,12 @@ LEARNING_DIR = Path(os.getenv("LEARNING_DIR", "/app/learning"))
 LEGACY_SCENARIO_DIR = Path(os.getenv("SCENARIO_DIR", "/app/scenarios"))
 MANIFEST_DIR = Path(os.getenv("MANIFEST_DIR", "/tmp/scenario-manifests"))
 SAVED_OBJECTS_FILE = Path(os.getenv("KIBANA_SAVED_OBJECTS", "/app/kibana/saved-objects.ndjson"))
+# Retention window for lab data. Sized to the ephemeral VM lifetime so daily
+# accumulation cannot fill the disk; ILM expires whole hourly indices at this age.
+LAB_RETENTION = os.getenv("LAB_RETENTION", "8h")
+LAB_ILM_POLICY = "lab-retention"
+LAB_INDEX_TEMPLATE = "lab-lifecycle"
+LAB_INDEX_PATTERNS = ["microservices-*", "tutorial-*", "scenario-*", "lab-*"]
 LOG_FILE = Path(os.getenv("LOG_DIR", "/tmp")) / "scenario-controller.json"
 SERVICE_URLS = {
     "api-gateway": os.getenv("API_GATEWAY_URL", "http://api-gateway:8080").rstrip("/"),
@@ -965,7 +971,14 @@ def transition_run(run_id, requested_state):
             clear_active_fault(run)
             run["completed_at"] = now_iso()
         emit(f"scenario {requested_state.lower()}", run_id=run_id, action=requested_state.lower(), state=requested_state)
-        return public_state(run)
+        snapshot = public_state(run)
+    # Reclaim this run's per-run artifacts (lab-{run_id} index, filtered alias,
+    # APM data streams, Kibana space) on completion. Done off-thread so the
+    # learner's completion response returns immediately; the shared ambient
+    # stream and global data view are left intact to keep the next run fast.
+    if requested_state == "COMPLETED":
+        threading.Thread(target=cleanup_run, args=(run,), daemon=True).start()
+    return snapshot
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1065,8 +1078,71 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
+def ensure_lifecycle_management():
+    """Idempotently install disk-safety guardrails on Elasticsearch at startup.
+
+    Re-applied on every boot so a fresh ephemeral VM is protected from the first
+    scenario onward: absolute disk watermarks (so ES only blocks when the shared
+    disk is genuinely almost full, not at 95% of a disk it barely uses), an ILM
+    policy that expires lab data at LAB_RETENTION, and a template that attaches
+    the policy and drops replicas to 0 (single node -> replicas are unassignable).
+    """
+    steps = (
+        (
+            "disk watermarks",
+            f"{ELASTICSEARCH_URL}/_cluster/settings",
+            "PUT",
+            {
+                "persistent": {
+                    "cluster.routing.allocation.disk.watermark.low": "20gb",
+                    "cluster.routing.allocation.disk.watermark.high": "10gb",
+                    "cluster.routing.allocation.disk.watermark.flood_stage": "5gb",
+                    "indices.lifecycle.poll_interval": "5m",
+                }
+            },
+        ),
+        (
+            "read-only unblock",
+            f"{ELASTICSEARCH_URL}/_all/_settings",
+            "PUT",
+            {"index.blocks.read_only_allow_delete": None},
+        ),
+        (
+            "ilm policy",
+            f"{ELASTICSEARCH_URL}/_ilm/policy/{LAB_ILM_POLICY}",
+            "PUT",
+            {"policy": {"phases": {"delete": {"min_age": LAB_RETENTION, "actions": {"delete": {}}}}}},
+        ),
+        (
+            "index template",
+            f"{ELASTICSEARCH_URL}/_index_template/{LAB_INDEX_TEMPLATE}",
+            "PUT",
+            {
+                "index_patterns": LAB_INDEX_PATTERNS,
+                "priority": 200,
+                "template": {
+                    "settings": {
+                        "number_of_replicas": 0,
+                        "index.lifecycle.name": LAB_ILM_POLICY,
+                    }
+                },
+            },
+        ),
+    )
+    for label, url, method, payload in steps:
+        try:
+            status, detail = http_json(url, method, payload, timeout=15)
+            if status >= 400:
+                emit(f"lifecycle bootstrap: {label} rejected", "WARN", action="lifecycle", status=status, detail=detail)
+            else:
+                emit(f"lifecycle bootstrap: {label} applied", action="lifecycle", status=status)
+        except (OSError, URLError) as error:
+            emit(f"lifecycle bootstrap: {label} unreachable", "WARN", action="lifecycle", error=str(error))
+
+
 if __name__ == "__main__":
     MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_lifecycle_management()
     if AUTO_START:
         create_run()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
