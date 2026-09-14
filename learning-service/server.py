@@ -241,10 +241,14 @@ def substitute(value, session):
         "the selected trace",
     )
     expected = session["manifest"].get("expected", {})
-    truth = session["manifest"]["scenario"].get("truth", {})
+    scenario = session["manifest"]["scenario"]
+    truth = scenario.get("truth", {})
     replacements = {
         "${run_id}": session["run_id"],
         "${space_id}": session["manifest"].get("space_id", ""),
+        "${scenario.title}": scenario.get("title", ""),
+        "${scenario.brief}": scenario.get("brief", ""),
+        "${scenario.type}": scenario.get("type", ""),
         "${expected_service}": expected.get("service", ""),
         "${expected_fault_type}": expected.get("fault_type", ""),
         "${expected_route}": expected.get("route", ""),
@@ -284,6 +288,11 @@ def next_command(session):
     if session["mode"] == "challenge" and command_type not in {"request_diagnosis", "request_answer"}:
         command_type = "orient"
         command_value = None
+    explanation = step.get("demonstration", {}) if session["mode"] == "demonstration" else {}
+
+    def explanation_text(field, default=""):
+        return substitute(explanation.get(field, step.get(field, default)), session)
+
     command = {
         "protocol_version": 2,
         "message_type": "command",
@@ -299,10 +308,10 @@ def next_command(session):
         "value": command_value,
         "expected_page": session["manifest"]["scenario"].get("starting_view", {}).get("app", "discover"),
         "mode": session["mode"],
-        "narration": step.get("narration", step.get("title", "")) if session["policy"]["show_narration"] else session["manifest"]["scenario"]["brief"],
-        "reasoning": step.get("reasoning", "") if session["mode"] == "demonstration" else "",
-        "evidence": step.get("evidence", "") if session["mode"] == "demonstration" else "",
-        "concept": step.get("concept", "") if session["mode"] == "demonstration" else "",
+        "narration": explanation_text("narration", step.get("title", "")) if session["policy"]["show_narration"] else session["manifest"]["scenario"]["brief"],
+        "reasoning": explanation_text("reasoning") if session["mode"] == "demonstration" else "",
+        "evidence": explanation_text("evidence") if session["mode"] == "demonstration" else "",
+        "concept": explanation_text("concept") if session["mode"] == "demonstration" else "",
         "answer_schema": session["manifest"]["scenario"].get("answer_schema", {}),
     }
     session["pending_command"] = command

@@ -6,6 +6,8 @@ Kibana 9.5.2 scenarios live under `learning/scenarios/<scenario-id>/` and contai
 
 Playbooks are goal graphs. A goal has dependencies, one or more accepted normalized observations, reusable validators, a demonstration reference action, and at least three progressive hints. A pack may extend a versioned application template in `learning/templates/playbooks/`; descriptor variables configure the reusable graph without changing evaluation semantics. Rubrics can likewise extend a scenario-type template.
 
+Use a goal's optional `demonstration` object for beginner-oriented `narration`, `reasoning`, `evidence`, and `concept` copy. Keep the goal's top-level narration suitable for guided practice; the demonstration-only copy may reveal the reference finding and explain what should change on screen. It is resolved when the command is created and may use `${scenario.title}`, `${scenario.brief}`, `${scenario.type}`, `${truth.finding}`, `${truth.scope}`, `${truth.conclusion}`, `${run_id}`, `${space_id}`, template `${var.*}` values, and materialized `${param.*}` values. If a scenario overrides a template's `reference_action`, override its `demonstration` copy in the same goal so the explanation matches the control being used.
+
 Minimal workflow:
 
 1. Copy the nearest existing pack.

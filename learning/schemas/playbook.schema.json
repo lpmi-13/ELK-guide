@@ -21,6 +21,16 @@
         "type": "object",
         "properties": {
           "narration": {"type": "string"},
+          "demonstration": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "narration": {"type": "string"},
+              "reasoning": {"type": "string"},
+              "evidence": {"type": "string"},
+              "concept": {"type": "string"}
+            }
+          },
           "reference_action": {
             "type": "object",
             "required": ["command", "target"],
@@ -72,6 +82,18 @@
           "narration": {"type": "string"},
           "reasoning": {"type": "string"},
           "evidence": {"type": "string"},
+          "demonstration": {
+            "type": "object",
+            "description": "Optional demonstration-only teaching copy. It may use scenario, truth, run, template-variable, and run-parameter tokens without exposing answers in guided mode.",
+            "additionalProperties": false,
+            "minProperties": 1,
+            "properties": {
+              "narration": {"type": "string"},
+              "reasoning": {"type": "string"},
+              "evidence": {"type": "string"},
+              "concept": {"type": "string"}
+            }
+          },
           "requires": {"type": "array", "items": {"type": "string"}},
           "accepts": {
             "type": "array",

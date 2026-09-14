@@ -80,7 +80,16 @@ class KibanaAdapter {
     if (activate) target.click();
   }
 
+  relativeTimeRange(value = {}) {
+    const relative = /^now-(\d+)([mhdw])$/i.exec(String(value?.from || ''));
+    const amount = relative?.[1] || '10';
+    const unitCode = (relative?.[2] || 'm').toLowerCase();
+    const unitName = {m: 'minute', h: 'hour', d: 'day', w: 'week'}[unitCode] || 'minute';
+    return {amount, unitCode, unitName, unitLabel: `${unitName}${amount === '1' ? '' : 's'}`};
+  }
+
   async setTimeRange(command, toggle, coach, timingScale, signal) {
+    const range = this.relativeTimeRange(command.value);
     await this.pointAt(toggle, coach, timingScale, signal, 'Open the time picker.', {activate: true});
     await this.wait(250 * timingScale, signal);
     let number = this.resolve('kibana.time_value');
@@ -96,15 +105,15 @@ class KibanaAdapter {
       }
     }
     if (number && unit && apply) {
-      await this.pointAt(number, coach, timingScale, signal, 'Click the Time value box, clear its old value, and type 10.', {activate: true});
-      await this.typeValue(number, '10', signal);
-      await this.pointAt(unit, coach, timingScale, signal, 'Choose minutes as the unit.', {activate: true});
-      const minuteOption = Array.from(unit.options).find(option => /^minutes? ago$/i.test(option.textContent.trim()))
-        || Array.from(unit.options).find(option => /^minutes?$/i.test(option.textContent.trim()));
-      unit.value = minuteOption?.value || 'm';
+      await this.pointAt(number, coach, timingScale, signal, `Click the Time value box, clear its old value, and type ${range.amount}.`, {activate: true});
+      await this.typeValue(number, range.amount, signal);
+      await this.pointAt(unit, coach, timingScale, signal, `Choose ${range.unitLabel} as the unit.`, {activate: true});
+      const unitPattern = new RegExp(`^${range.unitName}s?(?: ago)?$`, 'i');
+      const matchingOption = Array.from(unit.options).find(option => unitPattern.test(option.textContent.trim()));
+      unit.value = matchingOption?.value || range.unitCode;
       unit.dispatchEvent(new Event('input', {bubbles: true}));
       unit.dispatchEvent(new Event('change', {bubbles: true}));
-      await this.pointAt(apply, coach, timingScale, signal, 'Apply the Last 10 minutes range.', {activate: true});
+      await this.pointAt(apply, coach, timingScale, signal, `Apply the Last ${range.amount} ${range.unitLabel} range.`, {activate: true});
     } else {
       const hash = location.hash;
       const globalState = `_g=(time:(from:'${command.value.from}',to:'${command.value.to}'))`;

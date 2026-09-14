@@ -11,7 +11,8 @@ function startIncidentCoach() {
   let currentCommand = null;
   let executionController = null;
   const activeSessionKey = 'incident-coach:auto-connect';
-  const demonstrationTimingScale = 10;
+  const demonstrationSlowdown = 3;
+  const demonstrationTimingScale = 10 * demonstrationSlowdown;
 
   function readingPause(...texts) {
     const words = texts.filter(Boolean).join(' ').trim().split(/\s+/).filter(Boolean).length;
@@ -41,7 +42,7 @@ function startIncidentCoach() {
     try {
       const timingScale = command.mode === 'demonstration' ? demonstrationTimingScale : 1;
       const readBeat = async text => {
-        const pause = readingPause(text);
+        const pause = readingPause(text) * demonstrationSlowdown;
         coach.startCountdown(pause);
         await wait(pause, controller.signal);
       };

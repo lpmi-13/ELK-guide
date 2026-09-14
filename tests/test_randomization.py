@@ -136,6 +136,35 @@ class RandomizationTests(unittest.TestCase):
                     self.assertTrue(feedback["task_correct"])
                     self.assertEqual(feedback["total"], 100)
 
+    def test_demonstration_copy_is_scenario_specific_and_fully_resolved(self):
+        catalog = json.loads((ROOT / "learning/catalog.json").read_text())
+        for offset, entry in enumerate(catalog["scenarios"]):
+            manifest = self.materialize(entry["id"], 135 + offset)
+            session = self.server.create_session({"manifest": manifest}, "demonstration")
+            session["run_ready"] = True
+            goals = session["playbook"]["goals"]
+            finding = manifest["scenario"]["truth"]["answers"]["finding"]
+
+            for index, goal in enumerate(goals):
+                session["completed_goals"] = {item["id"] for item in goals[:index]}
+                session["pending_command"] = None
+                command = self.server.next_command(session)
+                with self.subTest(scenario=entry["id"], goal=goal["id"]):
+                    self.assertNotIn("${", json.dumps(command))
+                    if command["type"] != "show_debrief":
+                        explanation = " ".join(command[key] for key in ("narration", "reasoning", "evidence"))
+                        self.assertIn(finding, explanation)
+                        self.assertGreater(len(command["narration"].split()), 20)
+                        self.assertGreater(len(command["reasoning"].split()), 20)
+                        self.assertGreater(len(command["evidence"].split()), 20)
+
+            guided = self.server.create_session({"manifest": manifest}, "guided")
+            guided["run_ready"] = True
+            guided_command = self.server.next_command(guided)
+            self.assertEqual(guided_command["narration"], goals[0]["narration"])
+            self.assertEqual(guided_command["reasoning"], "")
+            self.assertEqual(guided_command["evidence"], "")
+
 
 if __name__ == "__main__":
     unittest.main()
