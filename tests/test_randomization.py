@@ -165,6 +165,28 @@ class RandomizationTests(unittest.TestCase):
             self.assertEqual(guided_command["reasoning"], "")
             self.assertEqual(guided_command["evidence"], "")
 
+    def test_skipping_advances_exactly_one_demonstration_goal(self):
+        manifest = self.materialize("http-error-regression", 135)
+        session = self.server.create_session({"manifest": manifest}, "demonstration")
+        session["run_ready"] = True
+        first = self.server.next_command(session)
+
+        skipped = self.server.skip_pending_command(session, first["command_id"])
+        second = self.server.next_command(session)
+
+        self.assertEqual(skipped["step_id"], first["step_id"])
+        self.assertEqual(session["completed_goals"], {first["step_id"]})
+        self.assertEqual(second["step_index"], first["step_index"] + 1)
+        self.assertNotEqual(second["command_id"], first["command_id"])
+        with self.assertRaisesRegex(ValueError, "no longer current"):
+            self.server.skip_pending_command(session, first["command_id"])
+
+        guided = self.server.create_session({"manifest": manifest}, "guided")
+        guided["run_ready"] = True
+        guided_command = self.server.next_command(guided)
+        with self.assertRaisesRegex(ValueError, "demonstration mode"):
+            self.server.skip_pending_command(guided, guided_command["command_id"])
+
 
 if __name__ == "__main__":
     unittest.main()

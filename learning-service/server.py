@@ -318,6 +318,22 @@ def next_command(session):
     return command
 
 
+def skip_pending_command(session, command_id):
+    """Advance one demonstration goal without performing its reference action."""
+    if session["mode"] != "demonstration":
+        raise ValueError("steps can only be skipped in demonstration mode")
+    pending = session.get("pending_command")
+    if not pending or pending.get("command_id") != command_id:
+        raise ValueError("the demonstration step is no longer current")
+    goals = playbook_goals(session)
+    index = current_step_index(session)
+    if index >= len(goals) or goals[index]["id"] != pending.get("step_id"):
+        raise ValueError("the demonstration step is no longer current")
+    session["completed_goals"].add(goals[index]["id"])
+    session["pending_command"] = None
+    return {"step_id": goals[index]["id"], "step_index": index}
+
+
 def refresh_run_ready(session):
     status, run = http_json(f"{CONTROLLER_URL}/api/runs/{session['run_id']}")
     session["run_ready"] = status == 200 and run.get("state") in {"READY", "INVESTIGATING"}
@@ -623,6 +639,16 @@ class Handler(BaseHTTPRequestHandler):
                             send_frame(connection, json.dumps(command))
                 elif message_type == "ack":
                     send_frame(connection, json.dumps({"message_type": "acknowledged", "command_id": message.get("command_id")}))
+                elif message_type == "skip":
+                    try:
+                        skipped = skip_pending_command(session, message.get("command_id"))
+                    except ValueError as error:
+                        send_frame(connection, json.dumps({"message_type": "error", "error": str(error)}))
+                        continue
+                    send_frame(connection, json.dumps({"message_type": "skipped", **skipped}))
+                    if not session["paused"]:
+                        command = next_command(session)
+                        send_frame(connection, json.dumps(command or {"message_type": "complete", "session_id": session_id}))
                 elif message_type == "hint":
                     index = current_step_index(session)
                     goals = playbook_goals(session)

@@ -44,6 +44,7 @@ class IncidentSessionClient {
     else if (message.message_type === 'hint') this.onHint?.(message);
     else if (message.message_type === 'action_result') this.onActionResult?.(message);
     else if (message.message_type === 'complete') this.onStatus?.('Investigation goals complete.');
+    else if (message.message_type === 'error') this.onError?.(message.error || 'Learning session error.');
   }
 
   send(message) {
@@ -70,6 +71,7 @@ class IncidentSessionClient {
   }
 
   requestHint() { this.send({message_type: 'hint'}); }
+  skip(command) { this.send({message_type: 'skip', command_id: command.command_id}); }
   acknowledge(command, status, observedState = {}) { this.send({message_type: 'ack', command_id: command.command_id, status, observed_state: observedState}); }
 
   async submitDiagnosis(answer) {

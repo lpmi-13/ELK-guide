@@ -96,6 +96,7 @@ function startIncidentCoach() {
     await adapter.initialize();
     client = new IncidentSessionClient(config);
     client.onStatus = message => coach.toast(message);
+    client.onError = message => coach.toast(message, true);
     client.onHint = hint => coach.toast(`Hint ${hint.level}: ${hint.text}`);
     client.onActionResult = result => {
       if (result.evaluation.outcome === 'accepted') coach.toast(result.evaluation.reason);
@@ -129,6 +130,22 @@ function startIncidentCoach() {
     };
     coach.onHint = () => client.requestHint();
     coach.onDemonstrate = () => currentCommand && execute(currentCommand, true);
+    coach.onSkip = () => {
+      if (!currentCommand || currentCommand.mode !== 'demonstration') return;
+      const command = currentCommand;
+      const wasPaused = coach.paused;
+      currentCommand = null;
+      executionController?.abort();
+      coach.stopCountdown();
+      coach.finishCommand(command);
+      client.skip(command);
+      // A paused service intentionally withholds commands. Resume after the skip so
+      // the next demonstration card can arrive instead of leaving the panel hidden.
+      if (wasPaused) {
+        coach.setPaused(false, false);
+        client.send({message_type: 'resume'});
+      }
+    };
     coach.onStop = () => {
       executionController?.abort();
       observer.stop();

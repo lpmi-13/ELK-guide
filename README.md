@@ -6,7 +6,7 @@ The interactive experience runs directly in the learner's Kibana tab. A local sa
 
 ## What is implemented
 
-- A catalog-driven launcher with surface, skill, difficulty, signal, and scenario-type filters.
+- A catalog-driven launcher scoped to the server's active scenario track, with capability-aware scenario cards.
 - Twenty-two core scenario packs, all using free Basic-tier Kibana features only.
 - Generic v2 scenario, goal-graph, command/observation, rubric, and run-manifest contracts.
 - Per-run Kibana Spaces, Space-local saved objects, deterministic seeded telemetry, and cleanup.
@@ -52,17 +52,17 @@ docker compose up --build -d
 docker compose ps
 ```
 
-Open <http://localhost:8090>, filter and select a scenario, choose an assistance mode, accept or change the suggested scenario key, and start the run. The launcher shows evidence progress and enables the Kibana link only after the run reaches `READY`. No manual Kibana content creation is required.
+Open <http://localhost:8090>, select a scenario, choose an assistance mode, accept or change the suggested scenario key, and start the run. A preparation tab opens immediately and moves into the connected Kibana investigation only after the run reaches `READY`; if the tab cannot be opened, the launcher reveals a manual fallback link. No manual Kibana content creation is required.
 
 Learners may change ephemeral view state—time, queries, filters, controls, sorting, selections, and drilldowns—but every curriculum workflow is read-only with respect to saved Kibana content. Cluster administration, Dev Tools, content authoring, and system repair are outside the learner scope.
 
 ### Open the built-in learner experience
 
 1. Open the launcher at <http://localhost:8090> and confirm its header says **built-in Kibana coach 1.0.0 ready**.
-2. Choose an assistance mode, start a scenario, and wait for its evidence to become ready.
-3. Select **Open the ready investigation in Kibana**. The new tab connects automatically and immediately starts the assistance mode you chose.
+2. Choose an assistance mode and start a scenario. A preparation tab opens while its evidence becomes ready.
+3. When readiness is confirmed, that tab continues into Kibana and automatically starts the assistance mode you chose.
 
-The automatic handoff is scoped to the local Kibana gateway. Its session token is removed from the address bar before Kibana starts and retained only for reloads in that tab. The coach always shows when automation is active, and **Stop** immediately disconnects it and forgets the handoff. Demonstration mode injects the current scenario's finding, scope, query context, and expected evidence into its explanation, positions the coach away from each active target, uses a 3× slower demonstration pace for reading and follow-up pauses while keeping cursor travel under 900 ms, types into form controls at a visible moderate pace, and ends with an evidence-and-conclusion summary. Guided and challenge modes retain the learner diagnosis form and observe the learner's normalized Kibana actions without exposing the demonstration-only answer context.
+The automatic handoff is scoped to the local Kibana gateway. Its session token is removed from the address bar before Kibana starts and retained only for reloads in that tab. The coach always shows when automation is active, and **Stop** immediately disconnects it and forgets the handoff. Demonstration mode includes a **Skip** control that cancels the current animation and advances one step. It injects the current scenario's finding, scope, query context, and expected evidence into its explanation, positions the coach away from each active target, uses a 3× slower demonstration pace for reading and follow-up pauses while keeping cursor travel under 900 ms, types into form controls at a visible moderate pace, and ends with an evidence-and-conclusion summary. Guided and challenge modes retain the learner diagnosis form and observe the learner's normalized Kibana actions without exposing the demonstration-only answer context.
 
 The lab suppresses Kibana's insecure-cluster and public-URL warnings, plus the Discover first-run tour callouts.
 

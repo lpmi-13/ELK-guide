@@ -13,7 +13,7 @@ class IncidentCoachPanel {
           <p id="phase-detail" class="muted"></p>
           <div id="countdown" class="countdown" aria-hidden="true" hidden><span></span></div>
         </section>
-        <div class="actions"><button id="pause">Pause</button><button id="hint">Hint</button><button id="demonstrate">Show me</button></div>
+        <div class="actions"><button id="pause">Pause</button><button id="skip" title="Skip this demonstration step">Skip</button><button id="hint">Hint</button><button id="demonstrate">Show me</button></div>
         <form id="diagnosis" hidden>
           <label>Faulty service<input name="service" required></label>
           <label>Failure type<select name="fault_type"><option value="latency">Latency</option><option value="error">Errors</option><option value="unavailable">Unavailable</option></select></label>
@@ -39,10 +39,10 @@ class IncidentCoachPanel {
     };
     window.addEventListener('resize', this.reposition);
     window.addEventListener('scroll', this.reposition, true);
-    this.root.querySelector('#pause').onclick = event => {
-      this.paused = !this.paused;
-      event.target.textContent = this.paused ? 'Resume' : 'Pause';
-      this.onPause?.(this.paused);
+    this.root.querySelector('#pause').onclick = () => this.setPaused(!this.paused);
+    this.root.querySelector('#skip').onclick = event => {
+      event.currentTarget.disabled = true;
+      this.onSkip?.();
     };
     this.root.querySelector('#hint').onclick = () => this.onHint?.();
     this.root.querySelector('#demonstrate').onclick = () => this.onDemonstrate?.();
@@ -88,6 +88,9 @@ class IncidentCoachPanel {
     this.root.querySelector('#objective').textContent = command.step_id.replaceAll('-', ' ');
     this.root.querySelector('.progress span').style.width = `${100 * command.step_index / command.step_count}%`;
     this.root.querySelector('#demonstrate').hidden = command.mode !== 'guided';
+    const skip = this.root.querySelector('#skip');
+    skip.hidden = command.mode !== 'demonstration';
+    skip.disabled = false;
     this.root.querySelector('#hint').hidden = command.mode === 'demonstration';
     if (command.type === 'request_diagnosis' || command.type === 'request_answer') this.renderAnswerSchema(command.answer_schema);
     this.root.querySelector('#diagnosis').hidden = !['request_diagnosis', 'request_answer'].includes(command.type) || command.mode === 'demonstration';
@@ -137,6 +140,12 @@ class IncidentCoachPanel {
   beginActionPhase(command = this.currentCommand) { this.enterPhase('action', command); }
 
   showLearning(command = this.currentCommand) { this.enterPhase('learning', command); }
+
+  setPaused(paused, notify = true) {
+    this.paused = paused;
+    this.root.querySelector('#pause').textContent = paused ? 'Resume' : 'Pause';
+    if (notify) this.onPause?.(paused);
+  }
 
   // Fill the phase bar over `duration` so the learner can see the transition approaching.
   startCountdown(duration) {
@@ -313,7 +322,7 @@ class IncidentCoachPanel {
     .countdown.working span { width:34%!important;animation:cd-sweep 1.25s cubic-bezier(.55,0,.45,1) infinite; } @keyframes cd-sweep { 0%{transform:translateX(-115%)} 100%{transform:translateX(310%)} }
     @media (prefers-reduced-motion: reduce) { .countdown.working span { transform:none!important;width:100%!important;opacity:.55; } .countdown span { width:100%!important; } }
     button { border:1px solid #8293a3;border-radius:5px;background:#f5f7f9;padding:6px 9px;cursor:pointer; } button:hover,button:focus-visible { outline:2px solid #006bb4;outline-offset:1px; }
-    #stop { color:#a32b1c;border-color:#d77d72; } .actions { display:flex; gap:7px; margin-top:12px; }
+    #stop { color:#a32b1c;border-color:#d77d72; } #skip { margin-left:auto; } .actions { display:flex; gap:7px; margin-top:12px; }
     .progress { height:4px;background:#dce4eb;margin:13px 0;border-radius:4px;overflow:hidden; }.progress span { display:block;height:100%;background:#006bb4;transition:width .3s; }
     label { display:block;font-weight:650;margin-top:10px; } input,select,textarea { display:block;width:100%;box-sizing:border-box;margin-top:3px;padding:7px;border:1px solid #9ba9b6;border-radius:4px;font:inherit; } textarea { min-height:58px; }
     #diagnosis button { margin-top:12px;background:#006bb4;color:#fff;border:0; } #status { min-height:18px;color:#147d5c; }.error { color:#a32b1c!important; }

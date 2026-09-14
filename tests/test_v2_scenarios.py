@@ -66,10 +66,13 @@ class ScenarioV2Tests(unittest.TestCase):
 
     def test_launcher_is_catalog_driven(self):
         launcher = (ROOT / "telemetry/index.html").read_text()
-        for identifier in ("surface-filter", "skill-filter", "difficulty-filter", "signal-filter", "type-filter", "scenario-catalog"):
-            self.assertIn(f'id="{identifier}"', launcher)
+        self.assertIn('id="scenario-catalog"', launcher)
         self.assertIn("/api/catalog", launcher)
+        self.assertIn("catalogEntries = catalog.scenarios", launcher)
+        self.assertIn("for (const item of catalogEntries)", launcher)
         self.assertIn("scenario:selectedScenario", launcher)
+        for entry in self.catalog["scenarios"]:
+            self.assertNotIn(f'value="{entry["id"]}"', launcher)
 
 
 if __name__ == "__main__":

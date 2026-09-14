@@ -62,6 +62,19 @@ class ContractTests(unittest.TestCase):
         self.assertIn("this.pointAt(unit", adapter)
         self.assertIn("this.pointAt(apply", adapter)
 
+    def test_demonstration_steps_can_be_skipped(self):
+        coach = (ROOT / "kibana-coach/src/ui/coach-panel.js").read_text(encoding="utf-8")
+        content = (ROOT / "kibana-coach/src/content-script.js").read_text(encoding="utf-8")
+        client = (ROOT / "kibana-coach/src/session-client.js").read_text(encoding="utf-8")
+        learning_service = (ROOT / "learning-service/server.py").read_text(encoding="utf-8")
+
+        self.assertIn('<button id="skip"', coach)
+        self.assertIn("skip.hidden = command.mode !== 'demonstration'", coach)
+        self.assertIn("coach.onSkip = () =>", content)
+        self.assertIn("executionController?.abort()", content)
+        self.assertIn("message_type: 'skip'", client)
+        self.assertIn('elif message_type == "skip":', learning_service)
+
     def test_demonstration_explains_and_visibly_performs_the_trace_pivot(self):
         playbook = json.loads((ROOT / "learning/playbooks/slow-service-investigation.json").read_text())
         trace_step = next(step for step in playbook["steps"] if step["id"] == "inspect-correlated-trace")
@@ -129,7 +142,10 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn('id="scenario-key" type="text" value="quiet-river-signal" pattern=', launcher)
         self.assertIn("scenario_key:scenarioKey.value", launcher)
         self.assertIn('id="evidence-progress"', launcher)
-        self.assertIn('id="open-kibana" class="button" type="button" disabled', launcher)
+        self.assertIn('id="manual-open" hidden', launcher)
+        self.assertIn('id="open-kibana-link" class="button"', launcher)
+        self.assertIn("investigationTab = openPrepTab()", launcher)
+        self.assertIn("signalTab({__url: investigationUrl, __done: true})", launcher)
         self.assertIn("evidenceProgress.value = Math.min(indexed, threshold)", launcher)
         self.assertNotIn("minimum of ${required} met", launcher)
         self.assertNotIn("${count} of ${required} affected traces", launcher)
@@ -182,7 +198,9 @@ class ContractTests(unittest.TestCase):
         self.assertIn("location /incident-coach/learning/", gateway)
         self.assertIn("sub_filter '</head>'", gateway)
         self.assertIn("there is nothing to install in your browser", launcher)
-        self.assertIn("openKibana.disabled = !coachRuntimeReady", launcher)
+        self.assertIn("if (coachRuntimeReady)", launcher)
+        self.assertIn("launchWhenReady()", launcher)
+        self.assertIn("investigationTab = openPrepTab()", launcher)
         self.assertIn("${target.origin}/incident-coach/learning", launcher)
         self.assertIn("target.hash = `${route}?${parameters}`", launcher)
         self.assertIn("const hashParameters = new URLSearchParams", bootstrap)
