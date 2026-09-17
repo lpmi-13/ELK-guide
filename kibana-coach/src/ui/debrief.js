@@ -23,9 +23,14 @@ class IncidentDebrief {
     const dialog = document.createElement('dialog');
     dialog.className = 'incident-debrief';
     dialog.innerHTML = `<form method="dialog"><button class="dialog-close" aria-label="Close summary">×</button></form>
-      <h2></h2><p class="demo-summary"></p><h3>What was checked</h3><ol class="demo-checks"></ol>
+      <h2></h2><div class="incident-problem"><strong>Problem found</strong><p></p></div>
+      <p class="demo-summary"></p><h3>What was checked</h3><ol class="demo-checks"></ol>
       <h3>Evidence used</h3><p class="demo-evidence"></p><h3>Conclusion</h3><p class="incident-conclusion"></p>`;
     dialog.querySelector('h2').textContent = summary.title || 'Demonstration complete';
+    const problem = summary.answer?.conclusion || summary.conclusion || '';
+    const problemBox = dialog.querySelector('.incident-problem');
+    problemBox.querySelector('p').textContent = problem;
+    problemBox.hidden = !problem;
     dialog.querySelector('.demo-summary').textContent = summary.summary || '';
     dialog.querySelector('.demo-evidence').textContent = summary.evidence || '';
     dialog.querySelector('.incident-conclusion').textContent = summary.conclusion || '';

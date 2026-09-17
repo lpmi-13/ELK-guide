@@ -151,7 +151,29 @@ class RandomizationTests(unittest.TestCase):
                 command = self.server.next_command(session)
                 with self.subTest(scenario=entry["id"], goal=goal["id"]):
                     self.assertNotIn("${", json.dumps(command))
-                    if command["type"] != "show_debrief":
+                    if command["type"] == "show_debrief":
+                        summary = command["value"]
+                        demonstrated = [
+                            item for item in goals
+                            if item["reference_action"]["command"] not in {"request_answer", "request_diagnosis"}
+                        ]
+                        summary_copy = " ".join([
+                            summary["summary"], summary["evidence"], summary["conclusion"],
+                            *(check["detail"] for check in summary["checks"]),
+                        ])
+                        self.assertIn(finding, summary_copy)
+                        self.assertEqual(len(summary["checks"]), len(demonstrated))
+                        self.assertEqual(summary["answer"]["conclusion"], manifest["scenario"]["truth"]["answers"]["conclusion"])
+                        self.assertLessEqual(len(summary["answer"]["conclusion"].split()), 25)
+                        self.assertGreaterEqual(len(summary["summary"].split()), 35)
+                        self.assertTrue(all(len(check["detail"].split()) >= 28 for check in summary["checks"]))
+                        self.assertGreaterEqual(len(summary["evidence"].split()), 32)
+                        self.assertGreaterEqual(len(summary["conclusion"].split()), 18)
+                        if entry["id"] == "discover-time-window":
+                            signal = next(check for check in summary["checks"] if check["title"] == "Signal")
+                            self.assertIn(f"isolate records pointing to the {finding}", signal["detail"])
+                            self.assertIn(f"surged during the {finding}", summary["answer"]["conclusion"])
+                    else:
                         explanation = " ".join(command[key] for key in ("narration", "reasoning", "evidence"))
                         self.assertIn(finding, explanation)
                         self.assertGreater(len(command["narration"].split()), 20)

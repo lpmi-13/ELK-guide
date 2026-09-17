@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "id": "discover-time-window",
-  "version": 2,
+  "version": 3,
   "title": "Find the checkout incident window",
   "type": "analysis",
   "classification": "core",
@@ -63,7 +63,7 @@
     "answers": {
       "finding": "${param.window.label}",
       "scope": "${param.incident.service} traffic",
-      "conclusion": "The ${param.incident.service} error surge aligns with the reported ${param.window.label} interval."
+      "conclusion": "Errors from ${param.incident.service} surged during the ${param.window.label}."
     },
     "assertions": [
       {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"labels.signal.keyword": "decisive"}}},

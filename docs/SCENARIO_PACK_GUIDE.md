@@ -8,6 +8,8 @@ Playbooks are goal graphs. A goal has dependencies, one or more accepted normali
 
 Use a goal's optional `demonstration` object for beginner-oriented `narration`, `reasoning`, `evidence`, and `concept` copy. Keep the goal's top-level narration suitable for guided practice; the demonstration-only copy may reveal the reference finding and explain what should change on screen. It is resolved when the command is created and may use `${scenario.title}`, `${scenario.brief}`, `${scenario.type}`, `${truth.finding}`, `${truth.scope}`, `${truth.conclusion}`, `${run_id}`, `${space_id}`, template `${var.*}` values, and materialized `${param.*}` values. If a scenario overrides a template's `reference_action`, override its `demonstration` copy in the same goal so the explanation matches the control being used.
 
+Treat `demonstration_summary` as the evidence-rich recap of those action explanations, not as a short completion notice. The debrief presents `answer.conclusion` first as a brief, prominent **Problem found** callout. Include one check for every demonstrated goal and explain what was changed or inspected, why that narrowed the question, and what the result established. The evidence section should distinguish the primary signal from its independent corroboration, and the detailed conclusion should connect both layers to the resolved scenario finding and scope. Summary copy supports the same substitution tokens as goal demonstration copy. When raw answer values need an article or other grammar in prose, expose that wording as a template variable while keeping the scored answer unchanged.
+
 Minimal workflow:
 
 1. Copy the nearest existing pack.

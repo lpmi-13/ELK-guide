@@ -36,6 +36,7 @@ class ContractTests(unittest.TestCase):
         learning_service = (ROOT / "learning-service/server.py").read_text(encoding="utf-8")
         coach = (ROOT / "kibana-coach/src/ui/coach-panel.js").read_text(encoding="utf-8")
         content = (ROOT / "kibana-coach/src/content-script.js").read_text(encoding="utf-8")
+        debrief = (ROOT / "kibana-coach/src/ui/debrief.js").read_text(encoding="utf-8")
         self.assertIn('command_type = "show_debrief"', learning_service)
         self.assertIn('explanation = step.get("demonstration", {})', learning_service)
         self.assertIn('"evidence": explanation_text("evidence")', learning_service)
@@ -46,6 +47,9 @@ class ContractTests(unittest.TestCase):
         self.assertIn('readingPause(text) * demonstrationSlowdown', content)
         self.assertIn("readBeat(command.reasoning)", content)
         self.assertIn('placeAwayFrom(target)', coach)
+        self.assertIn("max-height:calc(100vh - 48px);overflow:auto", coach)
+        self.assertIn("<strong>Problem found</strong>", debrief)
+        self.assertIn("summary.answer?.conclusion || summary.conclusion", debrief)
 
     def test_demonstration_cursor_is_snappy_and_form_values_are_typed(self):
         cursor = (ROOT / "kibana-coach/src/ui/cursor.js").read_text(encoding="utf-8")

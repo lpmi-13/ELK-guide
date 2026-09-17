@@ -43,6 +43,10 @@ class ScenarioV2Tests(unittest.TestCase):
                 demonstrated = [goal for goal in playbook["goals"] if goal["reference_action"]["command"] not in {"request_answer", "request_diagnosis"}]
                 self.assertTrue(all(set(goal.get("demonstration", {})) >= {"narration", "reasoning", "evidence"} for goal in demonstrated))
                 self.assertTrue(all("${truth." in json.dumps(goal["demonstration"]) for goal in demonstrated))
+                summary = playbook["demonstration_summary"]
+                self.assertEqual(len(summary["checks"]), len(demonstrated))
+                self.assertTrue(all(len(check["detail"].split()) >= 28 for check in summary["checks"]))
+                self.assertGreaterEqual(len(summary["evidence"].split()), 32)
 
     def test_evaluator_has_no_scenario_id_branches(self):
         source = (ROOT / "learning-service/engine/evaluator.py").read_text()
