@@ -79,6 +79,26 @@ class ContractTests(unittest.TestCase):
         self.assertIn("message_type: 'skip'", client)
         self.assertIn('elif message_type == "skip":', learning_service)
 
+    def test_each_mode_waits_for_the_timed_incident_briefing(self):
+        briefing = (ROOT / "kibana-coach/src/ui/incident-briefing.js").read_text(encoding="utf-8")
+        client = (ROOT / "kibana-coach/src/session-client.js").read_text(encoding="utf-8")
+        content = (ROOT / "kibana-coach/src/content-script.js").read_text(encoding="utf-8")
+        learning_service = (ROOT / "learning-service/server.py").read_text(encoding="utf-8")
+        gateway = (ROOT / "kibana-gateway/nginx.conf").read_text(encoding="utf-8")
+
+        self.assertIn("Date.now() - Number(minutesAgo || 0) * 60_000", briefing)
+        self.assertIn("setTimeout(dismiss, duration)", briefing)
+        self.assertIn("dialog.showModal()", briefing)
+        for mode in ("demonstration", "guided", "challenge"):
+            self.assertIn(f"{mode}:", briefing)
+        self.assertIn("message.message_type === 'incident_briefing'", client)
+        self.assertIn("message_type: 'briefing_ack'", client)
+        self.assertIn("await coach.showBriefing(briefing)", content)
+        self.assertIn('elif message_type == "briefing_ack":', learning_service)
+        self.assertIn("build_incident_briefing(session)", learning_service)
+        self.assertIn("/incident-coach/assets/src/ui/incident-briefing.js", gateway)
+        self.assertTrue((ROOT / "kibana-coach/assets/incident-signal.webp").is_file())
+
     def test_demonstration_explains_and_visibly_performs_the_trace_pivot(self):
         playbook = json.loads((ROOT / "learning/playbooks/slow-service-investigation.json").read_text())
         trace_step = next(step for step in playbook["steps"] if step["id"] == "inspect-correlated-trace")

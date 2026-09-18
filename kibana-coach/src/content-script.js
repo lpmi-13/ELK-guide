@@ -101,6 +101,10 @@ function startIncidentCoach() {
     client.onActionResult = result => {
       if (result.evaluation.outcome === 'accepted') coach.toast(result.evaluation.reason);
     };
+    client.onBriefing = async briefing => {
+      await coach.showBriefing(briefing);
+      client.acknowledgeBriefing(briefing);
+    };
     client.onCommand = async command => {
       currentCommand = command;
       if (command.mode === 'demonstration' && command.type === 'show_debrief') {

@@ -32,6 +32,18 @@ class ScenarioV2Tests(unittest.TestCase):
                     document = json.loads((pack / filename).read_text())
                     self.assertEqual(document["schema_version"], 2)
 
+    def test_every_catalog_entry_has_an_incident_briefing(self):
+        definitions = json.loads((ROOT / "learning/incident-briefings.json").read_text())
+        catalog_ids = {entry["id"] for entry in self.catalog["scenarios"]}
+        self.assertEqual(set(definitions["scenarios"]), catalog_ids)
+        for scenario_id, briefing in definitions["scenarios"].items():
+            with self.subTest(scenario=scenario_id):
+                self.assertGreaterEqual(len(briefing["channels"]), 3)
+                self.assertTrue(set(briefing["channels"]) <= set(definitions["sources"]))
+                self.assertEqual(len(briefing["signals"]), 3)
+                self.assertTrue(all(set(signal) == {"label", "value"} for signal in briefing["signals"]))
+                self.assertGreaterEqual(min(briefing["observed_minutes_ago"]), 4)
+
     def test_expanded_playbooks_share_the_three_mode_contract(self):
         for entry in self.catalog["scenarios"]:
             pack = ROOT / "learning" / entry["pack"]

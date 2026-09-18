@@ -28,6 +28,7 @@ class IncidentCoachPanel {
     this.cursor = new IncidentCursor(this.root);
     this.spotlight = new IncidentSpotlight(this.root);
     this.debrief = new IncidentDebrief(this.root);
+    this.briefing = new IncidentBriefing(this.root);
     this.paused = false;
     this.activeTarget = null;
     this.activeCommandId = null;
@@ -76,6 +77,11 @@ class IncidentCoachPanel {
       form.insertBefore(label, submit);
     }
     submit.textContent = schema.type === 'triage_decision' ? 'Submit triage decision' : schema.type === 'comparison' ? 'Submit comparison' : 'Submit diagnosis';
+  }
+
+  showBriefing(briefing) {
+    this.host.hidden = false;
+    return this.briefing.show(briefing);
   }
 
   showCommand(command, target) {
@@ -302,6 +308,7 @@ class IncidentCoachPanel {
   }
 
   stop() {
+    this.briefing.close();
     this.spotlight.hide();
     this.cursor.hide();
     this.panel.hidden = true;

@@ -40,7 +40,8 @@ class IncidentSessionClient {
   }
 
   handle(message) {
-    if (message.message_type === 'command') this.onCommand?.(message);
+    if (message.message_type === 'incident_briefing') this.onBriefing?.(message);
+    else if (message.message_type === 'command') this.onCommand?.(message);
     else if (message.message_type === 'hint') this.onHint?.(message);
     else if (message.message_type === 'action_result') this.onActionResult?.(message);
     else if (message.message_type === 'complete') this.onStatus?.('Investigation goals complete.');
@@ -71,6 +72,7 @@ class IncidentSessionClient {
   }
 
   requestHint() { this.send({message_type: 'hint'}); }
+  acknowledgeBriefing(briefing) { this.send({message_type: 'briefing_ack', briefing_id: briefing.briefing_id}); }
   skip(command) { this.send({message_type: 'skip', command_id: command.command_id}); }
   acknowledge(command, status, observedState = {}) { this.send({message_type: 'ack', command_id: command.command_id, status, observed_state: observedState}); }
 

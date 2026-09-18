@@ -187,6 +187,36 @@ class RandomizationTests(unittest.TestCase):
             self.assertEqual(guided_command["reasoning"], "")
             self.assertEqual(guided_command["evidence"], "")
 
+    def test_every_mode_receives_the_same_seeded_incident_briefing(self):
+        manifest = self.materialize("slow-payments", 424242)
+        briefings = []
+        for mode in ("demonstration", "guided", "challenge"):
+            session = self.server.create_session({"manifest": manifest}, mode)
+            briefing = self.server.build_incident_briefing(session)
+            briefings.append(briefing)
+            with self.subTest(mode=mode):
+                self.assertEqual(briefing["message_type"], "incident_briefing")
+                self.assertEqual(briefing["mode"], mode)
+                self.assertEqual(briefing["duration_ms"], 30_000)
+                self.assertIn(briefing["detected_offset_minutes"], [8, 10, 12])
+                self.assertIn(briefing["source"]["key"], {"support", "pager", "synthetics", "monitoring"})
+                self.assertEqual(len(briefing["signals"]), 3)
+                self.assertNotIn("${", json.dumps(briefing))
+        for key in ("headline", "summary", "impact", "signals", "source", "detected_offset_minutes"):
+            self.assertEqual(briefings[0][key], briefings[1][key])
+            self.assertEqual(briefings[1][key], briefings[2][key])
+
+        sources = set()
+        offsets = set()
+        for seed in range(30):
+            varied = self.server.build_incident_briefing(
+                self.server.create_session({"manifest": self.materialize("slow-payments", seed)}, "guided")
+            )
+            sources.add(varied["source"]["key"])
+            offsets.add(varied["detected_offset_minutes"])
+        self.assertGreater(len(sources), 1)
+        self.assertGreater(len(offsets), 1)
+
     def test_skipping_advances_exactly_one_demonstration_goal(self):
         manifest = self.materialize("http-error-regression", 135)
         session = self.server.create_session({"manifest": manifest}, "demonstration")

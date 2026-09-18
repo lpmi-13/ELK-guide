@@ -182,6 +182,7 @@ def create_session(run_response, mode):
         "answer": None,
         "feedback": None,
         "pending_command": None,
+        "briefing_acknowledged": False,
         "paused": False,
         "run_ready": False,
         "created_at": now_iso(),
@@ -266,6 +267,56 @@ def substitute(value, session):
     if isinstance(value, list):
         return [substitute(item, session) for item in value]
     return value
+
+
+def stable_briefing_choice(values, session, field):
+    """Pick a briefing variant reproducibly for a seeded scenario run."""
+    if not values:
+        raise ValueError(f"incident briefing has no {field} choices")
+    manifest = session["manifest"]
+    identity = f"{manifest.get('seed', 0)}:{manifest.get('template_id', '')}:{field}"
+    digest = hashlib.sha256(f"incident-briefing:v1:{identity}".encode()).digest()
+    return values[int.from_bytes(digest[:8], "big") % len(values)]
+
+
+def build_incident_briefing(session):
+    """Build the non-spoiler incident intake shown before every assistance mode."""
+    with (LEARNING_DIR / "incident-briefings.json").open(encoding="utf-8") as stream:
+        definitions = json.load(stream)
+    scenario = session["manifest"]["scenario"]
+    raw_profile = definitions.get("scenarios", {}).get(scenario["id"], {})
+    fallback = {
+        "severity": "SEV-3",
+        "owner": "Service Operations",
+        "environment": "Production",
+        "observed_minutes_ago": [8, 10, 12],
+        "channels": ["monitoring", "pager", "support"],
+        "headline": scenario["title"],
+        "summary": scenario["brief"],
+        "impact": "Production behavior is outside its expected range. Establish the scope and collect decisive evidence before choosing a remediation.",
+        "signals": [{"label": "Triage request", "value": scenario["brief"]}],
+    }
+    profile = {**fallback, **raw_profile}
+    profile = resolve_parameters(profile, session["manifest"].get("parameters", {}))
+    profile = substitute(profile, session)
+    channel_key = stable_briefing_choice(profile.pop("channels"), session, "channel")
+    observed_minutes_ago = stable_briefing_choice(profile.pop("observed_minutes_ago"), session, "observed_minutes_ago")
+    source = dict(definitions["sources"][channel_key])
+    source["key"] = channel_key
+    source["detail"] = source["detail"].replace("${owner}", profile["owner"]).replace("${channel_slug}", scenario["id"])
+    return {
+        "protocol_version": 2,
+        "message_type": "incident_briefing",
+        "briefing_id": f"{session['id']}-intake",
+        "scenario_id": scenario["id"],
+        "scenario_title": scenario["title"],
+        "mode": session["mode"],
+        "duration_ms": 30_000,
+        "detected_offset_minutes": observed_minutes_ago,
+        "source": source,
+        "graphic": "/incident-coach/assets/assets/incident-signal.webp",
+        **profile,
+    }
 
 
 def next_command(session):
@@ -614,9 +665,12 @@ class Handler(BaseHTTPRequestHandler):
         if not wait_run_ready(session):
             send_frame(connection, json.dumps({"message_type": "failed", "error": "run evidence did not become ready"}))
             return
-        transition_run(session, "INVESTIGATING")
-        initial = next_command(session)
-        send_frame(connection, json.dumps(initial or {"message_type": "complete", "session_id": session_id}))
+        if session["briefing_acknowledged"]:
+            transition_run(session, "INVESTIGATING")
+            initial = next_command(session)
+            send_frame(connection, json.dumps(initial or {"message_type": "complete", "session_id": session_id}))
+        else:
+            send_frame(connection, json.dumps(build_incident_briefing(session)))
         try:
             while True:
                 opcode, data = read_frame(connection)
@@ -649,6 +703,13 @@ class Handler(BaseHTTPRequestHandler):
                     if not session["paused"]:
                         command = next_command(session)
                         send_frame(connection, json.dumps(command or {"message_type": "complete", "session_id": session_id}))
+                elif message_type == "briefing_ack":
+                    if session["briefing_acknowledged"]:
+                        continue
+                    session["briefing_acknowledged"] = True
+                    transition_run(session, "INVESTIGATING")
+                    command = next_command(session)
+                    send_frame(connection, json.dumps(command or {"message_type": "complete", "session_id": session_id}))
                 elif message_type == "hint":
                     index = current_step_index(session)
                     goals = playbook_goals(session)
