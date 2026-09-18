@@ -187,6 +187,44 @@ class RandomizationTests(unittest.TestCase):
             self.assertEqual(guided_command["reasoning"], "")
             self.assertEqual(guided_command["evidence"], "")
 
+    def test_time_window_copy_uses_grammar_aware_finding_for_every_variant(self):
+        window_options = self.template("discover-time-window")["parameters"]["window"]["choose"]
+
+        def strings(value, path=()):
+            if isinstance(value, str):
+                yield path, value
+            elif isinstance(value, dict):
+                for key, item in value.items():
+                    yield from strings(item, path + (key,))
+            elif isinstance(value, list):
+                for index, item in enumerate(value):
+                    yield from strings(item, path + (index,))
+
+        for seed, option in enumerate(window_options):
+            template = self.template("discover-time-window")
+            template["parameters"]["window"]["choose"] = [option]
+            manifest = self.controller.materialize(template, seed, run_id=f"run-window-{seed:05d}")
+            playbook = self.server.load_manifest_definition(manifest, "playbook")
+            rendered = self.server.substitute(
+                playbook,
+                {"run_id": manifest["run_id"], "manifest": manifest, "actions": []},
+            )
+            finding = option["label"]
+            phrase = f"the {finding}"
+            matching_copy = []
+
+            for path, value in strings(rendered):
+                if finding not in value or path == ("demonstration_summary", "answer", "finding"):
+                    continue
+                matching_copy.append(value)
+                with self.subTest(finding=finding, path=path):
+                    self.assertIn(phrase, value)
+                    self.assertNotIn(finding, value.replace(phrase, ""))
+
+            isolate = next(goal for goal in rendered["goals"] if goal["id"] == "isolate")
+            self.assertIn(f"records most likely to reveal {phrase}", isolate["demonstration"]["narration"])
+            self.assertGreaterEqual(len(matching_copy), 10)
+
     def test_every_mode_receives_the_same_seeded_incident_briefing(self):
         manifest = self.materialize("slow-payments", 424242)
         briefings = []
