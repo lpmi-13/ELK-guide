@@ -163,7 +163,6 @@ function startIncidentCoach() {
         coach.debrief.show(feedback);
       } catch (error) { coach.toast(error.message, true); }
     };
-    host.hidden = session.mode === 'demonstration';
     coach.toast(`Connected to ${session.session_id}. Automation is visibly active.`);
   }
 

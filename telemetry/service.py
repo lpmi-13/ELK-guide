@@ -16,6 +16,7 @@ KIBANA_URL = os.getenv("KIBANA_URL", "http://localhost:5601")
 LEARNING_URL = os.getenv("LEARNING_URL", "http://localhost:8091")
 LOG_FILE = Path(os.getenv("LOG_DIR", "/tmp")) / "browser-telemetry.json"
 INDEX = Path(__file__).with_name("index.html")
+PREPARING = Path(__file__).with_name("preparing.html")
 lock = threading.Lock()
 
 
@@ -86,6 +87,8 @@ class Handler(BaseHTTPRequestHandler):
                 .replace("__LEARNING_URL__", json.dumps(LEARNING_URL))
             )
             self.respond(page.encode(), "text/html; charset=utf-8")
+        elif self.path == "/preparing":
+            self.respond(PREPARING.read_bytes(), "text/html; charset=utf-8")
         else:
             self.send_error(404)
 

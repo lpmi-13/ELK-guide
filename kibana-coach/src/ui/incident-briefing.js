@@ -38,7 +38,7 @@ class IncidentBriefing {
     if (this.active) return this.active.promise;
     const dialog = this.node('dialog', 'incident-briefing');
     dialog.setAttribute('aria-labelledby', 'incident-briefing-title');
-    dialog.setAttribute('aria-describedby', 'incident-briefing-summary');
+    dialog.setAttribute('aria-describedby', 'incident-briefing-facts');
 
     const hero = this.node('div', 'briefing-hero');
     const image = this.node('img', 'briefing-hero-image');
@@ -63,34 +63,28 @@ class IncidentBriefing {
 
     const main = this.node('div', 'briefing-main');
     const eyebrow = this.node('div', 'briefing-eyebrow');
-    eyebrow.append(this.node('span', '', 'Incoming incident'), this.node('span', 'briefing-mode', this.modeCopy(briefing.mode).label));
+    eyebrow.append(
+      this.node('span', '', 'Incoming incident'),
+      this.node('span', 'briefing-mode', this.modeCopy(briefing.mode).label),
+    );
     const title = this.node('h1', '', briefing.headline);
     title.id = 'incident-briefing-title';
-    const summary = this.node('p', 'briefing-summary', briefing.summary);
-    summary.id = 'incident-briefing-summary';
 
-    const metadata = this.node('dl', 'briefing-metadata');
+    const triageRequest = (briefing.signals || []).find(signal => /triage request/i.test(signal.label));
     const facts = [
-      ['Raised', `${this.localTime(briefing.detected_offset_minutes)} local time`, `${briefing.detected_offset_minutes} minutes ago`],
-      ['Environment', briefing.environment],
-      ['Owning team', briefing.owner],
+      ['What was noticed', briefing.summary],
+      ['When it was noticed', `${briefing.detected_offset_minutes} minutes ago, at ${this.localTime(briefing.detected_offset_minutes)} local time`],
+      ['Likely impact', briefing.impact],
+      ...(triageRequest ? [['Investigation focus', triageRequest.value]] : []),
     ];
-    for (const [label, value, secondary] of facts) {
-      const item = this.node('div', 'briefing-metadata-item');
-      item.append(this.node('dt', '', label), this.node('dd', '', value));
-      if (secondary) item.append(this.node('small', '', secondary));
-      metadata.append(item);
+    const factList = this.node('ul', 'briefing-facts');
+    factList.id = 'incident-briefing-facts';
+    for (const [label, value] of facts) {
+      const item = this.node('li', 'briefing-fact');
+      item.append(this.node('strong', '', label), this.node('p', '', value));
+      factList.append(item);
     }
-
-    const impact = this.node('section', 'briefing-impact');
-    impact.append(this.node('h2', '', 'What we know'), this.node('p', '', briefing.impact));
-    const signals = this.node('ul', 'briefing-signals');
-    for (const signal of briefing.signals || []) {
-      const item = this.node('li', 'briefing-signal');
-      item.append(this.node('span', 'briefing-signal-dot'), this.node('span', 'briefing-signal-label', signal.label), this.node('strong', '', signal.value));
-      signals.append(item);
-    }
-    main.append(eyebrow, title, summary, metadata, impact, signals);
+    main.append(eyebrow, title, factList);
 
     const footer = this.node('footer', 'briefing-footer');
     const timing = this.node('div', 'briefing-timing');
@@ -141,7 +135,7 @@ class IncidentBriefing {
     requestAnimationFrame(() => {
       const fill = dialog.querySelector('.briefing-timer-fill');
       fill.style.transitionDuration = `${duration}ms`;
-      fill.style.transform = 'scaleX(0)';
+      fill.style.transform = 'scaleX(1)';
     });
     begin.focus();
     return promise;
@@ -173,13 +167,11 @@ class IncidentBriefing {
     .briefing-status { display:flex;gap:7px;align-items:center; }.briefing-status span { padding:6px 9px;border-radius:999px;color:#fff;font-size:11px;font-weight:760;letter-spacing:.055em;text-transform:uppercase;box-shadow:0 5px 18px #0005; }.briefing-severity { background:#c83d2e; }.briefing-state { background:#8c5200; }
     .briefing-main { padding:26px 30px 20px; }
     .briefing-eyebrow { display:flex;align-items:center;gap:9px;color:#a12d22;font-size:11px;font-weight:800;letter-spacing:.09em;text-transform:uppercase; }.briefing-eyebrow span:first-child::before { content:"";display:inline-block;width:7px;height:7px;margin-right:7px;border-radius:50%;background:#d13b2d;box-shadow:0 0 0 5px #d13b2d18; }.briefing-mode { padding-left:9px;border-left:1px solid #bdc9d3;color:#456074; }
-    .incident-briefing h1 { max-width:720px;margin:10px 0 8px;font-size:29px;line-height:1.16;letter-spacing:-.025em;color:#0b2030; }.briefing-summary { max-width:780px;margin:0;color:#4b6172;font-size:16px;line-height:1.55; }
-    .briefing-metadata { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:22px 0 18px; }.briefing-metadata-item { min-width:0;padding:12px 14px;border:1px solid #d7e1e8;border-radius:10px;background:#fff;box-shadow:0 3px 12px #18364e0a; }.briefing-metadata dt { margin-bottom:4px;color:#657888;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase; }.briefing-metadata dd { margin:0;color:#163247;font-size:14px;font-weight:720;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }.briefing-metadata small { display:block;margin-top:2px;color:#738695;font-size:11px; }
-    .briefing-impact { padding:15px 17px;border-left:5px solid #d67a18;border-radius:8px;background:#fff7ea; }.briefing-impact h2 { margin:0 0 4px;color:#7d4304;font-size:11px;letter-spacing:.08em;text-transform:uppercase; }.briefing-impact p { margin:0;color:#493b2b;line-height:1.52; }
-    .briefing-signals { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:14px 0 0;padding:0;list-style:none; }.briefing-signal { position:relative;min-width:0;padding:12px 12px 12px 28px;border:1px solid #d8e2e9;border-radius:9px;background:#eef4f7; }.briefing-signal-dot { position:absolute;left:12px;top:17px;width:7px;height:7px;border-radius:50%;background:#1784a8;box-shadow:0 0 0 4px #1784a815; }.briefing-signal-label,.briefing-signal strong { display:block; }.briefing-signal-label { color:#607786;font-size:10px;font-weight:800;letter-spacing:.065em;text-transform:uppercase; }.briefing-signal strong { margin-top:4px;color:#1d3647;font-size:12px;line-height:1.42; }
-    .briefing-footer { position:sticky;bottom:0;display:flex;align-items:center;justify-content:space-between;gap:20px;padding:16px 30px;border-top:1px solid #d6e0e7;background:#fff;box-shadow:0 -8px 28px #1730470c; }.briefing-timing { flex:1;min-width:150px; }.briefing-countdown-copy { display:block;margin-bottom:7px;color:#5c7080;font-size:12px; }.briefing-seconds { color:#163247;font-variant-numeric:tabular-nums; }.briefing-timer-track { display:block;width:min(320px,100%);height:5px;overflow:hidden;border-radius:5px;background:#d9e5ec; }.briefing-timer-fill { display:block;width:100%;height:100%;border-radius:inherit;background:linear-gradient(90deg,#0b8fbe,#43c79e);transform:scaleX(1);transform-origin:left;transition-property:transform;transition-timing-function:linear; }
+    .incident-briefing h1 { max-width:650px;margin:11px 0 22px;font-size:29px;line-height:1.16;letter-spacing:-.025em;color:#0b2030; }
+    .briefing-facts { display:grid;gap:10px;margin:0;padding:0;list-style:none; }.briefing-fact { position:relative;padding:14px 16px 14px 38px;border:1px solid #d8e2e9;border-radius:10px;background:#fff;box-shadow:0 3px 12px #18364e0a; }.briefing-fact::before { content:"";position:absolute;left:17px;top:20px;width:8px;height:8px;border-radius:50%;background:#1784a8;box-shadow:0 0 0 4px #1784a815; }.briefing-fact strong { display:block;margin-bottom:4px;color:#315268;font-size:11px;letter-spacing:.065em;text-transform:uppercase; }.briefing-fact p { margin:0;color:#21394a;font-size:14px;line-height:1.48; }
+    .briefing-footer { position:sticky;bottom:0;display:flex;align-items:center;justify-content:space-between;gap:20px;padding:16px 30px;border-top:1px solid #d6e0e7;background:#fff;box-shadow:0 -8px 28px #1730470c; }.briefing-timing { flex:1;min-width:150px; }.briefing-countdown-copy { display:block;margin-bottom:7px;color:#5c7080;font-size:12px; }.briefing-seconds { color:#163247;font-variant-numeric:tabular-nums; }.briefing-timer-track { display:block;width:min(320px,100%);height:5px;overflow:hidden;border-radius:5px;background:#d9e5ec; }.briefing-timer-fill { display:block;width:100%;height:100%;border-radius:inherit;background:linear-gradient(90deg,#0b8fbe,#43c79e);transform:scaleX(0);transform-origin:left;transition-property:transform;transition-timing-function:linear; }
     .briefing-begin { flex:0 0 auto;border:0;border-radius:8px;padding:10px 16px;background:#0879a5;color:#fff;font:700 13px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 5px 14px #0879a52e;cursor:pointer; }.briefing-begin:hover { background:#06688e; }.briefing-begin:focus-visible { outline:3px solid #55bde4;outline-offset:3px; }
-    @media (max-width:700px) { dialog.incident-briefing { width:calc(100vw - 16px);max-height:calc(100vh - 16px);border-radius:13px; }.briefing-hero { height:170px; }.briefing-hero-shade { padding:14px; }.briefing-source { max-width:64%; }.briefing-source-copy small { display:none; }.briefing-status { flex-direction:column;align-items:flex-end; }.briefing-main { padding:20px 18px 16px; }.incident-briefing h1 { font-size:23px; }.briefing-metadata,.briefing-signals { grid-template-columns:1fr; }.briefing-footer { padding:13px 18px; } }
+    @media (max-width:700px) { dialog.incident-briefing { width:calc(100vw - 16px);max-height:calc(100vh - 16px);border-radius:13px; }.briefing-hero { height:170px; }.briefing-hero-shade { padding:14px; }.briefing-source { max-width:64%; }.briefing-source-copy small { display:none; }.briefing-status { flex-direction:column;align-items:flex-end; }.briefing-main { padding:20px 18px 16px; }.incident-briefing h1 { margin-bottom:18px;font-size:23px; }.briefing-eyebrow { flex-wrap:wrap; }.briefing-footer { padding:13px 18px; } }
     @media (prefers-reduced-motion:reduce) { .briefing-timer-fill { transition:none!important; } dialog.incident-briefing::backdrop { backdrop-filter:none; } }
   `;
 }

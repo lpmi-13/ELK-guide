@@ -377,63 +377,18 @@
       launchStatus.replaceChildren(document.createTextNode(`${message} `), link);
       launchStatus.hidden = false;
     }
-    // The destination tab is opened during the Start click (so the browser does not
-    // block it) and shows a self-animating "preparing" page. The bar can't track real
-    // progress (the backend reports readiness as a single near-final flip), so it
-    // trickles forward on a decelerating time curve — always moving, never claiming
-    // 100% until we flag __done, at which point it fills and navigates itself to
-    // Kibana via __url. __halt freezes it (coach unavailable / failure). The animation
-    // must live in the tab: a backgrounded launcher can't drive smooth frames.
+    // Open a real same-origin page during the Start click so popup blockers permit it
+    // and the browser tab has a useful title from its first response. The page owns
+    // its progress animation and reads these expando flags before replacing itself
+    // with Kibana: __done + __url on success, or __halt on failure.
     function openPrepTab() {
-      const tab = window.open('', '_blank');
-      if (!tab) return null;
-      try {
-        tab.document.write(`<!doctype html><meta charset="utf-8"><title>Preparing investigation…</title>
-<style>
-  :root{color-scheme:dark}
-  body{margin:0;min-height:100vh;display:grid;place-items:center;font:15px system-ui,sans-serif;background:#0d1721;color:#eef5fb}
-  main{width:min(520px,calc(100% - 48px));text-align:center;padding:24px}
-  h1{font-size:20px;margin:0 0 10px}
-  #msg{color:#c6d4df;margin:0 0 18px;line-height:1.5}
-  progress{width:100%;height:14px;border:0;border-radius:999px;background:#09121a;accent-color:#32b8eb}
-  progress::-webkit-progress-bar{background:#09121a;border-radius:999px;box-shadow:inset 0 0 0 1px #334b5e}
-  progress::-webkit-progress-value{background:linear-gradient(90deg,#1b78b5,#32b8eb);border-radius:999px}
-  progress::-moz-progress-bar{background:linear-gradient(90deg,#1b78b5,#32b8eb);border-radius:999px}
-  a{display:inline-block;margin-top:18px;padding:10px 16px;border-radius:6px;background:#1b78b5;color:#fff;font-weight:700;text-decoration:none}
-  [hidden]{display:none}
-</style>
-<body><main>
-  <h1 id="h">Preparing your investigation…</h1>
-  <p id="msg">Setting up evidence in Kibana…</p>
-  <progress id="p" value="0" max="1000"></progress>
-  <p id="extra" hidden><a id="go" href="#">Open Kibana</a></p>
-</main>
-<script>
-(function(){
-  var bar=document.getElementById('p'); if(!bar) return;
-  var shown=40, start=Date.now();
-  function step(){
-    if(window.__halt) return;
-    var ceil = window.__done ? 1000 : 900*(1-Math.exp(-((Date.now()-start)/1000)/5));
-    shown += (ceil-shown)*(window.__done?0.2:0.08);
-    if(!window.__done && shown>985) shown=985;
-    bar.value=Math.min(Math.round(shown),1000);
-    if(window.__done && shown>=999){ bar.value=1000; if(window.__url){ location.href=window.__url; } return; }
-    requestAnimationFrame(step);
-  }
-  requestAnimationFrame(step);
-})();
-<\/script>
-</body>`);
-        tab.document.close();
-      } catch (_error) {}
-      return tab;
+      return window.open('/preparing', '_blank');
     }
     function prepTabDoc() {
       try { return (investigationTab && !investigationTab.closed) ? investigationTab.document : null; }
       catch (_error) { return null; }
     }
-    // Set expando flags the prep page's animation loop reads (same-origin about:blank).
+    // Set expando flags read by the same-origin preparation page's animation loop.
     function signalTab(props) {
       if (!investigationTab || investigationTab.closed) return false;
       try { Object.assign(investigationTab, props); return true; }
@@ -443,6 +398,7 @@
       const doc = prepTabDoc();
       if (!doc) return false;
       const set = (id, text) => { const el = doc.getElementById(id); if (el && text != null) el.textContent = text; };
+      doc.title = heading;
       set('h', heading);
       set('msg', message);
       const extra = doc.getElementById('extra'), go = doc.getElementById('go');

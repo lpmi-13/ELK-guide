@@ -3,10 +3,10 @@ class IncidentCoachPanel {
     this.host = host;
     this.root = host.attachShadow({mode: 'open'});
     this.root.innerHTML = `<style>${IncidentCoachPanel.styles}</style>
-      <aside class="panel" aria-label="Incident coach">
+      <aside class="panel" aria-label="Incident coach" hidden>
         <header><span class="live-dot"></span><strong>Incident coach</strong><button id="stop" title="Stop automation">Stop</button></header>
         <div class="progress" aria-hidden="true"><span></span></div>
-        <p id="mode"></p><h2 id="objective">Waiting for a session…</h2>
+        <p id="mode"></p><h2 id="objective"></h2>
         <section id="stage" aria-live="polite">
           <p id="phase-eyebrow" class="eyebrow"></p>
           <p id="phase-headline"></p>
