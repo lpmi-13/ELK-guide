@@ -72,16 +72,16 @@ class IncidentBriefing {
 
     const triageRequest = (briefing.signals || []).find(signal => /triage request/i.test(signal.label));
     const facts = [
-      ['What was noticed', briefing.summary],
-      ['When it was noticed', `${briefing.detected_offset_minutes} minutes ago, at ${this.localTime(briefing.detected_offset_minutes)} local time`],
-      ['Likely impact', briefing.impact],
-      ...(triageRequest ? [['Investigation focus', triageRequest.value]] : []),
+      briefing.summary,
+      `Noticed ${briefing.detected_offset_minutes} minutes ago, at ${this.localTime(briefing.detected_offset_minutes)} local time.`,
+      briefing.impact,
+      ...(triageRequest ? [`The first task is to ${String(triageRequest.value).charAt(0).toLowerCase()}${String(triageRequest.value).slice(1)}.`] : []),
     ];
     const factList = this.node('ul', 'briefing-facts');
     factList.id = 'incident-briefing-facts';
-    for (const [label, value] of facts) {
+    for (const value of facts) {
       const item = this.node('li', 'briefing-fact');
-      item.append(this.node('strong', '', label), this.node('p', '', value));
+      item.append(this.node('p', '', value));
       factList.append(item);
     }
     main.append(eyebrow, title, factList);
@@ -175,7 +175,7 @@ class IncidentBriefing {
     .briefing-main { padding:26px 30px 20px; }
     .briefing-eyebrow { display:flex;align-items:center;gap:9px;color:#a12d22;font-size:11px;font-weight:800;letter-spacing:.09em;text-transform:uppercase; }.briefing-eyebrow span:first-child::before { content:"";display:inline-block;width:7px;height:7px;margin-right:7px;border-radius:50%;background:#d13b2d;box-shadow:0 0 0 5px #d13b2d18; }.briefing-mode { padding-left:9px;border-left:1px solid #bdc9d3;color:#456074; }
     .incident-briefing h1 { max-width:650px;margin:11px 0 22px;font-size:29px;line-height:1.16;letter-spacing:-.025em;color:#0b2030; }
-    .briefing-facts { display:grid;gap:10px;margin:0;padding:0;list-style:none; }.briefing-fact { position:relative;padding:14px 16px 14px 38px;border:1px solid #d8e2e9;border-radius:10px;background:#fff;box-shadow:0 3px 12px #18364e0a; }.briefing-fact::before { content:"";position:absolute;left:17px;top:20px;width:8px;height:8px;border-radius:50%;background:#1784a8;box-shadow:0 0 0 4px #1784a815; }.briefing-fact strong { display:block;margin-bottom:4px;color:#315268;font-size:11px;letter-spacing:.065em;text-transform:uppercase; }.briefing-fact p { margin:0;color:#21394a;font-size:14px;line-height:1.48; }
+    .briefing-facts { display:grid;gap:14px;margin:0;padding:20px 22px;list-style:none;border:1px solid #d8e2e9;border-radius:12px;background:#fff;box-shadow:0 3px 12px #18364e0a; }.briefing-fact { position:relative;padding:0 0 0 22px; }.briefing-fact::before { content:"";position:absolute;left:2px;top:7px;width:8px;height:8px;border-radius:50%;background:#1784a8;box-shadow:0 0 0 4px #1784a815; }.briefing-fact p { margin:0;color:#21394a;font-size:14px;line-height:1.5; }
     .briefing-footer { position:sticky;bottom:0;display:flex;align-items:center;justify-content:space-between;gap:20px;padding:16px 30px;border-top:1px solid #d6e0e7;background:#fff;box-shadow:0 -8px 28px #1730470c; }.briefing-footer.review { justify-content:flex-end; }.briefing-timing { flex:1;min-width:150px; }.briefing-countdown-copy { display:block;margin-bottom:7px;color:#5c7080;font-size:12px; }.briefing-seconds { color:#163247;font-variant-numeric:tabular-nums; }.briefing-timer-track { display:block;width:min(320px,100%);height:5px;overflow:hidden;border-radius:5px;background:#d9e5ec; }.briefing-timer-fill { display:block;width:100%;height:100%;border-radius:inherit;background:linear-gradient(90deg,#0b8fbe,#43c79e);transform:scaleX(0);transform-origin:left;transition-property:transform;transition-timing-function:linear; }
     .briefing-begin { flex:0 0 auto;border:0;border-radius:8px;padding:10px 16px;background:#0879a5;color:#fff;font:700 13px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 5px 14px #0879a52e;cursor:pointer; }.briefing-begin:hover { background:#06688e; }.briefing-begin:focus-visible { outline:3px solid #55bde4;outline-offset:3px; }
     @media (max-width:700px) { dialog.incident-briefing { width:calc(100vw - 16px);max-height:calc(100vh - 16px);border-radius:13px; }.briefing-hero { height:170px; }.briefing-hero-shade { padding:14px; }.briefing-source { max-width:64%; }.briefing-source-copy small { display:none; }.briefing-status { flex-direction:column;align-items:flex-end; }.briefing-main { padding:20px 18px 16px; }.incident-briefing h1 { margin-bottom:18px;font-size:23px; }.briefing-eyebrow { flex-wrap:wrap; }.briefing-footer { padding:13px 18px; } }
