@@ -13,7 +13,7 @@ class IncidentCoachPanel {
           <p id="phase-detail" class="muted"></p>
           <div id="countdown" class="countdown" aria-hidden="true" hidden><span></span></div>
         </section>
-        <div class="actions"><button id="pause">Pause</button><button id="skip" title="Skip this demonstration step">Skip</button><button id="hint">Hint</button><button id="demonstrate">Show me</button></div>
+        <div class="actions"><button id="pause">Pause</button><button id="skip" title="Skip this demonstration step">Skip</button><button id="incident-info" title="Review the initial incident briefing">Incident info</button><button id="hint">Hint</button><button id="demonstrate">Show me</button></div>
         <form id="diagnosis" hidden>
           <label>Faulty service<input name="service" required></label>
           <label>Failure type<select name="fault_type"><option value="latency">Latency</option><option value="error">Errors</option><option value="unavailable">Unavailable</option></select></label>
@@ -29,6 +29,7 @@ class IncidentCoachPanel {
     this.spotlight = new IncidentSpotlight(this.root);
     this.debrief = new IncidentDebrief(this.root);
     this.briefing = new IncidentBriefing(this.root);
+    this.currentBriefing = null;
     this.paused = false;
     this.activeTarget = null;
     this.activeCommandId = null;
@@ -47,6 +48,9 @@ class IncidentCoachPanel {
     };
     this.root.querySelector('#hint').onclick = () => this.onHint?.();
     this.root.querySelector('#demonstrate').onclick = () => this.onDemonstrate?.();
+    this.root.querySelector('#incident-info').onclick = () => {
+      if (this.currentBriefing) this.briefing.show(this.currentBriefing, {review: true});
+    };
     this.root.querySelector('#stop').onclick = () => this.onStop?.();
     this.root.querySelector('#diagnosis').addEventListener('submit', event => {
       event.preventDefault();
@@ -81,6 +85,7 @@ class IncidentCoachPanel {
 
   showBriefing(briefing) {
     this.host.hidden = false;
+    this.currentBriefing = briefing;
     return this.briefing.show(briefing);
   }
 
@@ -93,7 +98,9 @@ class IncidentCoachPanel {
     this.root.querySelector('#mode').textContent = `${command.mode} · step ${command.step_index + 1} of ${command.step_count}`;
     this.root.querySelector('#objective').textContent = command.step_id.replaceAll('-', ' ');
     this.root.querySelector('.progress span').style.width = `${100 * command.step_index / command.step_count}%`;
+    this.root.querySelector('#pause').hidden = command.mode !== 'demonstration';
     this.root.querySelector('#demonstrate').hidden = command.mode !== 'guided';
+    this.root.querySelector('#incident-info').hidden = command.mode !== 'guided' || !this.currentBriefing;
     const skip = this.root.querySelector('#skip');
     skip.hidden = command.mode !== 'demonstration';
     skip.disabled = false;

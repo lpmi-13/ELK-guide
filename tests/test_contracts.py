@@ -109,6 +109,19 @@ class ContractTests(unittest.TestCase):
         self.assertIn("/incident-coach/assets/src/ui/incident-briefing.js", gateway)
         self.assertTrue((ROOT / "kibana-coach/assets/incident-signal.webp").is_file())
 
+    def test_guided_mode_can_reopen_the_incident_briefing_without_a_pause_control(self):
+        coach = (ROOT / "kibana-coach/src/ui/coach-panel.js").read_text(encoding="utf-8")
+        briefing = (ROOT / "kibana-coach/src/ui/incident-briefing.js").read_text(encoding="utf-8")
+
+        self.assertIn('<button id="incident-info"', coach)
+        self.assertIn("this.currentBriefing = briefing", coach)
+        self.assertIn("this.briefing.show(this.currentBriefing, {review: true})", coach)
+        self.assertIn("command.mode !== 'guided' || !this.currentBriefing", coach)
+        self.assertIn("command.mode !== 'demonstration'", coach)
+        self.assertIn("show(briefing, {review = false} = {})", briefing)
+        self.assertIn("review ? 'Return to guided practice'", briefing)
+        self.assertIn("if (!review) {", briefing)
+
     def test_demonstration_explains_and_visibly_performs_the_trace_pivot(self):
         playbook = json.loads((ROOT / "learning/playbooks/slow-service-investigation.json").read_text())
         trace_step = next(step for step in playbook["steps"] if step["id"] == "inspect-correlated-trace")
