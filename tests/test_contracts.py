@@ -159,20 +159,20 @@ class ContractTests(unittest.TestCase):
             self.assertIn(key, bootstrap)
             self.assertIn(key, recorder)
 
-    def test_launcher_uses_scenario_keys_and_unambiguous_evidence_progress(self):
+    def test_launcher_uses_scenario_keys_and_new_tab_handoff(self):
         launcher = (ROOT / "telemetry/index.html").read_text(encoding="utf-8")
         self.assertIn('id="scenario-key"', launcher)
         self.assertIn('minlength="10" maxlength="40"', launcher)
         self.assertNotIn('id="scenario-key" type="text" value="quiet-river-signal" pattern=', launcher)
         self.assertIn("scenario_key:scenarioKey.value", launcher)
-        self.assertIn('id="evidence-progress"', launcher)
-        self.assertIn('id="manual-open" hidden', launcher)
-        self.assertIn('id="open-kibana-link" class="button"', launcher)
+        self.assertNotIn('id="session-card"', launcher)
+        self.assertNotIn('id="evidence-progress"', launcher)
+        self.assertNotIn("Incident evidence is ready", launcher)
+        self.assertIn('id="launch-status" role="status" aria-live="polite" hidden', launcher)
         self.assertIn("investigationTab = openPrepTab()", launcher)
         self.assertIn("signalTab({__url: investigationUrl, __done: true})", launcher)
-        self.assertIn("evidenceProgress.value = Math.min(indexed, threshold)", launcher)
-        self.assertNotIn("minimum of ${required} met", launcher)
-        self.assertNotIn("${count} of ${required} affected traces", launcher)
+        self.assertIn("if (!investigationTab) setLaunchStatus", launcher)
+        self.assertIn("revealManualOpen('Investigation ready.')", launcher)
 
         manifest_schema = json.loads((ROOT / "learning/schemas/run-manifest.schema.json").read_text())
         scenario_key = manifest_schema["properties"]["scenario_key"]

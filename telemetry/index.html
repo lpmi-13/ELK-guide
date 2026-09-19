@@ -13,7 +13,6 @@
     #coach-runtime { color:#f5b342; } #coach-runtime.online { color:#43d7a0; } #coach-runtime.error { color:#ff8878; }
     #telemetry { color:#f5b342; } #telemetry.online { color:#43d7a0; }
     main { display:grid;grid-template-columns:minmax(0,580px);justify-content:center;gap:24px; }
-    main:has(#session-card:not([hidden])) { grid-template-columns:minmax(0,1fr) minmax(300px,.75fr);justify-content:stretch; }
     main > section { background:#142331;border:1px solid #2e4559;border-radius:12px;padding:24px;box-shadow:0 14px 40px #0003; }
     h2 { margin-top:0;font-size:20px; } p { line-height:1.55;color:#c6d4df; } label { display:block;font-weight:650;margin-top:14px; }
     input,select { width:100%;box-sizing:border-box;margin-top:5px;padding:9px;border:1px solid #668096;border-radius:5px;background:#0c1822;color:#fff;font:inherit; }
@@ -34,17 +33,9 @@
     .field-row { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end; }
     .field-row button { margin-top:5px;padding:9px 12px;border:1px solid #668096;background:#203447;white-space:nowrap; }
     .field-help { margin:6px 0 0;font-size:13px;color:#90a5b6; }
-    #session-card { border-left:4px solid #ffb000; } #session-card[hidden] { display:none; }
-    .evidence-progress { margin-top:20px; }
-    #readiness { margin:0;font-weight:650;color:#dbe8f1; }
-    #evidence-progress { display:block;width:100%;height:14px;margin-top:10px;border:0;border-radius:999px;background:#09121a;overflow:hidden;accent-color:#32b8eb; }
-    #evidence-progress::-webkit-progress-bar { background:#09121a;border-radius:999px;box-shadow:inset 0 0 0 1px #334b5e; }
-    #evidence-progress::-webkit-progress-value { background:linear-gradient(90deg,#1b78b5,#32b8eb);border-radius:999px;transition:width .35s ease; }
-    #evidence-progress::-moz-progress-bar { background:linear-gradient(90deg,#1b78b5,#32b8eb);border-radius:999px; }
-    .evidence-progress.ready #evidence-progress::-webkit-progress-value { background:linear-gradient(90deg,#168a65,#43d7a0); }
-    .evidence-progress.ready #evidence-progress::-moz-progress-bar { background:linear-gradient(90deg,#168a65,#43d7a0); }
-    #manual-open { margin-top:20px; } #manual-open[hidden] { display:none; }
-    #open-kibana-link { width:100%;box-sizing:border-box;text-align:center; }
+    #launch-status { margin:14px 0 0;color:#c6d4df; }
+    #launch-status[hidden] { display:none; }
+    #launch-status a { color:#78c7ff; }
     ol { color:#c6d4df;padding-left:20px;line-height:1.65; }
     .section-heading { display:flex;align-items:center;justify-content:space-between;gap:18px; }
     .section-heading h2 { margin-bottom:0; }
@@ -69,7 +60,7 @@
       header h1{font-size:21px}
       .connection-statuses{align-items:flex-start;flex-wrap:wrap;gap:6px 14px;margin-top:10px}
       .connection-status{white-space:normal}
-      main,main:has(#session-card:not([hidden])){grid-template-columns:1fr;justify-content:stretch}
+      main{grid-template-columns:1fr;justify-content:stretch}
       .scenario-catalog{grid-template-columns:1fr}
       .field-row{grid-template-columns:1fr}
       .dialog-content{padding:20px}
@@ -104,16 +95,9 @@
         </div>
         <p class="field-help" id="scenario-key-help">Use any 10–40 characters. Reuse the same key to replay this incident variation.</p>
         <button id="start" type="submit" disabled>Start selected scenario</button>
+        <p id="launch-status" role="status" aria-live="polite" hidden></p>
       </form>
       <p class="muted">Capability-gated extensions are disabled with a reason when the local Kibana installation cannot support them.</p>
-    </section>
-    <section id="session-card" hidden>
-      <h2>Preparing your investigation…</h2>
-      <div class="evidence-progress">
-        <p id="readiness" role="status" aria-live="polite">Preparing investigation evidence…</p>
-        <progress id="evidence-progress" value="0" max="10" aria-label="Investigation evidence preparation" aria-describedby="readiness"></progress>
-      </div>
-      <p id="manual-open" hidden><a id="open-kibana-link" class="button" href="#" target="_blank" rel="noopener">Open the investigation in Kibana</a></p>
     </section>
   </main>
   <dialog id="instructions" aria-labelledby="instructions-title" aria-describedby="instructions-list">
@@ -140,14 +124,9 @@
     const modeSelect = document.querySelector('#mode');
     const modeControl = modeSelect.closest('.select-control');
     const modeLabel = document.querySelector('#mode-label');
-    const card = document.querySelector('#session-card');
     const scenarioKey = document.querySelector('#scenario-key');
     const scenarioCatalog = document.querySelector('#scenario-catalog');
-    const evidenceProgress = document.querySelector('#evidence-progress');
-    const evidenceProgressContainer = document.querySelector('.evidence-progress');
-    const readiness = document.querySelector('#readiness');
-    const manualOpen = document.querySelector('#manual-open');
-    const openLink = document.querySelector('#open-kibana-link');
+    const launchStatus = document.querySelector('#launch-status');
     const instructions = document.querySelector('#instructions');
     const instructionsStorageKey = 'adaptive-kibana-how-it-works-dismissed-v1';
     let investigationUrl = '';
@@ -366,13 +345,6 @@
       const values = crypto.getRandomValues(new Uint32Array(3));
       return keyWords.map((words, index) => words[values[index] % words.length]).join('-');
     }
-    function updateEvidenceProgress(count, required) {
-      const threshold = Math.max(Number(required) || 1, 1);
-      const indexed = Math.max(Number(count) || 0, 0);
-      evidenceProgress.max = threshold;
-      evidenceProgress.value = Math.min(indexed, threshold);
-    }
-
     function addSessionHandoff(url) {
       if (!sessionConnection) return url;
       const target = new URL(url, kibanaUrl);
@@ -388,10 +360,22 @@
       return target.href;
     }
 
+    function setLaunchStatus(message) {
+      launchStatus.textContent = message;
+      launchStatus.hidden = false;
+    }
+    function clearLaunchStatus() {
+      launchStatus.replaceChildren();
+      launchStatus.hidden = true;
+    }
     function revealManualOpen(message) {
-      openLink.href = investigationUrl;
-      manualOpen.hidden = false;
-      if (message) readiness.textContent = message;
+      const link = document.createElement('a');
+      link.href = investigationUrl;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = 'Open the investigation in Kibana';
+      launchStatus.replaceChildren(document.createTextNode(`${message} `), link);
+      launchStatus.hidden = false;
     }
     // The destination tab is opened during the Start click (so the browser does not
     // block it) and shows a self-animating "preparing" page. The bar can't track real
@@ -472,20 +456,16 @@
       if (coachRuntimeReady) {
         launched = true;
         // Hand the URL to the prep page: it fills the bar, then navigates itself.
-        if (signalTab({__url: investigationUrl, __done: true})) {
-          readiness.textContent = 'Investigation ready — continuing in your new tab.';
-        } else {
-          revealManualOpen('Investigation ready. Open it in a new tab:');
-        }
+        if (signalTab({__url: investigationUrl, __done: true})) clearLaunchStatus();
+        else revealManualOpen('Investigation ready.');
       } else if (coachRuntimeResolved) {
         launched = true;
         const coachMsg = 'The built-in Kibana coach is unavailable. Check the Kibana gateway service, then open Kibana.';
         if (prepTabDoc()) {
           signalTab({__halt: true});
           tabMessage('Evidence is ready', coachMsg, investigationUrl);
-          readiness.textContent = 'Evidence is ready, but the built-in Kibana coach is unavailable.';
         } else {
-          revealManualOpen('Evidence is ready, but the built-in Kibana coach is unavailable. Check the Kibana gateway service, then open manually:');
+          revealManualOpen('Evidence is ready, but the built-in Kibana coach is unavailable. Check the Kibana gateway service, then open manually.');
         }
       }
     }
@@ -502,23 +482,16 @@
         await new Promise(resolve => setTimeout(resolve, 2000));
         const response = await fetch(`${learningUrl}/api/runs/${runId}`);
         const run = await response.json();
-        const count = run.evidence?.completed ?? run.evidence?.affected_traces ?? 0;
-        const required = run.evidence?.required || 1;
-        updateEvidenceProgress(count, required);
         if (run.state === 'READY') {
-          document.querySelector('#session-card h2').textContent = 'Incident evidence is ready';
-          readiness.textContent = 'Investigation evidence is ready.';
-          evidenceProgress.value = evidenceProgress.max;
-          evidenceProgressContainer.className = 'evidence-progress ready';
           investigationUrl = addSessionHandoff(run.investigation_url || `${kibanaUrl}/app/discover#/view/incident-investigation`);
           send('scenario_ready', {run_id: runId});
           launchWhenReady();
           break;
         }
         if (run.state === 'FAILED' || run.state === 'ABORTED') {
-          readiness.textContent = run.error || 'Run did not become ready.';
+          const message = run.error || 'Run did not become ready.';
           signalTab({__halt: true});
-          tabMessage('Preparation did not complete', run.error || 'The run did not become ready.');
+          if (!tabMessage('Preparation did not complete', message)) setLaunchStatus(message);
           break;
         }
       }
@@ -532,33 +505,27 @@
       newKey.disabled = true;
       scenarioKey.readOnly = true;
       start.textContent = 'Activating…';
-      document.querySelector('#session-card h2').textContent = 'Preparing your investigation…';
-      readiness.textContent = 'Preparing investigation evidence…';
-      evidenceProgress.value = 0;
-      evidenceProgressContainer.className = 'evidence-progress';
+      clearLaunchStatus();
       investigationUrl = '';
       sessionConnection = null;
       launched = false;
-      manualOpen.hidden = true;
       // Open the destination tab during the click gesture (so the browser will not
       // block it) and show a live progress page in it; the same tab navigates itself
       // to Kibana when the evidence is ready (see poll + launchWhenReady).
       investigationTab = openPrepTab();
+      if (!investigationTab) setLaunchStatus('The preparation tab was blocked. A link will appear here when the investigation is ready.');
       try {
         if (!selectedScenario) throw new Error('Select an available scenario first.');
         const response = await fetch(`${learningUrl}/api/runs`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario:selectedScenario,mode:modeSelect.value,scenario_key:scenarioKey.value})});
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || `Start failed (${response.status})`);
-        card.hidden = false;
         sessionConnection = result.session;
         sessionStorage.launcherSession = result.session.session_id;
         send('scenario_started', {run_id: result.run.run_id, tutorial_mode: result.session.mode});
         await poll(result.run.run_id);
       } catch (error) {
-        readiness.textContent = error.message;
         signalTab({__halt: true});
-        tabMessage('Could not start the investigation', error.message);
-        card.hidden = false;
+        if (!tabMessage('Could not start the investigation', error.message)) setLaunchStatus(error.message);
         start.disabled = false;
       } finally {
         start.textContent = 'Start selected scenario';
