@@ -75,7 +75,7 @@ class IncidentBriefing {
       briefing.summary,
       `Noticed ${briefing.detected_offset_minutes} minutes ago, at ${this.localTime(briefing.detected_offset_minutes)} local time.`,
       briefing.impact,
-      ...(triageRequest ? [`The first task is to ${String(triageRequest.value).charAt(0).toLowerCase()}${String(triageRequest.value).slice(1)}.`] : []),
+      ...(triageRequest ? [`${String(triageRequest.value).replace(/\.\s*$/, '')}.`] : []),
     ];
     const factList = this.node('ul', 'briefing-facts');
     factList.id = 'incident-briefing-facts';

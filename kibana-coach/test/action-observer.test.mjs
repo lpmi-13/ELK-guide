@@ -39,14 +39,14 @@ function makeDom() {
 // Load the observer in this realm (not a vm sandbox) so the objects it builds share this
 // realm's prototypes and compare with deepStrictEqual. `document`/`location` are injected as
 // locals; the file's trailing globalThis assignment is harmless.
-function loadObserver(document) {
+function loadObserver(document, location = {pathname: '/app/discover', hash: '', href: ''}) {
   const code = fs.readFileSync(new URL('../src/action-observer.js', import.meta.url), 'utf8');
   const factory = new Function('document', 'location', 'setTimeout', `${code}\nreturn KibanaActionObserver;`);
-  return factory(document, {pathname: '/app/discover', hash: ''}, setTimeout);
+  return factory(document, location, setTimeout);
 }
 
-function makeObserver(document) {
-  const Observer = loadObserver(document);
+function makeObserver(document, location) {
+  const Observer = loadObserver(document, location);
   const reports = [];
   const adapter = {performing: false, resolve: () => null};
   const observer = new Observer(adapter, event => reports.push(event));
@@ -99,6 +99,78 @@ test('fieldToggle add/remove is disambiguated by the button aria-label', () => {
   assert.deepEqual(reports.map(report => report.type), ['column_added', 'column_removed']);
   assert.equal(reports[0].details.field, 'service.version');
   assert.equal(reports[1].details.field, 'service.version');
+});
+
+test('readTimeRange parses the applied window from the _g global state in the URL', () => {
+  const {document} = makeDom();
+  const href = "http://localhost:5601/s/lab-1/app/discover#/view/incident-investigation?_g=(time:(from:now-15m,to:now))&_a=(query:(language:kuery))";
+  const {observer} = makeObserver(document, {pathname: '/app/discover', href});
+  assert.deepEqual(observer.readTimeRange(), {from: 'now-15m', to: 'now', source: 'global_state'});
+  assert.equal(observer.timeRangeMinutes('now-15m', 'now'), 15);
+  assert.equal(observer.timeRangeMinutes('now-1h', 'now'), 60);
+});
+
+test('captureTimeRange reports the real window with its look-back minutes', () => {
+  const {document} = makeDom();
+  const href = "http://localhost:5601/app/discover#/?_g=(time:(from:now-15m,to:now))";
+  const {observer, reports} = makeObserver(document, {pathname: '/app/discover', href});
+  observer.captureTimeRange(true);
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].type, 'time_range_changed');
+  assert.equal(reports[0].details.from, 'now-15m');
+  assert.equal(reports[0].details.from_minutes, 15);
+  assert.equal(reports[0].state_after.time_from, 'now-15m');
+});
+
+test('a superDatePickerApplyTimeButton click captures the window after the URL settles', async () => {
+  const {document} = makeDom();
+  const href = "http://localhost:5601/app/discover#/?_g=(time:(from:now-30m,to:now))";
+  const {observer, reports} = makeObserver(document, {pathname: '/app/discover', href});
+  observer.onClick({target: element({subject: 'superDatePickerApplyTimeButton'})});
+  await new Promise(resolve => setTimeout(resolve, 320));
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].type, 'time_range_changed');
+  assert.equal(reports[0].details.from_minutes, 30);
+});
+
+test('clicking a date-picker preset (Last 15 minutes) captures the window even when it equals the default', async () => {
+  const {document} = makeDom();
+  // Discover opens at now-15m; the learner clicks the "Last 15 minutes" preset, so the URL never
+  // changes. The poll can't see that, so the click must force a capture (verified 9.5.2 subject).
+  const href = "http://localhost:5601/s/lab-1/app/discover#/?_g=(time:(from:now-15m,to:now))";
+  const {observer, reports} = makeObserver(document, {pathname: '/app/discover', href});
+  observer.lastTimeSignature = 'now-15m|now'; // baseline already adopted (no change on click)
+  observer.onClick({target: element({subject: 'dateRangePickerPresetItem-Last_15_minutes'})});
+  await new Promise(resolve => setTimeout(resolve, 320));
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].type, 'time_range_changed');
+  assert.equal(reports[0].details.from, 'now-15m');
+  assert.equal(reports[0].details.from_minutes, 15);
+});
+
+test('switching to the Custom range / Calendar tab does not report a window on its own', async () => {
+  const {document} = makeDom();
+  const href = "http://localhost:5601/app/discover#/?_g=(time:(from:now-15m,to:now))";
+  const {observer, reports} = makeObserver(document, {pathname: '/app/discover', href});
+  observer.onClick({target: element({subject: 'dateRangePickerCustomRangeNavItem'})});
+  observer.onClick({target: element({subject: 'dateRangePickerCalendarNavItem'})});
+  await new Promise(resolve => setTimeout(resolve, 320));
+  assert.equal(reports.length, 0);
+});
+
+test('the time-range poll ignores the initial load and only reports a real change', () => {
+  const {document} = makeDom();
+  const loc = {pathname: '/app/discover', href: ''};
+  const {observer, reports} = makeObserver(document, loc);
+  observer.captureTimeRange(false); // no window yet on load -> nothing to report
+  assert.equal(reports.length, 0);
+  loc.href = "http://x/app/discover#/?_g=(time:(from:now-15m,to:now))"; // app populates the default
+  observer.captureTimeRange(false); // just adopting the baseline, still no report
+  assert.equal(reports.length, 0);
+  loc.href = "http://x/app/discover#/?_g=(time:(from:now-30m,to:now))"; // learner changes it
+  observer.captureTimeRange(false);
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].details.from, 'now-30m');
 });
 
 test('a refresh-interval interaction reports auto_refresh_changed', async () => {

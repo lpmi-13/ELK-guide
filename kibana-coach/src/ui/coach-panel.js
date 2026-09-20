@@ -33,11 +33,17 @@ class IncidentCoachPanel {
     this.paused = false;
     this.activeTarget = null;
     this.activeCommandId = null;
+    // A guided step starts undimmed; the spotlight is only revealed on demonstration or a hint.
+    this.spotlightRevealed = false;
+    // A correct action is confirmed inside the panel; the next step is held until it finishes.
+    this.celebrating = false;
+    this.pendingCommand = null;
     this.reposition = () => {
-      if (!this.panel.hidden && this.activeTarget?.isConnected) {
-        this.spotlight.show(this.activeTarget);
-        this.placeAwayFrom(this.activeTarget);
-      }
+      if (this.panel.hidden || !this.activeTarget?.isConnected) return;
+      // Keep the panel clear of the control, but only re-dim/-highlight if the spotlight is
+      // already revealed — a guided step starts with nothing dimmed until the learner asks.
+      if (this.spotlightRevealed) this.spotlight.show(this.activeTarget);
+      this.placeAwayFrom(this.activeTarget);
     };
     window.addEventListener('resize', this.reposition);
     window.addEventListener('scroll', this.reposition, true);
@@ -46,7 +52,7 @@ class IncidentCoachPanel {
       event.currentTarget.disabled = true;
       this.onSkip?.();
     };
-    this.root.querySelector('#hint').onclick = () => this.onHint?.();
+    this.root.querySelector('#hint').onclick = () => this.revealHint();
     this.root.querySelector('#demonstrate').onclick = () => this.onDemonstrate?.();
     this.root.querySelector('#incident-info').onclick = () => {
       if (this.currentBriefing) this.briefing.show(this.currentBriefing, {review: true});
@@ -90,8 +96,12 @@ class IncidentCoachPanel {
   }
 
   showCommand(command, target) {
+    // Hold the next step behind an in-progress confirmation so the learner sees the success land
+    // before the card flips to the next task; finishCelebrate() replays this once it settles.
+    if (this.celebrating) { this.pendingCommand = {command, target}; return; }
     this.host.hidden = false;
     this.panel.hidden = false;
+    this.root.querySelector('#stage').classList.remove('success', 'celebrate-in');
     this.activeCommandId = command.command_id;
     this.activeTarget = target;
     this.currentCommand = command;
@@ -121,8 +131,24 @@ class IncidentCoachPanel {
       this.renderPhase({eyebrow: 'What to do', headline: command.narration || ''});
       this.root.querySelector('#stage').hidden = !command.narration;
     }
-    if (target && command.mode !== 'challenge') this.spotlight.show(target); else this.spotlight.hide();
+    // A demonstration is the coach acting on-screen, so it keeps the spotlight (dim + highlight)
+    // from the start. A guided step is the learner's to solve: begin with nothing dimmed or
+    // highlighted, and only reveal the spotlight when they explicitly ask for a hint. Challenge
+    // stays dark too. `activeTarget` is still stored above so a later hint knows what to point at.
+    this.spotlightRevealed = command.mode === 'demonstration';
+    if (target && this.spotlightRevealed) this.spotlight.show(target); else this.spotlight.hide();
     requestAnimationFrame(() => this.placeAwayFrom(target));
+  }
+
+  // A hint in guided mode dims the page and highlights the control the step is about — the first
+  // time the learner needs a nudge — in addition to requesting the worded hint from the service.
+  revealHint() {
+    if (this.activeTarget?.isConnected) {
+      this.spotlightRevealed = true;
+      this.spotlight.show(this.activeTarget);
+      this.placeAwayFrom(this.activeTarget);
+    }
+    this.onHint?.();
   }
 
   // The demonstration is revealed as one idea per card: what → why → action → learning.
@@ -234,6 +260,9 @@ class IncidentCoachPanel {
       if (!this.root.querySelector('#countdown').classList.contains('working')) this.startWorking();
     }
     if (target) {
+      // The coach is acting on this control (a demonstration or a "Show me"), so the spotlight is
+      // shown and stays revealed for repositioning on scroll/resize.
+      this.spotlightRevealed = true;
       this.spotlight.show(target);
       this.placeAwayFrom(target);
     }
@@ -305,6 +334,7 @@ class IncidentCoachPanel {
     this.cursor.hide();
     this.panel.hidden = true;
     this.activeTarget = null;
+    this.spotlightRevealed = false;
     this.phase = null;
   }
 
@@ -314,6 +344,46 @@ class IncidentCoachPanel {
     status.className = error ? 'error' : '';
   }
 
+  // Confirm the learner's correct action in the already-open panel: the current step's card turns
+  // into a green "Correct" card that animates in, holds briefly, then flips to the next step. The
+  // next command (showCommand) is deferred while this plays so the success is seen before advancing.
+  celebrate(message = '') {
+    // A demonstration narrates its own "What we learned" beat, so it needs no separate confirmation.
+    if (this.currentCommand?.mode === 'demonstration') return;
+    this.host.hidden = false;
+    this.panel.hidden = false;
+    this.celebrating = true;
+    this.phase = 'success';
+    this.resetCountdown();
+    const stage = this.root.querySelector('#stage');
+    const eyebrow = this.root.querySelector('#phase-eyebrow');
+    const detail = this.root.querySelector('#phase-detail');
+    stage.hidden = false;
+    stage.classList.remove('acting');
+    stage.classList.add('success');
+    eyebrow.hidden = false;
+    eyebrow.innerHTML = '<span class="stage-tick" aria-hidden="true"></span>Correct';
+    this.root.querySelector('#phase-headline').textContent = message || 'That step is complete.';
+    detail.hidden = true;
+    detail.textContent = '';
+    // Replay the entrance animation from a clean state.
+    stage.classList.remove('celebrate-in', 'phase-in');
+    void stage.offsetWidth;
+    stage.classList.add('celebrate-in');
+    clearTimeout(this.celebrateTimer);
+    this.celebrateTimer = setTimeout(() => this.finishCelebrate(), 1500);
+  }
+
+  // The hold is over: drop the confirmation and render the step that arrived while it was playing.
+  // With no next step yet (it is still resolving, or this was the final goal) the card simply stays.
+  finishCelebrate() {
+    this.celebrating = false;
+    if (!this.pendingCommand) return;
+    const {command, target} = this.pendingCommand;
+    this.pendingCommand = null;
+    this.showCommand(command, target);
+  }
+
   stop() {
     this.briefing.close();
     this.spotlight.hide();
@@ -321,6 +391,10 @@ class IncidentCoachPanel {
     this.panel.hidden = true;
     this.host.hidden = true;
     this.pos = null;
+    clearTimeout(this.celebrateTimer);
+    this.celebrating = false;
+    this.pendingCommand = null;
+    this.root.querySelector('#stage').classList.remove('success', 'celebrate-in');
   }
 
   static styles = `
@@ -340,13 +414,18 @@ class IncidentCoachPanel {
     .progress { height:4px;background:#dce4eb;margin:13px 0;border-radius:4px;overflow:hidden; }.progress span { display:block;height:100%;background:#006bb4;transition:width .3s; }
     label { display:block;font-weight:650;margin-top:10px; } input,select,textarea { display:block;width:100%;box-sizing:border-box;margin-top:3px;padding:7px;border:1px solid #9ba9b6;border-radius:4px;font:inherit; } textarea { min-height:58px; }
     #diagnosis button { margin-top:12px;background:#006bb4;color:#fff;border:0; } #status { min-height:18px;color:#147d5c; }.error { color:#a32b1c!important; }
+    #stage.success { border-left-color:#12a56b;background:#ecf8f2;box-shadow:0 6px 22px #12a56b24; } #stage.success .eyebrow { display:flex;align-items:center;gap:8px;color:#0b7a4f; } #stage.success #phase-headline { color:#0c3d2b; }
+    .stage-tick { flex:0 0 auto;display:inline-block;width:18px;height:18px;border-radius:50%;background:#12a56b;position:relative;transform:none;animation:tick-pop .4s .1s cubic-bezier(.22,1.4,.4,1) both; }
+    .stage-tick::after { content:"";position:absolute;left:6px;top:3px;width:4px;height:8px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(42deg); }
+    @keyframes tick-pop { from{transform:scale(0)} to{transform:scale(1)} }
+    #stage.celebrate-in { animation:celebrate-in .42s cubic-bezier(.22,1,.36,1); } @keyframes celebrate-in { from{opacity:0;transform:translateY(8px) scale(.99)} to{opacity:1;transform:none} }
     .incident-spotlight { position:fixed;z-index:1;display:none;box-sizing:border-box;border:3px solid #ffb000;border-radius:7px;box-shadow:0 0 0 9999px #10182070;pointer-events:none;transition:all .25s; }
     .incident-cursor { position:fixed;z-index:2;left:-12px;top:-12px;width:24px;height:24px;opacity:0;pointer-events:none;transition:transform var(--incident-cursor-duration, .65s) cubic-bezier(.4,.1,.6,.9),opacity .15s; }
     .incident-cursor.visible { opacity:1; }.incident-cursor:before { content:'➤';display:block;color:#ffb000;font-size:28px;filter:drop-shadow(0 2px 2px #0008);transform:rotate(-25deg); }
     .incident-cursor span { position:absolute;inset:0;border:2px solid #ffb000;border-radius:50%;opacity:0; }.incident-cursor.clicked span { animation:click-ring .5s; }
     @keyframes click-ring { from{opacity:1;transform:scale(.3)}to{opacity:0;transform:scale(2)} }
     dialog.incident-debrief { pointer-events:auto;width:min(720px,calc(100vw - 48px));max-width:none;max-height:calc(100vh - 48px);overflow:auto;box-sizing:border-box;border:0;border-radius:10px;padding:24px;box-shadow:0 14px 50px #0006;color:#17212b; }.incident-debrief::backdrop{background:#101820aa}.dialog-close{float:right;border:0;font-size:22px}.incident-debrief li{display:flex;justify-content:space-between;padding:5px 0}.incident-debrief .total{font-size:20px;font-weight:750}.incident-debrief .demo-checks{padding-left:20px}.incident-debrief .demo-checks li{display:list-item;padding:5px 0}.incident-debrief .demo-checks p{margin:3px 0}.incident-problem{margin:12px 0 18px;padding:14px 16px;border-left:5px solid #d64a3a;background:#fff3f1;border-radius:6px}.incident-problem strong{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#8c2418}.incident-problem p{margin:5px 0 0;font-size:17px;font-weight:750;line-height:1.4}.incident-conclusion{padding:12px 14px;border-left:4px solid #1aa87a;background:#eef9f5;border-radius:6px}
-    @media (prefers-reduced-motion: reduce) { *, .incident-cursor, .progress span { transition:none!important;animation:none!important; } }
+    @media (prefers-reduced-motion: reduce) { *, .incident-cursor, .progress span { transition:none!important;animation:none!important; } .stage-tick { transform:none!important; } }
   `;
 }
 

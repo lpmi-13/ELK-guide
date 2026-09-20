@@ -99,7 +99,10 @@ function startIncidentCoach() {
     client.onError = message => coach.toast(message, true);
     client.onHint = hint => coach.toast(`Hint ${hint.level}: ${hint.text}`);
     client.onActionResult = result => {
-      if (result.evaluation.outcome === 'accepted') coach.toast(result.evaluation.reason);
+      if (result.evaluation.outcome === 'accepted') {
+        const reason = String(result.evaluation.reason || '').replace(/^Completed:\s*/i, '').trim();
+        coach.celebrate(reason || 'Correct — that step is complete.');
+      }
     };
     client.onBriefing = async briefing => {
       await coach.showBriefing(briefing);
@@ -123,7 +126,17 @@ function startIncidentCoach() {
       coach.showCommand(command, target);
     };
     const session = await client.connect();
-    observer = new KibanaActionObserver(adapter, action => client.sendAction(action, 'learner'));
+    observer = new KibanaActionObserver(adapter, action => {
+      // Tag a learner's window change with when the incident was noticed (from the briefing) so
+      // the service can accept any window that reaches back far enough to include it.
+      if (action.type === 'time_range_changed') {
+        const offset = coach.currentBriefing?.detected_offset_minutes;
+        if (offset != null && action.details && action.details.incident_offset_minutes == null) {
+          action.details = {...action.details, incident_offset_minutes: offset};
+        }
+      }
+      client.sendAction(action, 'learner');
+    });
     observer.start();
     coach.onPause = paused => {
       if (paused) {

@@ -9,11 +9,18 @@ class KibanaActionObserver {
   start() {
     document.addEventListener('click', this.boundClick, true);
     document.addEventListener('keydown', this.boundKey, true);
+    // Establish the current window as the baseline so we only report the learner's own change,
+    // then poll the global-state time range. Polling catches windows set without a recognisable
+    // click — dragging a selection on the date histogram, or browser back/forward — which the
+    // click handler alone would miss.
+    this.lastTimeSignature = this.timeSignature();
+    this.timePoll = setInterval(() => { if (!this.adapter.performing) this.captureTimeRange(false); }, 700);
   }
 
   stop() {
     document.removeEventListener('click', this.boundClick, true);
     document.removeEventListener('keydown', this.boundKey, true);
+    clearInterval(this.timePoll);
   }
 
   queryValue() { return this.adapter.resolve('kibana.query_bar')?.value || ''; }
@@ -61,6 +68,93 @@ class KibanaActionObserver {
     return {type: 'auto_refresh_changed', details: {interval, paused}, state_after: {interval, paused}};
   }
 
+  // Read Kibana's applied time window from the `_g` global state in the URL — the source of truth
+  // however the range was set — falling back to the date picker's label. Kibana 9.5.2 renamed the
+  // picker (dateRangePicker*/euiQuickSelect*), so we read the resulting state rather than depend on
+  // any single control's data-test-subj.
+  readTimeRange() {
+    const href = (typeof location !== 'undefined' && location.href) || '';
+    const candidates = [href];
+    try { candidates.push(decodeURIComponent(href)); } catch (_error) { /* malformed escape */ }
+    for (const text of candidates) {
+      const match = text.match(/time:\(from:([^,]+),to:([^)]+)\)/);
+      if (match) {
+        const clean = value => value.replace(/^['"]|['"]$/g, '').trim();
+        return {from: clean(match[1]), to: clean(match[2]), source: 'global_state'};
+      }
+    }
+    const label = this.datePickerLabel();
+    if (label) return {...this.labelToRange(label), source: 'picker_label'};
+    return {from: '', to: '', source: 'unknown'};
+  }
+
+  datePickerLabel() {
+    const node = document.querySelector("[data-test-subj='dateRangePickerControlButton']")
+      || document.querySelector("[data-test-subj='superDatePickerShowDatesButton']")
+      || document.querySelector("[data-test-subj='dateRangePickerInput']");
+    return (node?.textContent || node?.value || '').trim();
+  }
+
+  // Turn a relative label like "Last 15 minutes" into an { from: 'now-15m', to: 'now' } range.
+  labelToRange(label) {
+    const match = /last\s+(\d+)\s*(second|minute|hour|day|week|month|year)s?/i.exec(label);
+    if (!match) return {from: label, to: ''};
+    const unit = {second: 's', minute: 'm', hour: 'h', day: 'd', week: 'w', month: 'M', year: 'y'}[match[2].toLowerCase()];
+    return {from: `now-${match[1]}${unit}`, to: 'now'};
+  }
+
+  timeSignature() {
+    const range = this.readTimeRange();
+    return `${range.from}|${range.to}`;
+  }
+
+  // Minutes of look-back for a window that ends at (or near) now, so the evaluator can check the
+  // window reaches back far enough to include when the incident was noticed. Returns null when the
+  // window is historical or unparseable, which the evaluator treats as "accept any applied window".
+  timeRangeMinutes(from, to) {
+    const unitMinutes = {s: 1 / 60, m: 1, h: 60, d: 1440, w: 10080, M: 43200, y: 525600};
+    const relative = /^now-(\d+(?:\.\d+)?)([smhdwMy])$/.exec(String(from).trim());
+    let minutes = null;
+    if (relative) minutes = Number(relative[1]) * unitMinutes[relative[2]];
+    else {
+      const parsed = Date.parse(from);
+      if (!Number.isNaN(parsed)) minutes = (Date.now() - parsed) / 60000;
+    }
+    if (minutes == null) return null;
+    const toText = String(to || 'now').trim();
+    if (!/^now$/i.test(toText)) {
+      const end = Date.parse(toText);
+      if (!Number.isNaN(end) && Date.now() - end > 5 * 60000) return null; // window ends in the past
+    }
+    return Math.round(minutes * 100) / 100;
+  }
+
+  // Report the applied window as time_range_changed carrying its real from/to and look-back. `force`
+  // reports even when the value is unchanged (a deliberate Apply/preset click), while the poll passes
+  // false so it only fires on an actual change; a short cooldown collapses the two into one report.
+  captureTimeRange(force = false) {
+    const range = this.readTimeRange();
+    const signature = `${range.from}|${range.to}`;
+    const previous = this.lastTimeSignature;
+    const changed = signature !== previous;
+    this.lastTimeSignature = signature;
+    if (!range.from && !range.to) return;
+    // Poll path: never fire while we are only just learning the initial window (empty -> value as
+    // the app loads), or it would auto-complete the step without the learner acting. Report only a
+    // change between two known windows; a deliberate Apply/preset click (force) always reports.
+    if (!force) {
+      const hadBaseline = Boolean(previous) && !previous.startsWith('|');
+      if (!changed || !hadBaseline) return;
+    }
+    const now = Date.now();
+    if (now - (this.lastTimeReportAt || 0) < 600) return;
+    this.lastTimeReportAt = now;
+    const details = {from: range.from, to: range.to, source: range.source};
+    const minutes = this.timeRangeMinutes(range.from, range.to);
+    if (minutes != null) details.from_minutes = minutes;
+    this.report({type: 'time_range_changed', details, state_after: {time_from: range.from, time_to: range.to}});
+  }
+
   onKey(event) {
     if (this.adapter.performing || event.key !== 'Enter') return;
     if (event.target === this.adapter.resolve('kibana.query_bar') || event.target === this.adapter.resolve('kibana.esql_editor')) {
@@ -80,8 +174,16 @@ class KibanaActionObserver {
       setTimeout(() => this.report({type: 'esql_submitted', details: {query, language: 'esql'}, state_after: {query, query_language: 'esql'}}), 50);
     } else if (/queryLanguage/i.test(subject)) {
       setTimeout(() => this.report({type: 'query_language_changed', details: {language: this.adapter.resolve('kibana.esql_editor') ? 'esql' : 'kql'}, state_after: {query_language: this.adapter.resolve('kibana.esql_editor') ? 'esql' : 'kql'}}), 100);
-    } else if (subject === 'superDatePickerApplyTimeButton' || subject.includes('CommonlyUsed')) {
-      this.report({type: 'time_range_changed', details: {from: 'browser-selected'}, state_after: {time_from: 'browser-selected'}});
+    } else if (/superDatePickerApplyTimeButton|euiQuickSelect__applyButton|dateRangePicker\w*Apply|dateRangePickerPresetItem|CommonlyUsed|superDatePickerQuickMenu/i.test(subject)) {
+      // A window was applied — via custom-range Apply (`dateRangePickerCustomRangeApplyButton`),
+      // or a preset / recent quick pick. In Kibana 9.5.2 both the Presets and Recent lists render
+      // each option as `dateRangePickerPresetItem-<label>` (e.g. Last_15_minutes, now-30m-now),
+      // verified live; the Custom-range and Calendar *NavItem* tab switches are deliberately not
+      // matched so merely opening a tab does not complete the step. Read the real range just after
+      // the click so the URL global state has settled; the poll from start() is the safety net for
+      // a drag-selection on the histogram. Force a report even when the value is unchanged: picking
+      // a preset equal to the default window (Discover opens at now-15m) is still a deliberate step.
+      setTimeout(() => this.captureTimeRange(true), 250);
     } else if (subject.includes('saveFilter') || /^(plus|minus)-/.test(subject) || /filterFor|filterOut|addFilterForValue|addFilterOutValue/i.test(subject)) {
       // A pill was applied — via the Add-filter popover's Save (`saveFilter`), or a
       // filter-for / filter-out on a field's top value (`plus-<field>-<value>` /

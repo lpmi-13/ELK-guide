@@ -13,6 +13,11 @@ import re
 
 IGNORED_ACTIONS = {"hint_requested", "command_acknowledged", "step_demonstrated"}
 
+# A window is accepted when its look-back reaches within this many minutes of when the incident
+# was first noticed, so a 15-minute window still covers an incident reported 13 minutes ago while a
+# 10-minute one (which would miss it) does not.
+TIME_WINDOW_TOLERANCE_MINUTES = 1.0
+
 
 def _details(action):
     return action.get("details") or {}
@@ -83,14 +88,31 @@ def validate_always(_session, _action, _evidence, _validator):
     return True
 
 
+def _number(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def validate_time_range(session, action, _evidence, validator):
     details, after = _details(action), _after(action)
     time_from = str(details.get("from") or after.get("time_from") or "")
     time_to = str(details.get("to") or after.get("time_to") or "")
+    if validator.get("any_valid", False):
+        if not time_from:
+            return False
+        # When both the learner's window and the reported incident offset are known, require the
+        # window to reach back far enough to include when the incident was noticed. Either value
+        # missing (an unparseable or historical window) falls back to accepting any applied window,
+        # so detection never regresses to "the correct action does nothing".
+        look_back = _number(details.get("from_minutes"))
+        incident_offset = _number(details.get("incident_offset_minutes"))
+        if look_back is not None and incident_offset is not None:
+            return look_back + TIME_WINDOW_TOLERANCE_MINUTES >= incident_offset
+        return True
     expected_from = str(validator.get("from") or _truth(session, validator.get("from_truth"), ""))
     expected_to = str(validator.get("to") or _truth(session, validator.get("to_truth"), ""))
-    if validator.get("any_valid", False):
-        return bool(time_from)
     return (not expected_from or time_from == expected_from) and (not expected_to or time_to == expected_to)
 
 
