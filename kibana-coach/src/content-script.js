@@ -105,10 +105,17 @@ function startIncidentCoach() {
       }
     };
     client.onBriefing = async briefing => {
+      // Hold the boot overlay behind the briefing, then reveal the now-loaded
+      // Kibana once the learner dismisses it — never a bare frame in between.
+      window.__coachBootOverlay?.hold();
       await coach.showBriefing(briefing);
+      window.__coachBootOverlay?.release();
       client.acknowledgeBriefing(briefing);
     };
     client.onCommand = async command => {
+      // Safety net: reveal Kibana here too, for any flow that reaches a command
+      // without first showing a briefing.
+      window.__coachBootOverlay?.release();
       currentCommand = command;
       if (command.mode === 'demonstration' && command.type === 'show_debrief') {
         finishDemonstration(command);
@@ -182,6 +189,7 @@ function startIncidentCoach() {
   const savedConfig = sessionStorage.getItem(activeSessionKey);
   if (savedConfig) {
     startSession(JSON.parse(savedConfig)).catch(error => {
+      window.__coachBootOverlay?.release();
       host.hidden = false;
       coach.toast(`Automatic connection failed: ${error.message}`, true);
     });

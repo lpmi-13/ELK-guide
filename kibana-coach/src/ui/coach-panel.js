@@ -272,6 +272,9 @@ class IncidentCoachPanel {
   // off-screen). Only then glide to the least-disruptive clear corner. Needless hops are jarring.
   placeAwayFrom(target) {
     if (this.panel.hidden) return;
+    // A null pos means the panel was just revealed: snap to the resting spot instead of gliding
+    // there from the CSS default corner (the load-time jerk/reflow). Later moves stay animated.
+    const firstPlacement = !this.pos;
     const margin = 18;
     const topMargin = 72;
     const panelRect = this.panel.getBoundingClientRect();
@@ -304,7 +307,7 @@ class IncidentCoachPanel {
       if (fits && overlap(this.pos) === 0) return;
     } else if (!targetRect) {
       this.pos = {left: maxLeft, top: topMargin};
-      this.applyPosition();
+      this.applyPosition(firstPlacement);
       return;
     }
     const distTo = position => targetRect
@@ -319,13 +322,20 @@ class IncidentCoachPanel {
     // Fewest pixels over the target, then (moving) the shortest hop, else the corner farthest from it.
     ranked.sort((a, b) => a.overlap - b.overlap || (this.pos ? a.move - b.move : b.away - a.away));
     this.pos = {left: Math.round(ranked[0].position.left), top: Math.round(ranked[0].position.top)};
-    this.applyPosition();
+    this.applyPosition(firstPlacement);
   }
 
-  applyPosition() {
+  // `instant` suppresses the panel's left/top transition for one commit so a freshly revealed panel
+  // appears at its resting spot rather than sliding in from the CSS default corner.
+  applyPosition(instant = false) {
+    if (instant) this.panel.style.transition = 'none';
     this.panel.style.left = `${this.pos.left}px`;
     this.panel.style.top = `${this.pos.top}px`;
     this.panel.style.right = 'auto';
+    if (instant) {
+      void this.panel.offsetWidth; // flush the placement before re-enabling the transition
+      this.panel.style.transition = '';
+    }
   }
 
   finishCommand(command) {
