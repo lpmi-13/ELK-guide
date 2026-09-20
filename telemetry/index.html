@@ -131,6 +131,8 @@
     const instructionsStorageKey = 'adaptive-kibana-how-it-works-dismissed-v1';
     let investigationUrl = '';
     let investigationTab = null;
+    let warmFrame = null;
+    let warmupStopTimer = null;
     let launched = false;
     let sessionConnection = null;
     let socket;
@@ -384,6 +386,33 @@
     function openPrepTab() {
       return window.open('/preparing', '_blank');
     }
+    // Cold-boot most of Kibana in the background while the evidence provisions, so
+    // the real tab loads its core and Discover bundles from cache instead of over
+    // the wire. The frame is rendered off-screen (not display:none) so Kibana truly
+    // boots and warms both the browser cache and Kibana's server-side plugin init;
+    // it carries no coach handoff parameters, so it never opens a learning session.
+    // It is torn down the moment the real navigation is committed so the live tab
+    // gets the whole CPU for its own load.
+    function startWarmup(url) {
+      stopWarmup();
+      try {
+        const frame = document.createElement('iframe');
+        frame.setAttribute('aria-hidden', 'true');
+        frame.tabIndex = -1;
+        frame.title = '';
+        frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:1280px;height:800px;border:0;';
+        frame.src = url;
+        document.body.append(frame);
+        warmFrame = frame;
+        // Never leave a second Kibana running for long if a launch never completes.
+        warmupStopTimer = setTimeout(stopWarmup, 120000);
+      } catch (_error) { /* warming is best-effort; ignore failures */ }
+    }
+    function stopWarmup() {
+      clearTimeout(warmupStopTimer);
+      warmupStopTimer = null;
+      if (warmFrame) { warmFrame.remove(); warmFrame = null; }
+    }
     function prepTabDoc() {
       try { return (investigationTab && !investigationTab.closed) ? investigationTab.document : null; }
       catch (_error) { return null; }
@@ -411,11 +440,14 @@
       if (launched || !investigationUrl) return;
       if (coachRuntimeReady) {
         launched = true;
+        // The live tab is about to load Kibana; release the CPU the warm frame holds.
+        stopWarmup();
         // Hand the URL to the prep page: it fills the bar, then navigates itself.
         if (signalTab({__url: investigationUrl, __done: true})) clearLaunchStatus();
         else revealManualOpen('Investigation ready.');
       } else if (coachRuntimeResolved) {
         launched = true;
+        stopWarmup();
         const coachMsg = 'The built-in Kibana coach is unavailable. Check the Kibana gateway service, then open Kibana.';
         if (prepTabDoc()) {
           signalTab({__halt: true});
@@ -446,6 +478,7 @@
         }
         if (run.state === 'FAILED' || run.state === 'ABORTED') {
           const message = run.error || 'Run did not become ready.';
+          stopWarmup();
           signalTab({__halt: true});
           if (!tabMessage('Preparation did not complete', message)) setLaunchStatus(message);
           break;
@@ -470,6 +503,8 @@
       // to Kibana when the evidence is ready (see poll + launchWhenReady).
       investigationTab = openPrepTab();
       if (!investigationTab) setLaunchStatus('The preparation tab was blocked. A link will appear here when the investigation is ready.');
+      // Warm Kibana's core + Discover bundles in parallel with provisioning.
+      startWarmup(`${kibanaUrl}/app/discover`);
       try {
         if (!selectedScenario) throw new Error('Select an available scenario first.');
         const response = await fetch(`${learningUrl}/api/runs`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario:selectedScenario,mode:modeSelect.value,scenario_key:scenarioKey.value})});
@@ -480,6 +515,7 @@
         send('scenario_started', {run_id: result.run.run_id, tutorial_mode: result.session.mode});
         await poll(result.run.run_id);
       } catch (error) {
+        stopWarmup();
         signalTab({__halt: true});
         if (!tabMessage('Could not start the investigation', error.message)) setLaunchStatus(error.message);
         start.disabled = false;
