@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -89,6 +90,21 @@ def load_definition(folder, identifier):
         return json.load(stream)
 
 
+def spell_duration(value):
+    """Render a compact window such as ``15m`` or ``1h`` as prose (``15 minutes``, ``1 hour``).
+
+    Coach copy spells the duration out in full; only the literal value the picker itself takes
+    (``now-15m``) stays compact. Numbers are kept (matching Kibana's own "Last 15 minutes" /
+    "Last 1 hour" quick ranges); unrecognized values pass through unchanged.
+    """
+    match = re.fullmatch(r"\s*(\d+)\s*([mh])\s*", str(value))
+    if not match:
+        return str(value)
+    amount = int(match.group(1))
+    noun = "minute" if match.group(2) == "m" else "hour"
+    return f"{amount} {noun}" if amount == 1 else f"{amount} {noun}s"
+
+
 def load_manifest_definition(manifest, kind):
     parameters = manifest.get("parameters", {})
     identifier = manifest[kind]
@@ -102,6 +118,11 @@ def load_manifest_definition(manifest, kind):
                 with template_path.open(encoding="utf-8") as stream:
                     template = json.load(stream)
                 variables = definition.get("variables", {})
+                # Offer a spelled-out companion to any compact window variable so coach copy can
+                # read "the last 15 minutes" while the picker action keeps "now-15m".
+                if "window" in variables and "window_spelled" not in variables:
+                    resolved_window = resolve_parameters(variables["window"], parameters)
+                    variables = {**variables, "window_spelled": spell_duration(resolved_window)}
 
                 def expand(value):
                     if isinstance(value, str):
@@ -161,6 +182,10 @@ def emit(session, action, evaluation=None):
 
 def create_session(run_response, mode):
     manifest = run_response["manifest"]
+    # Decide when the incident was noticed, then tie the recommended window to it before the
+    # playbook is expanded so the coach's copy, its reference action, and the graded truth all match.
+    detected_offset_minutes = select_detected_offset(manifest)
+    apply_incident_window(manifest, detected_offset_minutes)
     playbook = load_manifest_definition(manifest, "playbook")
     rubric = load_manifest_definition(manifest, "rubric")
     session_id = f"session-{uuid.uuid4().hex[:12]}"
@@ -182,6 +207,7 @@ def create_session(run_response, mode):
         "answer": None,
         "feedback": None,
         "pending_command": None,
+        "detected_offset_minutes": detected_offset_minutes,
         "briefing_acknowledged": False,
         "paused": False,
         "run_ready": False,
@@ -279,10 +305,69 @@ def stable_briefing_choice(values, session, field):
     return values[int.from_bytes(digest[:8], "big") % len(values)]
 
 
+def load_incident_briefings():
+    with (LEARNING_DIR / "incident-briefings.json").open(encoding="utf-8") as stream:
+        return json.load(stream)
+
+
+def select_detected_offset(manifest):
+    """Pick, reproducibly, how many minutes ago this run's incident was first noticed.
+
+    This is the ``Noticed N minutes ago`` fact the intake modal shows, and it is chosen
+    here (once, at session creation) so the recommended investigation window can be derived
+    from the same value the learner reads in the briefing.
+    """
+    definitions = load_incident_briefings()
+    profile = definitions.get("scenarios", {}).get(manifest["scenario"]["id"], {})
+    values = profile.get("observed_minutes_ago") or [8, 10, 12]
+    return stable_briefing_choice(values, {"manifest": manifest}, "observed_minutes_ago")
+
+
+# Scenarios whose recommended/graded window is derived from when the incident was noticed,
+# rather than drawn independently. The coach should never tell a learner to bound Discover to
+# "the last 30 minutes" for an incident the briefing says was noticed 13 minutes ago.
+INCIDENT_WINDOW_SCENARIOS = {"discover-time-window"}
+
+
+def recommended_window_minutes(offset_minutes):
+    """Round the noticed-offset up to the next 5-minute mark (6->10, 13->15, 26->30).
+
+    Rounding up (never down) keeps the window reaching back past the moment the incident was
+    noticed, which is exactly what the evaluator requires (see ``TIME_WINDOW_TOLERANCE_MINUTES``),
+    while snapping to a clean 5-minute value a learner would actually type into the time picker.
+    """
+    return max(5, math.ceil(offset_minutes / 5) * 5)
+
+
+def apply_incident_window(manifest, offset_minutes):
+    """Align this run's window (coach copy, reference action, and graded truth) with the offset.
+
+    Mutates the run's chosen ``window`` parameter so the playbook expands ``${var.window}`` to the
+    derived value, and rewrites the already-resolved truth answers so the debrief conclusion agrees.
+    It is idempotent: re-deriving from the same (unchanged) offset yields the same window.
+    """
+    scenario = manifest.get("scenario", {})
+    if scenario.get("id") not in INCIDENT_WINDOW_SCENARIOS or offset_minutes is None:
+        return
+    parameters = manifest.get("parameters") or {}
+    window = parameters.get("window")
+    if not isinstance(window, dict) or "label" not in window:
+        return
+    minutes = recommended_window_minutes(offset_minutes)
+    new_label = f"last {minutes} minutes"
+    old_label = window.get("label")
+    parameters["window"] = {"value": f"{minutes}m", "label": new_label}
+    manifest["parameters"] = parameters
+    if old_label and old_label != new_label:
+        answers = scenario.get("truth", {}).get("answers", {})
+        for key, value in answers.items():
+            if isinstance(value, str):
+                answers[key] = value.replace(old_label, new_label)
+
+
 def build_incident_briefing(session):
     """Build the non-spoiler incident intake shown before every assistance mode."""
-    with (LEARNING_DIR / "incident-briefings.json").open(encoding="utf-8") as stream:
-        definitions = json.load(stream)
+    definitions = load_incident_briefings()
     scenario = session["manifest"]["scenario"]
     raw_profile = definitions.get("scenarios", {}).get(scenario["id"], {})
     fallback = {
@@ -300,7 +385,12 @@ def build_incident_briefing(session):
     profile = resolve_parameters(profile, session["manifest"].get("parameters", {}))
     profile = substitute(profile, session)
     channel_key = stable_briefing_choice(profile.pop("channels"), session, "channel")
-    observed_minutes_ago = stable_briefing_choice(profile.pop("observed_minutes_ago"), session, "observed_minutes_ago")
+    # Reuse the offset chosen at session creation so the modal's "Noticed N minutes ago" and the
+    # window the coach recommends are guaranteed to agree; recompute only if it was never stored.
+    observed_minutes_ago = session.get("detected_offset_minutes")
+    if observed_minutes_ago is None:
+        observed_minutes_ago = stable_briefing_choice(profile["observed_minutes_ago"], session, "observed_minutes_ago")
+    profile.pop("observed_minutes_ago", None)
     source = dict(definitions["sources"][channel_key])
     source["key"] = channel_key
     source["detail"] = source["detail"].replace("${owner}", profile["owner"]).replace("${channel_slug}", scenario["id"])
