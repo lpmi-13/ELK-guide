@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, quote, urlparse
 from urllib.request import Request, urlopen
 
 from engine.evaluator import evaluate_action, playbook_goals, score_session
-from engine.contracts import assert_catalog_valid
+from engine.contracts import assert_catalog_valid, insert_goals
 
 PORT = int(os.getenv("PORT", "8091"))
 CONTROLLER_URL = os.getenv("SCENARIO_CONTROLLER_URL", "http://scenario-controller:8092").rstrip("/")
@@ -140,7 +140,8 @@ def load_manifest_definition(manifest, kind):
                 for goal in result.get("goals", []):
                     if goal["id"] in goal_overrides:
                         goal.update(goal_overrides[goal["id"]])
-                result.update(definition.get("overrides", {}))
+                insert_goals(result, definition.get("goal_inserts", []), expand)
+                result.update(expand(definition.get("overrides", {})))
                 result["id"] = definition.get("id", result["id"])
                 return resolve_parameters(result, parameters)
             return resolve_parameters(definition, parameters)
@@ -281,6 +282,9 @@ def substitute(value, session):
         "${expected_route}": expected.get("route", ""),
         "${minimum_duration_ns}": expected.get("minimum_duration_ns", 0),
         "${trace_id}": trace_id,
+        # The "Noticed N minutes ago" fact the intake modal shows. Exposed here so demonstration
+        # copy can name the same number as the briefing when it justifies the investigation window.
+        "${detected_offset_minutes}": session.get("detected_offset_minutes", ""),
     }
     for key, item in truth.get("answers", {}).items():
         replacements[f"${{truth.{key}}}"] = item

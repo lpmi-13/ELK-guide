@@ -7,6 +7,7 @@ all agree, two seeds require different filters, and the same seed is reproducibl
 
 import importlib.util
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -170,8 +171,14 @@ class RandomizationTests(unittest.TestCase):
                         self.assertGreaterEqual(len(summary["evidence"].split()), 32)
                         self.assertGreaterEqual(len(summary["conclusion"].split()), 18)
                         if entry["id"] == "discover-time-window":
-                            signal = next(check for check in summary["checks"] if check["title"] == "Signal")
-                            self.assertIn(f"isolate records pointing to the {finding}", signal["detail"])
+                            # The debrief now walks the derive-don't-presume flow: survey the status
+                            # codes, filter to the observed one, then survey the endpoints.
+                            titles = [check["title"] for check in summary["checks"]]
+                            self.assertEqual(titles, ["Scope", "Status codes", "Isolation", "Affected endpoint", "Corroboration"])
+                            status_check = next(check for check in summary["checks"] if check["title"] == "Status codes")
+                            self.assertIn("http.response.status_code", status_check["detail"])
+                            endpoint_check = next(check for check in summary["checks"] if check["title"] == "Affected endpoint")
+                            self.assertIn("url.path", endpoint_check["detail"])
                             self.assertIn(f"surged during the {finding}", summary["answer"]["conclusion"])
                     else:
                         explanation = " ".join(command[key] for key in ("narration", "reasoning", "evidence"))
@@ -186,6 +193,34 @@ class RandomizationTests(unittest.TestCase):
             self.assertEqual(guided_command["narration"], goals[0]["narration"])
             self.assertEqual(guided_command["reasoning"], "")
             self.assertEqual(guided_command["evidence"], "")
+
+    def test_demonstrated_window_always_covers_the_noticed_offset(self):
+        """The scope step tells the learner it is setting the window because the incident was
+        "noticed N minutes ago", so the demonstrated (and graded) window must always reach back
+        at least that far — otherwise the coach's stated reason contradicts the picker it sets.
+        Exercises the real create_session path (which derives the window for the time-window pack)
+        across every discover-template pack and many seeds."""
+        catalog = json.loads((ROOT / "learning/catalog.json").read_text())["scenarios"]
+        discover_packs = [
+            entry["id"] for entry in catalog
+            if json.loads((ROOT / "learning/scenarios" / entry["id"] / "playbook.json").read_text()).get("extends") == "discover.json"
+        ]
+        self.assertIn("discover-time-window", discover_packs)
+        self.assertIn("slow-payments", discover_packs)
+        for pack in discover_packs:
+            for seed in range(40):
+                session = self.server.create_session({"manifest": self.materialize(pack, seed)}, "demonstration")
+                scope = next(goal for goal in session["playbook"]["goals"] if goal["id"] == "scope")
+                window_from = scope["reference_action"]["arguments"]["from"]
+                match = re.fullmatch(r"now-(\d+)([mh])", window_from)
+                self.assertIsNotNone(match, f"{pack}: unexpected window '{window_from}'")
+                window_minutes = int(match.group(1)) * (60 if match.group(2) == "h" else 1)
+                offset = session["detected_offset_minutes"]
+                with self.subTest(pack=pack, seed=seed):
+                    self.assertGreaterEqual(
+                        window_minutes, offset,
+                        f"{pack}: window {window_minutes}m does not cover 'noticed {offset}m ago'",
+                    )
 
     def test_time_window_copy_uses_grammar_aware_finding_for_every_variant(self):
         window_options = self.template("discover-time-window")["parameters"]["window"]["choose"]
@@ -207,7 +242,7 @@ class RandomizationTests(unittest.TestCase):
             playbook = self.server.load_manifest_definition(manifest, "playbook")
             rendered = self.server.substitute(
                 playbook,
-                {"run_id": manifest["run_id"], "manifest": manifest, "actions": []},
+                {"run_id": manifest["run_id"], "manifest": manifest, "actions": [], "detected_offset_minutes": 13},
             )
             finding = option["label"]
             phrase = f"the {finding}"
@@ -221,8 +256,10 @@ class RandomizationTests(unittest.TestCase):
                     self.assertIn(phrase, value)
                     self.assertNotIn(finding, value.replace(phrase, ""))
 
+            # The isolate step now filters on the OBSERVED status code and cites the graded
+            # conclusion, which spells the window as "the <finding>".
             isolate = next(goal for goal in rendered["goals"] if goal["id"] == "isolate")
-            self.assertIn(f"records most likely to reveal {phrase}", isolate["demonstration"]["narration"])
+            self.assertIn(f"surged during the {finding}", isolate["demonstration"]["evidence"])
             self.assertGreaterEqual(len(matching_copy), 10)
 
     def test_every_mode_receives_the_same_seeded_incident_briefing(self):
@@ -236,7 +273,7 @@ class RandomizationTests(unittest.TestCase):
                 self.assertEqual(briefing["message_type"], "incident_briefing")
                 self.assertEqual(briefing["mode"], mode)
                 self.assertEqual(briefing["duration_ms"], 30_000)
-                self.assertIn(briefing["detected_offset_minutes"], [8, 10, 12])
+                self.assertIn(briefing["detected_offset_minutes"], [4, 6, 8])
                 self.assertIn(briefing["source"]["key"], {"support", "pager", "synthetics", "monitoring"})
                 self.assertEqual(len(briefing["signals"]), 3)
                 self.assertNotIn("${", json.dumps(briefing))

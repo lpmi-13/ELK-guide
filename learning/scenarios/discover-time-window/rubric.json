@@ -1,1 +1,1 @@
-{"schema_version":2,"id":"discover-time-window-rubric","extends":"analysis.json","variables":{}}
+{"schema_version":2,"id":"discover-time-window-rubric","extends":"analysis.json","variables":{},"goal_inserts":[{"after":"scope","goal":{"id":"survey"}},{"after":"isolate","goal":{"id":"endpoints"}}],"overrides":{"reference_action_cost":6}}

@@ -62,6 +62,16 @@ def action_for(goal, scenario):
             details.update({"field": validator["field"], "value": value, "negate": kind == "filter_excludes"})
         elif kind in {"inspected", "selected_entity"}:
             details.update({"entity_type": validator.get("entity_type"), "id": validator.get("value", "representative")})
+        elif kind == "detail_equals":
+            value = validator.get("value")
+            truth_key = validator.get("value_from_truth") or validator.get("values_from_truth")
+            if truth_key:
+                value = scenario["truth"]
+                for part in truth_key.split("."):
+                    value = value[part]
+                if isinstance(value, list):
+                    value = value[0]
+            details[validator.get("field") or validator.get("path")] = value
     return {"type": action_type, "details": details, "state_after": state_after}
 
 

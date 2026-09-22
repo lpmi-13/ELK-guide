@@ -1,1 +1,115 @@
-{"schema_version":2,"id":"discover-time-window-playbook","extends":"discover.json","variables":{"title":"Incident-window analysis","window":"${param.window.value}","field":"http.response.status_code","query":"http.response.status_code: ${param.incident.status} and url.path: \"${param.incident.route}\"","finding_phrase":"the ${truth.finding}"}}
+{
+  "schema_version": 2,
+  "id": "discover-time-window-playbook",
+  "extends": "discover.json",
+  "variables": {
+    "title": "Incident-window analysis",
+    "window": "${param.window.value}",
+    "field": "http.response.status_code",
+    "status_field": "http.response.status_code",
+    "route_field": "url.path",
+    "query": "http.response.status_code: ${param.incident.status} and url.path: \"${param.incident.route}\"",
+    "finding_phrase": "the ${truth.finding}"
+  },
+  "goal_overrides": {
+    "isolate": {
+      "title": "Filter to the failing status code",
+      "concept": "Filtering on a value you observed — not one you assumed — isolates the failing records.",
+      "narration": "Filter for the status code that stood out — ${param.incident.status}. Use the + beside it in the field's top values, or Add filter. The results should shrink to the failing requests.",
+      "reasoning": "The value comes from the distribution you just read, so the filter is evidence-driven rather than a guess.",
+      "evidence": "After the filter, the table and histogram shrink to the failing requests behind the incident.",
+      "demonstration": {
+        "narration": "Now that ${param.incident.status_family} stands out, filter to it: open Add filter, choose http.response.status_code, keep the operator ‘is’, and enter ${param.incident.status} (or click the + beside ${param.incident.status} in the field's top values). This keeps only the failing requests, chosen from the evidence we just gathered rather than assumed up front.",
+        "reasoning": "The window still holds healthy 200s and other traffic. Filtering to the ${param.incident.status} we watched surge — instead of a code we guessed — is what isolates the failing requests so the next question, which endpoint, has a clean population to answer it within ${truth.scope}.",
+        "evidence": "After the filter applies, the result table and histogram should shrink to the ${param.incident.status} responses. That filtered set is the signal behind “${truth.conclusion}”; next we find where those failures concentrate."
+      },
+      "requires": ["survey"],
+      "reference_action": {"command": "add_filter", "target": "kibana.filter_bar", "arguments": {"field": "${var.status_field}", "operator": "is", "value": "${param.incident.status}"}},
+      "accepts": [
+        {"action": ["filter_added", "filter_changed"], "validators": [{"kind": "filter_contains", "field": "${var.status_field}", "value": "${param.incident.status}"}, {"kind": "result_assertion", "assertion": "signal"}]},
+        {"action": ["query_submitted"], "validators": [{"kind": "query_contains", "fields": ["${var.status_field}"], "value": "${param.incident.status}"}, {"kind": "result_assertion", "assertion": "signal"}]}
+      ],
+      "hints": [
+        "Filter for the status code you just saw surge, rather than one you assumed.",
+        "Click the + beside that value in the field's top values, or use Add filter (field, operator is, value).",
+        "Filter http.response.status_code for ${param.incident.status}; Show me can add the reference filter."
+      ]
+    },
+    "inspect": {
+      "requires": ["endpoints"]
+    }
+  },
+  "goal_inserts": [
+    {
+      "after": "scope",
+      "goal": {
+        "id": "survey",
+        "title": "Survey the status codes in the window",
+        "concept": "A field's value distribution shows which outcome is abnormal before you assume one.",
+        "narration": "Open the http.response.status_code field in the sidebar and read its top values, so the data — not a guess — tells you which status code is abnormal.",
+        "reasoning": "The briefing never named a status code, so reading the distribution keeps the investigation honest.",
+        "evidence": "The field's top values reveal the abnormal status code standing out against the healthy 200s.",
+        "demonstration": {
+          "narration": "Open the http.response.status_code field in the field list and read its Top values. The briefing only said checkout felt slow and was noticed ${detected_offset_minutes} minutes ago — it never named a status code — so we let the distribution show that ${param.incident.status_family} responses are surging above the healthy 200s.",
+          "reasoning": "Filtering for a status code we assumed would beg the question. Surveying the field's distribution first is how we discover the abnormal code for ourselves, keeping the evidence for ${truth.scope} independent of the incident wording.",
+          "evidence": "The Top values panel should show ${param.incident.status} rising above the normal 200s across ${var.finding_phrase}. That is the first, still-uncorroborated sign that something is failing in ${truth.scope}; it does not yet tell us which endpoint, which we test next."
+        },
+        "requires": ["scope"],
+        "accepts": [
+          {"action": ["field_statistics_opened", "field_inspected"], "validators": [{"kind": "detail_equals", "field": "field", "value": "${var.status_field}"}]},
+          {"action": ["column_added"], "validators": [{"kind": "detail_equals", "field": "field", "value": "${var.status_field}"}]}
+        ],
+        "reference_action": {"command": "open_field_statistics", "target": "kibana.field_list", "arguments": {"field": "${var.status_field}"}},
+        "hints": [
+          "Let the data show which status code is abnormal instead of assuming one.",
+          "Open the http.response.status_code field in the sidebar and read its Top values (or add it as a column).",
+          "Open http.response.status_code and read its top values; Show me can open the reference field."
+        ]
+      }
+    },
+    {
+      "after": "isolate",
+      "goal": {
+        "id": "endpoints",
+        "title": "Find the affected endpoint",
+        "concept": "Within the failing requests, a second field's distribution shows where the failure concentrates.",
+        "narration": "With the failing status code filtered, open the url.path field and read its top values to see which endpoint the errors hit.",
+        "reasoning": "Knowing the status code is not the same as knowing where it happens; the url.path distribution shows whether one route dominates.",
+        "evidence": "The url.path top values reveal the endpoint carrying almost all of the failures.",
+        "demonstration": {
+          "narration": "With only ${param.incident.status_family} showing, open the url.path field and read its Top values. Almost all of these failing requests point at one endpoint — ${param.incident.route} — which we discover from the filtered data rather than assume.",
+          "reasoning": "A status-code spike alone could be spread across many routes (a broad outage) or concentrated on one (a specific endpoint fault). Surveying url.path inside the filtered set is what distinguishes them and ties the incident to ${truth.scope}.",
+          "evidence": "The Top values for url.path should be dominated by ${param.incident.route}. That pins the failures to a specific endpoint in ${param.incident.service} and corroborates the status-code signal behind “${truth.conclusion}” before we open a single event."
+        },
+        "requires": ["isolate"],
+        "accepts": [
+          {"action": ["field_statistics_opened", "field_inspected"], "validators": [{"kind": "detail_equals", "field": "field", "value": "${var.route_field}"}]},
+          {"action": ["column_added"], "validators": [{"kind": "detail_equals", "field": "field", "value": "${var.route_field}"}]},
+          {"action": ["filter_added", "filter_changed"], "validators": [{"kind": "filter_contains", "field": "${var.route_field}", "value": "${param.incident.route}"}]}
+        ],
+        "reference_action": {"command": "open_field_statistics", "target": "kibana.field_list", "arguments": {"field": "${var.route_field}"}},
+        "hints": [
+          "Look at which endpoint the failing requests actually hit.",
+          "Open the url.path field's top values, or add it as a column, to see the dominant route.",
+          "Open url.path and read its top values; Show me can open the reference field."
+        ]
+      }
+    }
+  ],
+  "overrides": {
+    "demonstration_summary": {
+      "title": "${var.title} complete",
+      "summary": "The walkthrough answered “${scenario.title}” by building the evidence in layers instead of treating the incident report as proof. It bounded Discover to the relevant ${var.window_spelled}, surveyed the status-code distribution to find the abnormal code, filtered to it, surveyed url.path to find the affected endpoint, and finally inspected a representative event.",
+      "checks": [
+        {"title": "Scope", "detail": "The global time picker was set to the last ${var.window_spelled} because the briefing reported the incident first noticed ${detected_offset_minutes} minutes ago, matching that boundary before any pattern was read. Discover refreshed its histogram and result set inside that interval, removing older background history that would otherwise distort the distribution."},
+        {"title": "Status codes", "detail": "Rather than assume a status code, the http.response.status_code field's top values were read directly, letting the data reveal that ${param.incident.status_family} responses were surging above the healthy 200s inside the window. Surveying the distribution first kept the abnormal code a finding rather than a guess carried over from the incident report."},
+        {"title": "Isolation", "detail": "A filter was then added for http.response.status_code is ${param.incident.status} — the value observed in the distribution, not one assumed — so the result table and histogram shrank to the failing requests. Filtering on observed evidence isolated the signal while leaving normal 200 traffic and unrelated services out of the comparison."},
+        {"title": "Affected endpoint", "detail": "Inside the filtered failures, the url.path field's top values were read to see where the errors concentrated, revealing that ${param.incident.route} accounted for almost all of them. That second distribution pinned the incident to one endpoint in ${param.incident.service} instead of implying a broad, service-wide outage."},
+        {"title": "Corroboration", "detail": "Finally a representative filtered event was expanded and its individual fields were read together, confirming that the failing status code and the affected endpoint coexist in one real request. That document-level check guards against a conclusion resting only on a histogram, a result count, or a coincidental field value."}
+      ],
+      "evidence": "The status-code and url.path distributions supplied the primary signal — which code failed and where — and the expanded event supplied independent, document-level corroboration. Because every layer points to ${var.finding_phrase} within ${truth.scope}, they support the same interpretation rather than relying on the incident wording alone.",
+      "conclusion": "${truth.conclusion} This conclusion is supported by the observed status-code and endpoint distributions and a representative event whose fields corroborate the same finding.",
+      "answer": {"finding": "${truth.finding}", "scope": "${truth.scope}", "conclusion": "${truth.conclusion}", "evidence_refs": "signal,corroboration", "evidence": "The status-code and url.path distributions and the expanded event connect ${var.finding_phrase} to ${truth.scope}."}
+    }
+  }
+}

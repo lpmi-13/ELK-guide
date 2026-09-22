@@ -367,7 +367,7 @@
       "severity": "SEV-2",
       "owner": "Commerce Platform",
       "environment": "Production · checkout",
-      "observed_minutes_ago": [8, 10, 12],
+      "observed_minutes_ago": [4, 6, 8],
       "channels": ["support", "pager", "synthetics", "monitoring"],
       "headline": "Checkout completion time breached the latency SLO",
       "summary": "Customers report that checkout has become slow in the last few minutes. The delay is visible at the edge, but the responsible service has not been identified.",

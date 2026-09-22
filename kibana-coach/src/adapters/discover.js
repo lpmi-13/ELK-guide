@@ -39,6 +39,18 @@ globalThis.KibanaApplicationAdapters.push({
       const type = command.type === 'add_column' ? 'column_added' : 'column_removed';
       return {type, details: {...(command.value || {})}, state_after: command.value || {}};
     }
+    // Opening a specific field's preview popover (its Top values / distribution). The field name
+    // comes from the command so the coach can survey http.response.status_code or url.path directly;
+    // the verified 9.5.2 trigger is the field row's "Preview" button `field-<field>-showDetails`
+    // (inside `dscFieldListPanelField-<field>`). Fall back to the registry target when no field is given.
+    if ((command.type === 'open_field_statistics' || command.type === 'inspect_field') && command.value?.field) {
+      const field = command.value.field;
+      const escaped = cssEscape(field);
+      const target = await waitForSelector(`[data-test-subj='field-${escaped}-showDetails'], [data-test-subj='dscFieldListPanelField-${escaped}']`, 20000, signal);
+      await host.pointAt(target, coach, timingScale, signal, command.narration || `Open the ${field} field to read its top values.`, {activate: true});
+      const type = command.type === 'open_field_statistics' ? 'field_statistics_opened' : 'field_inspected';
+      return {type, details: {...command.value}, state_after: {...command.value}};
+    }
     const target = await host.waitFor(command.target, 20000, signal);
     await host.pointAt(target, coach, timingScale, signal, command.narration || 'Use the highlighted Discover control.', {activate: true});
     const observations = {

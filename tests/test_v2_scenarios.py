@@ -60,6 +60,46 @@ class ScenarioV2Tests(unittest.TestCase):
                 self.assertTrue(all(len(check["detail"].split()) >= 28 for check in summary["checks"]))
                 self.assertGreaterEqual(len(summary["evidence"].split()), 32)
 
+    def test_goal_inserts_splice_new_goals_relative_to_the_template(self):
+        from contracts import expand_descriptor as expand
+        template = {"schema_version": 2, "id": "t", "goals": [{"id": "a"}, {"id": "b"}, {"id": "c"}]}
+        (ROOT / "learning/templates/playbooks/_insert_probe.json").write_text(json.dumps(template))
+        try:
+            descriptor = {
+                "extends": "_insert_probe.json",
+                "goal_inserts": [
+                    {"after": "a", "goal": {"id": "a2"}},
+                    {"before": "c", "goal": {"id": "b2"}},
+                    {"goal": {"id": "z"}},
+                ],
+            }
+            result = expand(ROOT / "learning", "playbook", descriptor)
+            self.assertEqual([goal["id"] for goal in result["goals"]], ["a", "a2", "b", "b2", "c", "z"])
+        finally:
+            (ROOT / "learning/templates/playbooks/_insert_probe.json").unlink()
+
+    def test_incident_window_survey_flow_derives_status_then_endpoint(self):
+        from contracts import expand_descriptor as expand
+        pack = ROOT / "learning/scenarios/discover-time-window"
+        playbook = expand(ROOT / "learning", "playbook", json.loads((pack / "playbook.json").read_text()))
+        goals = {goal["id"]: goal for goal in playbook["goals"]}
+        # The single presuming isolate step is replaced by a survey -> isolate -> endpoints chain.
+        self.assertEqual([goal["id"] for goal in playbook["goals"]], ["scope", "survey", "isolate", "endpoints", "inspect", "submit"])
+        self.assertEqual(goals["survey"]["requires"], ["scope"])
+        self.assertEqual(goals["isolate"]["requires"], ["survey"])
+        self.assertEqual(goals["endpoints"]["requires"], ["isolate"])
+        self.assertEqual(goals["inspect"]["requires"], ["endpoints"])
+        # The surveys read a field's distribution; the isolate filters on the OBSERVED value.
+        self.assertEqual(goals["survey"]["reference_action"]["command"], "open_field_statistics")
+        self.assertEqual(goals["survey"]["reference_action"]["arguments"]["field"], "http.response.status_code")
+        self.assertEqual(goals["isolate"]["reference_action"]["command"], "add_filter")
+        self.assertEqual(goals["endpoints"]["reference_action"]["arguments"]["field"], "url.path")
+        # No goal presumes the status code or endpoint via a hard-coded compound query anymore.
+        self.assertNotIn("url.path:", json.dumps(playbook["goals"]))
+        # The debrief has one check per demonstrated (non-answer) step.
+        demonstrated = [goal for goal in playbook["goals"] if goal["reference_action"]["command"] not in {"request_answer", "request_diagnosis"}]
+        self.assertEqual(len(playbook["demonstration_summary"]["checks"]), len(demonstrated))
+
     def test_evaluator_has_no_scenario_id_branches(self):
         source = (ROOT / "learning-service/engine/evaluator.py").read_text()
         for entry in self.catalog["scenarios"]:

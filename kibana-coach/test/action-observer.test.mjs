@@ -184,3 +184,25 @@ test('a refresh-interval interaction reports auto_refresh_changed', async () => 
   assert.equal(reports[0].type, 'auto_refresh_changed');
   assert.equal(reports[0].details.interval, '10');
 });
+
+test('opening a field preview popover reports field_statistics_opened with the field name', () => {
+  // Surveying a field's distribution is a first-class step (status-code / endpoint surveys), so the
+  // observer must name WHICH field a learner previewed. Kibana 9.5.2 uses the field row's "Preview"
+  // button `field-<field>-showDetails` inside the `dscFieldListPanelField-<field>` wrapper.
+  const {document} = makeDom();
+  const {observer, reports} = makeObserver(document);
+  observer.onClick({target: element({subject: 'field-http.response.status_code-showDetails'})});
+  observer.onClick({target: element({subject: 'dscFieldListPanelField-url.path'})});
+  assert.equal(reports.length, 2);
+  assert.deepEqual(reports.map(report => report.type), ['field_statistics_opened', 'field_statistics_opened']);
+  assert.equal(reports[0].details.field, 'http.response.status_code');
+  assert.equal(reports[1].details.field, 'url.path');
+});
+
+test('a non-field control click is not mistaken for a field preview', () => {
+  const {document} = makeDom();
+  const {observer, reports} = makeObserver(document);
+  observer.onClick({target: element({subject: 'dateRangePickerCustomRangeNavItem'})});
+  observer.onClick({target: element({subject: 'someUnrelatedButton'})});
+  assert.equal(reports.length, 0);
+});

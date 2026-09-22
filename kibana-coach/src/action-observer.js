@@ -61,6 +61,16 @@ class KibanaActionObserver {
     return cell?.getAttribute('data-gridcell-column-id') || '';
   }
 
+  // The data-test-subj of the field-list row whose preview popover a click opened, or '' when the
+  // click was not on one. Kibana 9.5.2 wraps each field as `dscFieldListPanelField-<field>` around a
+  // `field-<field>-showDetails` "Preview" button; a click can land on either or an inner icon, so we
+  // resolve the container and confirm its subject really is a field row before reporting it.
+  fieldPreviewSubject(target) {
+    const container = target?.closest?.("[data-test-subj^='dscFieldListPanelField-'], [data-test-subj$='-showDetails']");
+    const subject = container?.getAttribute?.('data-test-subj') || '';
+    return /^dscFieldListPanelField-|-showDetails$/.test(subject) ? subject : '';
+  }
+
   readAutoRefresh() {
     const toggle = document.querySelector("[data-test-subj='superDatePickerToggleRefreshButton']");
     const interval = document.querySelector("[data-test-subj='superDatePickerRefreshIntervalInput']")?.value || '';
@@ -214,6 +224,14 @@ class KibanaActionObserver {
       setTimeout(() => this.report(this.readAutoRefresh()), 100);
     } else if (/fieldStats|fieldStatistics/i.test(subject)) {
       this.report({type: 'field_statistics_opened', details: {subject}});
+    } else if (this.fieldPreviewSubject(event.target)) {
+      // A field's preview popover was opened from the sidebar. Kibana 9.5.2 renders each field row
+      // as `dscFieldListPanelField-<field>` wrapping a `field-<field>-showDetails` "Preview" button;
+      // a click can land on either (or an inner icon), so resolve the field container and surface the
+      // field name. That lets a survey step validate WHICH field's distribution was inspected.
+      const containerSubject = this.fieldPreviewSubject(event.target);
+      const field = containerSubject.replace(/^dscFieldListPanelField-/, '').replace(/^field-/, '').replace(/-showDetails$/, '');
+      this.report({type: 'field_statistics_opened', details: {field, subject: containerSubject}});
     } else if (/surrounding/i.test(subject)) {
       this.report({type: 'surrounding_documents_opened', details: {subject}});
     } else if (/field.*(action|name|value)/i.test(subject)) {

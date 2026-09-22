@@ -39,9 +39,30 @@ def expand_descriptor(learning_dir, kind, descriptor):
     for goal in result.get("goals", []):
         if goal["id"] in goal_overrides:
             goal.update(goal_overrides[goal["id"]])
-    result.update(descriptor.get("overrides", {}))
+    insert_goals(result, descriptor.get("goal_inserts", []), expand)
+    result.update(expand(descriptor.get("overrides", {})))
     result["id"] = descriptor.get("id", result["id"])
     return result
+
+
+def insert_goals(result, inserts, expand):
+    """Splice brand-new goals a template does not define into the expanded goal list.
+
+    ``goal_overrides`` can only patch goals the template already ships; a scenario that needs to
+    break one templated step into several (for example surveying a field's distribution before
+    filtering on it) declares the extra goals here, positioned by id relative to an existing goal.
+    """
+    for insert in inserts:
+        goals = result.setdefault("goals", [])
+        new_goal = expand(insert["goal"])
+        if "after" in insert:
+            anchor = next((index for index, goal in enumerate(goals) if goal["id"] == insert["after"]), len(goals) - 1)
+            goals.insert(anchor + 1, new_goal)
+        elif "before" in insert:
+            anchor = next((index for index, goal in enumerate(goals) if goal["id"] == insert["before"]), len(goals))
+            goals.insert(anchor, new_goal)
+        else:
+            goals.append(new_goal)
 
 
 def goal_cycles(goals):
