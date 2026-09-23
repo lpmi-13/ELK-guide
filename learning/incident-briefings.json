@@ -2,18 +2,18 @@
   "schema_version": 1,
   "sources": {
     "monitoring": {
-      "label": "Observability alert fired",
-      "detail": "SLO burn-rate rule · 5-minute evaluation window",
+      "label": "Monitoring alert fired",
+      "detail": "Error-rate alert · checked every 5 minutes",
       "icon": "pulse"
     },
     "pager": {
-      "label": "Primary on-call paged",
-      "detail": "${owner} rotation · acknowledgement requested",
+      "label": "On-call engineer paged",
+      "detail": "${owner} on-call · please acknowledge",
       "icon": "page"
     },
     "support": {
-      "label": "Priority support ticket",
-      "detail": "Customer Support · production impact suspected",
+      "label": "High-priority support ticket",
+      "detail": "Customer Support · users may be affected",
       "icon": "ticket"
     },
     "incident": {
@@ -39,9 +39,9 @@
       "environment": "Production · eu-west",
       "observed_minutes_ago": [8, 10, 13],
       "channels": ["support", "monitoring", "pager"],
-      "headline": "Intermittent checkout degradation reported",
-      "summary": "Several checkout attempts appeared slow or failed, but the report arrived without a precise incident window.",
-      "impact": "Customer impact may have been brief. Normal traffic is visible before and after the suspected event, so the first priority is to establish when the degradation actually occurred.",
+      "headline": "Checkout failing on and off for some users",
+      "summary": "Some checkout attempts were slow or failed, but the report didn't say exactly when it started or stopped.",
+      "impact": "The problem may have been short. You can see normal traffic both before and after it, so the first job is to work out exactly when it happened.",
       "signals": [
         {"label": "Customer signal", "value": "Short-lived checkout failures reported"},
         {"label": "Telemetry", "value": "Normal and anomalous events share the current view"},

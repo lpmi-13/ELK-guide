@@ -20,17 +20,18 @@ function startIncidentCoach() {
     return Math.min(15000, Math.max(5500, words * 260));
   }
 
-  function wait(milliseconds, signal) {
+  // The reading pause currently on screen. "Advance" completes it early — the same effect as its
+  // countdown bar filling — after which the demonstration carries on at its normal pace. Only one
+  // reading beat runs at a time, so a single resolver is enough.
+  let completeReadingBeat = null;
+
+  function readingBeatWait(milliseconds, signal) {
     if (signal?.aborted) return Promise.reject(new DOMException('Demonstration stopped', 'AbortError'));
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        signal?.removeEventListener('abort', abort);
-        resolve();
-      }, milliseconds);
-      const abort = () => {
-        clearTimeout(timer);
-        reject(new DOMException('Demonstration stopped', 'AbortError'));
-      };
+      const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); if (completeReadingBeat === done) completeReadingBeat = null; resolve(); };
+      const abort = () => { clearTimeout(timer); if (completeReadingBeat === done) completeReadingBeat = null; reject(new DOMException('Demonstration stopped', 'AbortError')); };
+      const timer = setTimeout(done, milliseconds);
+      completeReadingBeat = done;
       signal?.addEventListener('abort', abort, {once: true});
     });
   }
@@ -44,7 +45,7 @@ function startIncidentCoach() {
       const readBeat = async text => {
         const pause = readingPause(text) * demonstrationSlowdown;
         coach.startCountdown(pause);
-        await wait(pause, controller.signal);
+        await readingBeatWait(pause, controller.signal);
       };
       if (command.mode === 'demonstration') {
         // Beat 1 — what: name the next move; Beat 2 — why: the reason, each its own card.
@@ -154,21 +155,17 @@ function startIncidentCoach() {
     };
     coach.onHint = () => client.requestHint();
     coach.onDemonstrate = () => currentCommand && execute(currentCommand, true);
-    coach.onSkip = () => {
+    coach.onAdvance = () => {
       if (!currentCommand || currentCommand.mode !== 'demonstration') return;
-      const command = currentCommand;
-      const wasPaused = coach.paused;
-      currentCommand = null;
-      executionController?.abort();
-      coach.stopCountdown();
-      coach.finishCommand(command);
-      client.skip(command);
-      // A paused service intentionally withholds commands. Resume after the skip so
-      // the next demonstration card can arrive instead of leaving the panel hidden.
-      if (wasPaused) {
-        coach.setPaused(false, false);
-        client.send({message_type: 'resume'});
+      if (coach.paused) {
+        // Nothing is counting down while paused — resume so the demonstration plays on.
+        coach.setPaused(false);
+        return;
       }
+      // Complete the reading pause on screen now, exactly as if its countdown bar had filled. The
+      // demonstration then continues at its normal pace — the action still runs and updates Kibana,
+      // and the following beats and steps are unchanged. Outside a reading pause this is a no-op.
+      completeReadingBeat?.();
     };
     coach.onStop = () => {
       executionController?.abort();

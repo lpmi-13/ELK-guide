@@ -174,12 +174,12 @@ class RandomizationTests(unittest.TestCase):
                             # The debrief now walks the derive-don't-presume flow: survey the status
                             # codes, filter to the observed one, then survey the endpoints.
                             titles = [check["title"] for check in summary["checks"]]
-                            self.assertEqual(titles, ["Scope", "Status codes", "Isolation", "Affected endpoint", "Corroboration"])
+                            self.assertEqual(titles, ["Time range", "Status codes", "Filtering", "Affected endpoint", "Confirming"])
                             status_check = next(check for check in summary["checks"] if check["title"] == "Status codes")
                             self.assertIn("http.response.status_code", status_check["detail"])
                             endpoint_check = next(check for check in summary["checks"] if check["title"] == "Affected endpoint")
                             self.assertIn("url.path", endpoint_check["detail"])
-                            self.assertIn(f"surged during the {finding}", summary["answer"]["conclusion"])
+                            self.assertIn(f"spiked during the {finding}", summary["answer"]["conclusion"])
                     else:
                         explanation = " ".join(command[key] for key in ("narration", "reasoning", "evidence"))
                         self.assertIn(finding, explanation)
@@ -259,7 +259,7 @@ class RandomizationTests(unittest.TestCase):
             # The isolate step now filters on the OBSERVED status code and cites the graded
             # conclusion, which spells the window as "the <finding>".
             isolate = next(goal for goal in rendered["goals"] if goal["id"] == "isolate")
-            self.assertIn(f"surged during the {finding}", isolate["demonstration"]["evidence"])
+            self.assertIn(f"spiked during the {finding}", isolate["demonstration"]["evidence"])
             self.assertGreaterEqual(len(matching_copy), 10)
 
     def test_every_mode_receives_the_same_seeded_incident_briefing(self):
@@ -291,28 +291,6 @@ class RandomizationTests(unittest.TestCase):
             offsets.add(varied["detected_offset_minutes"])
         self.assertGreater(len(sources), 1)
         self.assertGreater(len(offsets), 1)
-
-    def test_skipping_advances_exactly_one_demonstration_goal(self):
-        manifest = self.materialize("http-error-regression", 135)
-        session = self.server.create_session({"manifest": manifest}, "demonstration")
-        session["run_ready"] = True
-        first = self.server.next_command(session)
-
-        skipped = self.server.skip_pending_command(session, first["command_id"])
-        second = self.server.next_command(session)
-
-        self.assertEqual(skipped["step_id"], first["step_id"])
-        self.assertEqual(session["completed_goals"], {first["step_id"]})
-        self.assertEqual(second["step_index"], first["step_index"] + 1)
-        self.assertNotEqual(second["command_id"], first["command_id"])
-        with self.assertRaisesRegex(ValueError, "no longer current"):
-            self.server.skip_pending_command(session, first["command_id"])
-
-        guided = self.server.create_session({"manifest": manifest}, "guided")
-        guided["run_ready"] = True
-        guided_command = self.server.next_command(guided)
-        with self.assertRaisesRegex(ValueError, "demonstration mode"):
-            self.server.skip_pending_command(guided, guided_command["command_id"])
 
 
 if __name__ == "__main__":

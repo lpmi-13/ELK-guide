@@ -73,7 +73,6 @@ class IncidentSessionClient {
 
   requestHint() { this.send({message_type: 'hint'}); }
   acknowledgeBriefing(briefing) { this.send({message_type: 'briefing_ack', briefing_id: briefing.briefing_id}); }
-  skip(command) { this.send({message_type: 'skip', command_id: command.command_id}); }
   acknowledge(command, status, observedState = {}) { this.send({message_type: 'ack', command_id: command.command_id, status, observed_state: observedState}); }
 
   async submitDiagnosis(answer) {

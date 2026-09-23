@@ -66,18 +66,25 @@ class ContractTests(unittest.TestCase):
         self.assertIn("this.pointAt(unit", adapter)
         self.assertIn("this.pointAt(apply", adapter)
 
-    def test_demonstration_steps_can_be_skipped(self):
+    def test_demonstration_steps_can_be_advanced(self):
         coach = (ROOT / "kibana-coach/src/ui/coach-panel.js").read_text(encoding="utf-8")
         content = (ROOT / "kibana-coach/src/content-script.js").read_text(encoding="utf-8")
         client = (ROOT / "kibana-coach/src/session-client.js").read_text(encoding="utf-8")
         learning_service = (ROOT / "learning-service/server.py").read_text(encoding="utf-8")
 
-        self.assertIn('<button id="skip"', coach)
-        self.assertIn("skip.hidden = command.mode !== 'demonstration'", coach)
-        self.assertIn("coach.onSkip = () =>", content)
-        self.assertIn("executionController?.abort()", content)
-        self.assertIn("message_type: 'skip'", client)
-        self.assertIn('elif message_type == "skip":', learning_service)
+        # Advance replaces Skip: it performs the step's real action instead of jumping past it.
+        self.assertIn('<button id="advance"', coach)
+        self.assertIn("advance.hidden = command.mode !== 'demonstration'", coach)
+        self.assertIn("coach.onAdvance = () =>", content)
+        # Advance just completes the reading pause on screen (as if its countdown filled) and lets
+        # the demonstration continue at its normal pace — it does not fast-forward the whole step.
+        self.assertIn("completeReadingBeat", content)
+        self.assertIn("await readingBeatWait(pause, controller.signal)", content)
+        # The un-performed skip pathway is gone from both the client and the service.
+        self.assertNotIn("onSkip", content)
+        self.assertNotIn("message_type: 'skip'", client)
+        self.assertNotIn('message_type == "skip"', learning_service)
+        self.assertNotIn("skip_pending_command", learning_service)
 
     def test_each_mode_waits_for_the_timed_incident_briefing(self):
         briefing = (ROOT / "kibana-coach/src/ui/incident-briefing.js").read_text(encoding="utf-8")

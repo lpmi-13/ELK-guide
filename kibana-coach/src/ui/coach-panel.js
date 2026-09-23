@@ -13,7 +13,7 @@ class IncidentCoachPanel {
           <p id="phase-detail" class="muted"></p>
           <div id="countdown" class="countdown" aria-hidden="true" hidden><span></span></div>
         </section>
-        <div class="actions"><button id="pause">Pause</button><button id="skip" title="Skip this demonstration step">Skip</button><button id="incident-info" title="Review the initial incident briefing">Incident info</button><button id="hint">Hint</button><button id="demonstrate">Show me</button></div>
+        <div class="actions"><button id="pause">Pause</button><button id="advance" title="Complete this step now and continue">Advance</button><button id="incident-info" title="Review the initial incident briefing">Incident info</button><button id="hint">Hint</button><button id="demonstrate">Show me</button></div>
         <form id="diagnosis" hidden>
           <label>Faulty service<input name="service" required></label>
           <label>Failure type<select name="fault_type"><option value="latency">Latency</option><option value="error">Errors</option><option value="unavailable">Unavailable</option></select></label>
@@ -48,10 +48,7 @@ class IncidentCoachPanel {
     window.addEventListener('resize', this.reposition);
     window.addEventListener('scroll', this.reposition, true);
     this.root.querySelector('#pause').onclick = () => this.setPaused(!this.paused);
-    this.root.querySelector('#skip').onclick = event => {
-      event.currentTarget.disabled = true;
-      this.onSkip?.();
-    };
+    this.root.querySelector('#advance').onclick = () => this.onAdvance?.();
     this.root.querySelector('#hint').onclick = () => this.revealHint();
     this.root.querySelector('#demonstrate').onclick = () => this.onDemonstrate?.();
     this.root.querySelector('#incident-info').onclick = () => {
@@ -111,9 +108,8 @@ class IncidentCoachPanel {
     this.root.querySelector('#pause').hidden = command.mode !== 'demonstration';
     this.root.querySelector('#demonstrate').hidden = command.mode !== 'guided';
     this.root.querySelector('#incident-info').hidden = command.mode !== 'guided' || !this.currentBriefing;
-    const skip = this.root.querySelector('#skip');
-    skip.hidden = command.mode !== 'demonstration';
-    skip.disabled = false;
+    const advance = this.root.querySelector('#advance');
+    advance.hidden = command.mode !== 'demonstration';
     this.root.querySelector('#hint').hidden = command.mode === 'demonstration';
     if (command.type === 'request_diagnosis' || command.type === 'request_answer') this.renderAnswerSchema(command.answer_schema);
     this.root.querySelector('#diagnosis').hidden = !['request_diagnosis', 'request_answer'].includes(command.type) || command.mode === 'demonstration';
@@ -250,6 +246,7 @@ class IncidentCoachPanel {
     stage.classList.remove('phase-in');
     void stage.offsetWidth;
     stage.classList.add('phase-in');
+    this.refit();
   }
 
   showTarget(target, activity = '') {
@@ -332,10 +329,32 @@ class IncidentCoachPanel {
     this.panel.style.left = `${this.pos.left}px`;
     this.panel.style.top = `${this.pos.top}px`;
     this.panel.style.right = 'auto';
+    // Bound the card to the viewport from wherever its top now sits, so a phase that grows
+    // taller can never spill past the bottom edge — it keeps the same margin as the sides and
+    // scrolls inside if it truly can't fit. (CSS max-height is measured from the viewport top,
+    // which stops guarding once the panel is placed lower down.)
+    this.panel.style.maxHeight = `${Math.max(160, innerHeight - this.pos.top - 18)}px`;
     if (instant) {
       void this.panel.offsetWidth; // flush the placement before re-enabling the transition
       this.panel.style.transition = '';
     }
+  }
+
+  // A demonstration reveals one card at a time (what → why → action → learning) and the cards
+  // differ in height, so after each one renders, lift the panel just enough — never above the top
+  // margin — that its bottom keeps a comfortable margin. Horizontal placement is left untouched (no
+  // jarring corner hop), and the move is instant so it reads as part of the card's own transition.
+  refit() {
+    if (this.panel.hidden || !this.pos) return;
+    const margin = 18;
+    const topMargin = 72;
+    const capped = this.panel.style.maxHeight;
+    this.panel.style.maxHeight = 'none';
+    const natural = this.panel.offsetHeight; // full content height, ignoring the cap and transforms
+    this.panel.style.maxHeight = capped;
+    const maxTop = Math.max(topMargin, innerHeight - natural - margin);
+    if (this.pos.top > maxTop) this.pos.top = maxTop;
+    this.applyPosition(true);
   }
 
   finishCommand(command) {
@@ -380,6 +399,7 @@ class IncidentCoachPanel {
     stage.classList.remove('celebrate-in', 'phase-in');
     void stage.offsetWidth;
     stage.classList.add('celebrate-in');
+    this.refit();
     clearTimeout(this.celebrateTimer);
     this.celebrateTimer = setTimeout(() => this.finishCelebrate(), 1500);
   }
@@ -420,7 +440,7 @@ class IncidentCoachPanel {
     .countdown.working span { width:34%!important;animation:cd-sweep 1.25s cubic-bezier(.55,0,.45,1) infinite; } @keyframes cd-sweep { 0%{transform:translateX(-115%)} 100%{transform:translateX(310%)} }
     @media (prefers-reduced-motion: reduce) { .countdown.working span { transform:none!important;width:100%!important;opacity:.55; } .countdown span { width:100%!important; } }
     button { border:1px solid #8293a3;border-radius:5px;background:#f5f7f9;padding:6px 9px;cursor:pointer; } button:hover,button:focus-visible { outline:2px solid #006bb4;outline-offset:1px; }
-    #stop { color:#a32b1c;border-color:#d77d72; } #skip { margin-left:auto; } .actions { display:flex; gap:7px; margin-top:12px; }
+    #stop { color:#a32b1c;border-color:#d77d72; } #advance { margin-left:auto; } .actions { display:flex; gap:7px; margin-top:12px; }
     .progress { height:4px;background:#dce4eb;margin:13px 0;border-radius:4px;overflow:hidden; }.progress span { display:block;height:100%;background:#006bb4;transition:width .3s; }
     label { display:block;font-weight:650;margin-top:10px; } input,select,textarea { display:block;width:100%;box-sizing:border-box;margin-top:3px;padding:7px;border:1px solid #9ba9b6;border-radius:4px;font:inherit; } textarea { min-height:58px; }
     #diagnosis button { margin-top:12px;background:#006bb4;color:#fff;border:0; } #status { min-height:18px;color:#147d5c; }.error { color:#a32b1c!important; }

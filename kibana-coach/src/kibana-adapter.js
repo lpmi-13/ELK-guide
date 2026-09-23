@@ -91,7 +91,7 @@ class KibanaAdapter {
   async setTimeRange(command, toggle, coach, timingScale, signal) {
     const range = this.relativeTimeRange(command.value);
     await this.pointAt(toggle, coach, timingScale, signal, 'Open the time picker.', {activate: true});
-    await this.wait(250 * timingScale, signal);
+    await this.settle(250, timingScale, signal);
     let number = this.resolve('kibana.time_value');
     let unit = this.resolve('kibana.time_unit');
     let apply = this.resolve('kibana.time_apply');
@@ -169,7 +169,7 @@ class KibanaAdapter {
     await this.typeValue(valueInput, String(filter.value), signal);
     const save = await this.waitFor('kibana.filter_save', 8000, signal);
     await this.pointAt(save, coach, timingScale, signal, `Apply the ${negate ? 'is not' : 'is'} filter.`, {activate: true});
-    await this.wait(400 * timingScale, signal);
+    await this.settle(400, timingScale, signal);
     return {type: 'filter_added', details: filter, state_after: {filters: [{field: filter.field, value: filter.value, negate}]}};
   }
 
@@ -186,7 +186,7 @@ class KibanaAdapter {
     const visibleTraceElement = this.resolve('kibana.first_trace_value');
     const visibleTrace = visibleTraceElement?.textContent?.trim() || '';
     await this.pointAt(toggle, coach, timingScale, signal, 'Expand the first slow result so we can inspect its fields.', {activate: true});
-    await this.wait(350 * timingScale, signal);
+    await this.settle(350, timingScale, signal);
     const traceElement = this.resolve('kibana.trace_field');
     const expandedTrace = traceElement?.matches?.("[data-test-subj='tableDocViewRow-trace.id-value']") ? traceElement.textContent.trim() : '';
     const traceId = visibleTrace || expandedTrace;
@@ -207,6 +207,15 @@ class KibanaAdapter {
     );
     await this.wait(Math.min(6000, 500 * timingScale), signal);
     return {type: 'trace_opened', details: {trace_id: traceId}, state_after: {trace_id: traceId, query: traceQuery}};
+  }
+
+  // A brief pause that only lets Kibana's DOM catch up after a click — a popover opening, a filter
+  // applying. Unlike cursor moves and reading beats, a settle must NOT stretch with the demonstration's
+  // slow timingScale (30×), or a quarter-second wait becomes a multi-second stall — e.g. the time
+  // picker sitting open on "Open the time picker" for ~7s. Cap it at a short, deliberate beat while
+  // leaving the un-scaled guided/"Show me" pace (timingScale 1) exactly as it was.
+  settle(base, timingScale, signal) {
+    return this.wait(Math.min(750, base * timingScale), signal);
   }
 
   wait(milliseconds, signal) {

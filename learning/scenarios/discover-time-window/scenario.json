@@ -7,7 +7,7 @@
   "classification": "core",
   "difficulty": 1,
   "estimated_minutes": 10,
-  "brief": "Support reports a brief service problem. Establish whether the report aligns with observable activity and identify the relevant interval.",
+  "brief": "Support says something went wrong for a short time. Check whether the data backs up their report, and find the time window when it happened.",
   "skills": ["discover", "time-range", "histogram"],
   "required_capabilities": ["discover", "spaces", "saved_objects"],
   "parameters": {
@@ -63,7 +63,7 @@
     "answers": {
       "finding": "${param.window.label}",
       "scope": "${param.incident.service} traffic",
-      "conclusion": "Errors from ${param.incident.service} surged during the ${param.window.label}."
+      "conclusion": "Errors from ${param.incident.service} spiked during the ${param.window.label}."
     },
     "assertions": [
       {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"labels.signal.keyword": "decisive"}}},

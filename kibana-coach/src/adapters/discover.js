@@ -5,16 +5,25 @@ function cssEscape(value) {
   return String(value).replace(/['\\]/g, '\\$&');
 }
 
-// Poll for a specific field-scoped selector (the registry only holds static targets).
-async function waitForSelector(selector, timeout, signal) {
+// Poll for a field-scoped selector the registry does not hold. Accepts one selector or an ordered
+// list, and returns the first that resolves, trying them in PRIORITY order every poll — unlike a
+// comma-joined querySelector, which returns whichever match comes first in DOCUMENT order. That
+// distinction is decisive for the field list: the `field-<field>-showDetails` "Preview" button that
+// opens the Top values popover is nested inside `dscFieldListPanelField-<field>`, a plain draggable
+// wrapper whose own click opens nothing. A single combined selector would match the wrapper first
+// (it is the ancestor), so the demonstration would click dead space; listing the button first fixes it.
+async function waitForSelector(selectors, timeout, signal) {
+  const list = Array.isArray(selectors) ? selectors : [selectors];
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     if (signal?.aborted) throw new DOMException('Demonstration stopped', 'AbortError');
-    const element = document.querySelector(selector);
-    if (element && element.getClientRects().length) return element;
+    for (const selector of list) {
+      const element = document.querySelector(selector);
+      if (element && element.getClientRects().length) return element;
+    }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  throw new Error(`Kibana target not found: ${selector}`);
+  throw new Error(`Kibana target not found: ${list.join(', ')}`);
 }
 
 globalThis.KibanaApplicationAdapters.push({
@@ -40,13 +49,18 @@ globalThis.KibanaApplicationAdapters.push({
       return {type, details: {...(command.value || {})}, state_after: command.value || {}};
     }
     // Opening a specific field's preview popover (its Top values / distribution). The field name
-    // comes from the command so the coach can survey http.response.status_code or url.path directly;
-    // the verified 9.5.2 trigger is the field row's "Preview" button `field-<field>-showDetails`
-    // (inside `dscFieldListPanelField-<field>`). Fall back to the registry target when no field is given.
+    // comes from the command so the coach can survey http.response.status_code or url.path directly.
+    // The verified 9.5.2 trigger is the field row's "Preview" button `field-<field>-showDetails`; its
+    // wrapper `dscFieldListPanelField-<field>` is a draggable DIV whose click opens nothing, so we
+    // resolve the button first and only fall back to the wrapper's button, then the wrapper itself.
     if ((command.type === 'open_field_statistics' || command.type === 'inspect_field') && command.value?.field) {
       const field = command.value.field;
       const escaped = cssEscape(field);
-      const target = await waitForSelector(`[data-test-subj='field-${escaped}-showDetails'], [data-test-subj='dscFieldListPanelField-${escaped}']`, 20000, signal);
+      const target = await waitForSelector([
+        `[data-test-subj='field-${escaped}-showDetails']`,
+        `[data-test-subj='dscFieldListPanelField-${escaped}'] button`,
+        `[data-test-subj='dscFieldListPanelField-${escaped}']`,
+      ], 20000, signal);
       await host.pointAt(target, coach, timingScale, signal, command.narration || `Open the ${field} field to read its top values.`, {activate: true});
       const type = command.type === 'open_field_statistics' ? 'field_statistics_opened' : 'field_inspected';
       return {type, details: {...command.value}, state_after: {...command.value}};
