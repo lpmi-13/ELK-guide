@@ -164,6 +164,12 @@ class IncidentCoachPanel {
       this.renderPhase({eyebrow: 'Doing it now', headline: 'Watch the highlighted control and the cursor.'});
       this.startWorking();
     } else if (phase === 'learning') {
+      // The action is done; this beat talks about the result, not a control. Drop the spotlight and
+      // cursor so a now-stale highlight (e.g. the closed time picker's Apply button, left floating
+      // over the results grid) doesn't linger, and the page un-dims to show the refreshed histogram.
+      this.spotlightRevealed = false;
+      this.spotlight.hide();
+      this.cursor.hide();
       const lines = [command?.evidence, command?.concept].filter(Boolean);
       this.renderPhase({eyebrow: 'What we learned', headline: lines[0] || 'Step complete.', detail: lines[1] || ''});
       this.resetCountdown();

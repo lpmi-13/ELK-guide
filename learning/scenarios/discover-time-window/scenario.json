@@ -48,6 +48,7 @@
             "labels": {"corroboration": true},
             "service": {"name": "${param.incident.service}"},
             "event": {"outcome": "failure"},
+            "http": {"response": {"status_code": "${param.incident.status}"}},
             "url": {"path": "${param.incident.route}"},
             "message": "support-reported ${param.incident.service} interval confirmed"
           }
@@ -58,7 +59,7 @@
       {"id": "seeded-signal", "kind": "es_count", "minimum": 20, "query": {"term": {"labels.signal.keyword": "decisive"}}}
     ]
   },
-  "starting_view": {"app": "discover", "saved_object": "incident-investigation", "path": "/app/discover#/view/incident-investigation"},
+  "starting_view": {"app": "discover", "saved_object": "incident-investigation", "path": "/app/discover#/view/incident-investigation?_g=(time:(from:now-1h,to:now))"},
   "truth": {
     "answers": {
       "finding": "${param.window.label}",

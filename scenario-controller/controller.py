@@ -536,15 +536,55 @@ def _deep_merge(base, overlay):
     return result
 
 
+# Placeholder duration/transaction name baked into the shared event template. A
+# row still carrying either value is treated as "unset" and given lifelike
+# variety by ``_apply_realism``; a scenario that overrides them (for example a
+# deliberately slow signal) keeps exactly what it authored.
+_TEMPLATE_DURATION_NS = 120_000_000
+_TEMPLATE_TRANSACTION_NAME = "GET /checkout"
+
+# Coherent (service, method, route) triples for benign background traffic, so
+# transaction.name reads like a real endpoint instead of one flat constant on
+# every row. None of these carry an error status, so background noise never
+# introduces a second failing endpoint alongside a scenario's signal.
+_NOISE_ENDPOINTS = (
+    {"service": "checkout", "method": "GET", "path": "/checkout"},
+    {"service": "catalog", "method": "GET", "path": "/api/catalog/search"},
+    {"service": "auth", "method": "POST", "path": "/api/auth/token"},
+    {"service": "orders", "method": "GET", "path": "/api/orders"},
+)
+
+
+def _apply_realism(prepared, generator):
+    """Give placeholder rows lifelike duration and transaction.name variety.
+
+    Only rows still holding the template defaults are touched, so any
+    scenario-authored latency or endpoint is left exactly as written. Failures
+    are deliberately drawn from the same latency band as successes: this keeps
+    duration from becoming an accidental tell in scenarios (such as the
+    incident-window hunt) where the answer is a time range, not a slow request.
+    """
+    txn = prepared.get("transaction")
+    path = _lookup_nested(prepared, "url.path")
+    if isinstance(txn, dict) and txn.get("name") == _TEMPLATE_TRANSACTION_NAME and path:
+        method = _lookup_nested(prepared, "http.request.method") or "GET"
+        txn["name"] = f"{method} {path}"
+    if _lookup_nested(prepared, "event.duration") == _TEMPLATE_DURATION_NS:
+        duration_ns = generator.randint(35, 260) * 1_000_000
+        prepared.setdefault("event", {})["duration"] = duration_ns
+        if isinstance(txn, dict) and isinstance(txn.get("duration"), dict):
+            txn["duration"]["us"] = duration_ns // 1000
+
+
 def _event_template(manifest, timestamp, trace_id, sequence):
     return {
         "@timestamp": timestamp.isoformat(),
         "message": "request completed",
         "service": {"name": "checkout", "version": "1.0.0", "environment": manifest["run_id"], "node": {"name": f"instance-{sequence % 4}"}},
-        "event": {"dataset": "lab.scenario", "category": "web", "type": "transaction", "outcome": "success", "duration": 120_000_000},
+        "event": {"dataset": "lab.scenario", "category": "web", "type": "transaction", "outcome": "success", "duration": _TEMPLATE_DURATION_NS},
         "http": {"request": {"method": "GET"}, "response": {"status_code": 200}},
         "url": {"path": "/checkout"},
-        "trace": {"id": trace_id}, "transaction": {"id": uuid.uuid5(uuid.NAMESPACE_URL, f"{trace_id}:{sequence}").hex[:16], "name": "GET /checkout", "type": "request", "result": "HTTP 2xx", "sampled": True, "duration": {"us": 120_000}},
+        "trace": {"id": trace_id}, "transaction": {"id": uuid.uuid5(uuid.NAMESPACE_URL, f"{trace_id}:{sequence}").hex[:16], "name": _TEMPLATE_TRANSACTION_NAME, "type": "request", "result": "HTTP 2xx", "sampled": True, "duration": {"us": 120_000}},
         "processor": {"event": "transaction"}, "agent": {"name": "opentelemetry/python", "version": "1.0.0"}, "observer": {"version": "9.5.2"},
         "host": {"name": f"instance-{sequence % 4}", "os": {"platform": "linux"}},
         "labels": {"scenario_template": manifest["template_id"], "run_id": manifest["run_id"]},
@@ -649,16 +689,20 @@ def generate_seeded_events(manifest):
         timestamp = now - timedelta(seconds=generator.randint(90, 3600))
         trace_id = hashlib.md5(f"{manifest['run_id']}:noise:{sequence}".encode()).hexdigest()
         event = _event_template(manifest, timestamp, trace_id, sequence)
-        event = _deep_merge(event, {"service": {"name": generator.choice(["checkout", "catalog", "auth", "orders"])}, "message": generator.choice(["request completed", "cache refreshed", "token accepted", "background reconciliation completed"])})
+        endpoint = generator.choice(_NOISE_ENDPOINTS)
+        event = _deep_merge(event, {"service": {"name": endpoint["service"]}, "http": {"request": {"method": endpoint["method"]}}, "url": {"path": endpoint["path"]}, "message": generator.choice(["request completed", "cache refreshed", "token accepted", "background reconciliation completed"])})
         if distractors and sequence % 5 == 0:
             event = _deep_merge(event, distractors[sequence % len(distractors)])
-        documents.append(_prepare_application_event(event, application))
+        prepared = _prepare_application_event(event, application)
+        _apply_realism(prepared, generator)
+        documents.append(prepared)
     representative_trace = hashlib.md5(f"{manifest['run_id']}:representative".encode()).hexdigest()
     for sequence in range(signal_count):
         timestamp = now - timedelta(seconds=generator.randint(10, 600))
         trace_id = representative_trace if sequence == 0 else hashlib.md5(f"{manifest['run_id']}:signal:{sequence // 2}".encode()).hexdigest()
         event = _deep_merge(_event_template(manifest, timestamp, trace_id, sequence), signal)
         prepared = _prepare_application_event(event, application, signal)
+        _apply_realism(prepared, generator)
         documents.append(prepared)
         if application == "apm":
             documents.extend(_derived_apm_documents(prepared))
@@ -669,6 +713,7 @@ def generate_seeded_events(manifest):
             timestamp = now - timedelta(seconds=int(companion.get("offset_seconds", 120)) + sequence)
             event = _deep_merge(_event_template(manifest, timestamp, representative_trace, 1000 + companion_index * 100 + sequence), template)
             prepared = _prepare_application_event(event, application, template)
+            _apply_realism(prepared, generator)
             documents.append(prepared)
             if application == "apm":
                 documents.extend(_derived_apm_documents(prepared))

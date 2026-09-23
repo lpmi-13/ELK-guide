@@ -192,7 +192,8 @@ class KibanaActionObserver {
       // matched so merely opening a tab does not complete the step. Read the real range just after
       // the click so the URL global state has settled; the poll from start() is the safety net for
       // a drag-selection on the histogram. Force a report even when the value is unchanged: picking
-      // a preset equal to the default window (Discover opens at now-15m) is still a deliberate step.
+      // a preset equal to the view's current window (the saved search opens at now-1h) is still a
+      // deliberate step.
       setTimeout(() => this.captureTimeRange(true), 250);
     } else if (subject.includes('saveFilter') || /^(plus|minus)-/.test(subject) || /filterFor|filterOut|addFilterForValue|addFilterOutValue/i.test(subject)) {
       // A pill was applied — via the Add-filter popover's Save (`saveFilter`), or a

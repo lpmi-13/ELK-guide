@@ -88,8 +88,43 @@ class KibanaAdapter {
     return {amount, unitCode, unitName, unitLabel: `${unitName}${amount === '1' ? '' : 's'}`};
   }
 
+  // Read the window Kibana currently has applied — from the `_g` global state in the URL (the source
+  // of truth however it was set), falling back to the date picker's button label. Mirrors the action
+  // observer's readTimeRange so the demonstration can tell when a range is already what it would set.
+  currentTimeRange() {
+    const href = (typeof location !== 'undefined' && location.href) || '';
+    const candidates = [href];
+    try { candidates.push(decodeURIComponent(href)); } catch (_error) { /* malformed escape */ }
+    for (const text of candidates) {
+      const match = text.match(/time:\(from:([^,]+),to:([^)]+)\)/);
+      if (match) {
+        const clean = value => value.replace(/^['"]|['"]$/g, '').trim();
+        return {from: clean(match[1]), to: clean(match[2])};
+      }
+    }
+    const node = document.querySelector("[data-test-subj='dateRangePickerControlButton']")
+      || document.querySelector("[data-test-subj='superDatePickerShowDatesButton']")
+      || document.querySelector("[data-test-subj='dateRangePickerInput']");
+    const label = (node?.textContent || node?.value || '').trim();
+    const relative = /last\s+(\d+)\s*(second|minute|hour|day|week)s?/i.exec(label);
+    if (relative) {
+      const unit = {second: 's', minute: 'm', hour: 'h', day: 'd', week: 'w'}[relative[2].toLowerCase()];
+      return {from: `now-${relative[1]}${unit}`, to: 'now'};
+    }
+    return {from: '', to: ''};
+  }
+
   async setTimeRange(command, toggle, coach, timingScale, signal) {
     const range = this.relativeTimeRange(command.value);
+    // If the window is already exactly what we'd set, opening the picker to re-enter the same range
+    // is a confusing no-op (e.g. an incident whose recommended window matches the view's default).
+    // Point at the picker, say it's already correct, and complete the step without touching it.
+    const target = {from: String(command.value?.from ?? '').trim().toLowerCase(), to: String(command.value?.to ?? 'now').trim().toLowerCase()};
+    const current = this.currentTimeRange();
+    if (target.from && current.from.toLowerCase() === target.from && (current.to || 'now').toLowerCase() === target.to) {
+      await this.pointAt(toggle, coach, timingScale, signal, `The window is already the last ${range.amount} ${range.unitLabel}, so there's nothing to change here.`, {showClick: false});
+      return {type: 'time_range_changed', details: command.value, state_after: {time_from: command.value.from, time_to: command.value.to}};
+    }
     await this.pointAt(toggle, coach, timingScale, signal, 'Open the time picker.', {activate: true});
     await this.settle(250, timingScale, signal);
     let number = this.resolve('kibana.time_value');
