@@ -398,6 +398,9 @@ class IncidentCoachPanel {
     const status = this.root.querySelector('#status');
     status.textContent = message;
     status.className = error ? 'error' : '';
+    // A problem must never be swallowed by a panel that finishCommand hid between steps: surface the
+    // panel so the learner sees what went wrong instead of the demonstration appearing to just stop.
+    if (error) { this.host.hidden = false; this.panel.hidden = false; }
   }
 
   // Confirm the learner's correct action in the already-open panel: the current step's card turns

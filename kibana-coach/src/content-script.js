@@ -49,7 +49,11 @@ function startIncidentCoach() {
       };
       if (command.mode === 'demonstration') {
         // Beat 1 — what: name the next move; Beat 2 — why: the reason, each its own card.
-        const target = await adapter.waitFor(command.target, 20000, controller.signal);
+        // The anchor is only the control the opening cards point at; perform() resolves the controls
+        // the step actually drives. Some steps (e.g. add_filter) deliberately point at an anchor the
+        // registry does not hold, like the filter bar, so a missing anchor must never abort the run —
+        // resolveAnchor falls back to no opening highlight and perform() highlights the real controls.
+        const target = await adapter.resolveAnchor(command.target, controller.signal);
         coach.showCommand(command, target);
         await readBeat(command.narration);
         if (command.reasoning) {

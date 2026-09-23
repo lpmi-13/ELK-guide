@@ -53,6 +53,21 @@ class KibanaAdapter {
     throw new Error(`Kibana target not found: ${name}`);
   }
 
+  // Resolve a step's anchor for the opening spotlight, tolerating a target the registry does not hold
+  // (some packs point add_filter at the filter bar) or one that never appears — returning null instead
+  // of throwing. The anchor is only the control to highlight while the "what / why" cards are read;
+  // perform() resolves and drives the controls the step actually acts on, so a missing anchor must
+  // never abort the demonstration. A stop/pause (AbortError) still propagates so the run unwinds.
+  async resolveAnchor(name, signal) {
+    if (!name || !this.registry?.targets?.[name]) return this.resolve(name);
+    try {
+      return await this.waitFor(name, 20000, signal);
+    } catch (error) {
+      if (error.name === 'AbortError') throw error;
+      return null;
+    }
+  }
+
   async perform(command, coach, {timingScale = 1, signal} = {}) {
     if (command.type === 'orient') return null;
     if (command.type === 'request_diagnosis' || command.type === 'request_answer') return null;
