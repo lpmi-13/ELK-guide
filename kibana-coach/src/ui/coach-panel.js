@@ -40,10 +40,18 @@ class IncidentCoachPanel {
     this.pendingCommand = null;
     this.reposition = () => {
       if (this.panel.hidden || !this.activeTarget?.isConnected) return;
-      // Keep the panel clear of the control, but only re-dim/-highlight if the spotlight is
-      // already revealed — a guided step starts with nothing dimmed until the learner asks.
-      if (this.spotlightRevealed) this.spotlight.show(this.activeTarget);
-      this.placeAwayFrom(this.activeTarget);
+      // Scroll fires this many times a second; coalesce to one update per frame so the glide isn't
+      // repeatedly retargeted mid-flight (which resets its easing and reads as a stutter).
+      if (this.repositionScheduled) return;
+      this.repositionScheduled = true;
+      requestAnimationFrame(() => {
+        this.repositionScheduled = false;
+        if (this.panel.hidden || !this.activeTarget?.isConnected) return;
+        // Keep the panel clear of the control, but only re-dim/-highlight if the spotlight is
+        // already revealed — a guided step starts with nothing dimmed until the learner asks.
+        if (this.spotlightRevealed) this.spotlight.show(this.activeTarget);
+        this.placeAwayFrom(this.activeTarget);
+      });
     };
     window.addEventListener('resize', this.reposition);
     window.addEventListener('scroll', this.reposition, true);
@@ -292,8 +300,12 @@ class IncidentCoachPanel {
       {left: maxLeft, top: maxTop},
     ];
     const targetRect = target?.getBoundingClientRect();
+    // A generous keep-out ring around the control: the panel leaves while the highlight/cursor is
+    // still approaching rather than once it has already slid underneath, so the move reads as
+    // getting out of the way in advance instead of reacting to a collision.
+    const lead = 64;
     const guard = targetRect && targetRect.width
-      ? {left: targetRect.left - 40, right: targetRect.right + 40, top: targetRect.top - 40, bottom: targetRect.bottom + 40}
+      ? {left: targetRect.left - lead, right: targetRect.right + lead, top: targetRect.top - lead, bottom: targetRect.bottom + lead}
       : null;
     const overlap = position => {
       if (!guard) return 0;
@@ -331,10 +343,18 @@ class IncidentCoachPanel {
   // `instant` suppresses the panel's left/top transition for one commit so a freshly revealed panel
   // appears at its resting spot rather than sliding in from the CSS default corner.
   applyPosition(instant = false) {
-    if (instant) this.panel.style.transition = 'none';
-    this.panel.style.left = `${this.pos.left}px`;
-    this.panel.style.top = `${this.pos.top}px`;
-    this.panel.style.right = 'auto';
+    // Move with a GPU-composited transform rather than left/top: animating layout properties forces
+    // the heavy Kibana grid underneath to reflow on every frame, which drops frames and reads as a
+    // jerky slide. The glide time also scales with the distance travelled so a small nudge stays
+    // quick while a full corner-swap decelerates gently into place instead of lurching off the mark.
+    if (instant) {
+      this.panel.style.transition = 'none';
+    } else {
+      const from = this.appliedPos || this.pos;
+      const distance = Math.hypot(this.pos.left - from.left, this.pos.top - from.top);
+      this.panel.style.setProperty('--panel-move', `${Math.round(Math.min(900, Math.max(380, distance * 0.8)))}ms`);
+    }
+    this.panel.style.transform = `translate(${this.pos.left}px, ${this.pos.top}px)`;
     // Bound the card to the viewport from wherever its top now sits, so a phase that grows
     // taller can never spill past the bottom edge — it keeps the same margin as the sides and
     // scrolls inside if it truly can't fit. (CSS max-height is measured from the viewport top,
@@ -344,6 +364,7 @@ class IncidentCoachPanel {
       void this.panel.offsetWidth; // flush the placement before re-enabling the transition
       this.panel.style.transition = '';
     }
+    this.appliedPos = {left: this.pos.left, top: this.pos.top};
   }
 
   // A demonstration reveals one card at a time (what → why → action → learning) and the cards
@@ -427,6 +448,7 @@ class IncidentCoachPanel {
     this.panel.hidden = true;
     this.host.hidden = true;
     this.pos = null;
+    this.appliedPos = null;
     clearTimeout(this.celebrateTimer);
     this.celebrating = false;
     this.pendingCommand = null;
@@ -435,7 +457,7 @@ class IncidentCoachPanel {
 
   static styles = `
     :host { all: initial; position: fixed; z-index: 2147483647; inset: 0; pointer-events: none; font: 14px system-ui,sans-serif; color: #17212b; }
-    .panel { pointer-events: auto; position: fixed; z-index:3; top: 72px; right: 18px; width: min(468px, calc(100vw - 36px)); max-height: calc(100vh - 90px); overflow: auto; box-sizing: border-box; padding: 18px; border: 1px solid #b6c6d6; border-radius: 12px; background: #fff; box-shadow: 0 16px 46px #17212b40; transition: left .72s cubic-bezier(.22,1,.36,1), top .72s cubic-bezier(.22,1,.36,1); }
+    .panel { pointer-events: auto; position: fixed; z-index:3; top: 0; left: 0; width: min(468px, calc(100vw - 36px)); max-height: calc(100vh - 90px); overflow: auto; box-sizing: border-box; padding: 18px; border: 1px solid #b6c6d6; border-radius: 12px; background: #fff; box-shadow: 0 16px 46px #17212b40; transform: translate(18px, 72px); transition: transform var(--panel-move, .6s) cubic-bezier(.4, 0, .2, 1); will-change: transform; }
     [hidden] { display:none!important; }
     header { display:flex; align-items:center; gap:8px; } header strong { flex:1; } .live-dot { width:9px;height:9px;border-radius:50%;background:#1aa87a;box-shadow:0 0 0 4px #1aa87a22; }
     h2 { margin: 14px 0 8px; font-size: 17px; text-transform: capitalize; } h3 { margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.045em;color:#3f5060; } p { line-height:1.45; } #mode { color:#536170; font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
