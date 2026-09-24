@@ -57,8 +57,10 @@ class ScenarioV2Tests(unittest.TestCase):
                 self.assertTrue(all("${truth." in json.dumps(goal["demonstration"]) for goal in demonstrated))
                 summary = playbook["demonstration_summary"]
                 self.assertEqual(len(summary["checks"]), len(demonstrated))
-                self.assertTrue(all(len(check["detail"].split()) >= 28 for check in summary["checks"]))
-                self.assertGreaterEqual(len(summary["evidence"].split()), 32)
+                # Each check is a concise recap of one step — a real sentence, not a stub — but the
+                # debrief is a summary, so it is no longer required to restate the step's reasoning at
+                # essay length. Evidence/conclusion prose is likewise optional (the steps carried it).
+                self.assertTrue(all(len(check["detail"].split()) >= 4 for check in summary["checks"]))
 
     def test_goal_inserts_splice_new_goals_relative_to_the_template(self):
         from contracts import expand_descriptor as expand

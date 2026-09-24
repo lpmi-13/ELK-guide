@@ -22,28 +22,26 @@ class IncidentDebrief {
   showDemonstration(summary) {
     const dialog = document.createElement('dialog');
     dialog.className = 'incident-debrief';
+    // A compact recap: the finding, then one short line per step. The demonstration already carried
+    // the reasoning as it went, so the summary drops the intro sentence, the per-step headings, and
+    // the separate evidence/conclusion prose — it is a summary, not a re-teach.
     dialog.innerHTML = `<form method="dialog"><button class="dialog-close" aria-label="Close summary">×</button></form>
-      <h2></h2><div class="incident-problem"><strong>Problem found</strong><p></p></div>
-      <p class="demo-summary"></p><h3>What was checked</h3><ol class="demo-checks"></ol>
-      <h3>Evidence used</h3><p class="demo-evidence"></p><h3>Conclusion</h3><p class="incident-conclusion"></p>`;
+      <h2></h2>
+      <div class="incident-problem"><strong>Problem found</strong><p></p></div>
+      <ul class="demo-checks"></ul>`;
     dialog.querySelector('h2').textContent = summary.title || 'Demonstration complete';
     const problem = summary.answer?.conclusion || summary.conclusion || '';
     const problemBox = dialog.querySelector('.incident-problem');
     problemBox.querySelector('p').textContent = problem;
     problemBox.hidden = !problem;
-    dialog.querySelector('.demo-summary').textContent = summary.summary || '';
-    dialog.querySelector('.demo-evidence').textContent = summary.evidence || '';
-    dialog.querySelector('.incident-conclusion').textContent = summary.conclusion || '';
     const checks = dialog.querySelector('.demo-checks');
     for (const check of summary.checks || []) {
       const item = document.createElement('li');
-      const title = document.createElement('strong');
-      const detail = document.createElement('p');
-      title.textContent = check.title;
-      detail.textContent = check.detail;
-      item.append(title, detail);
+      // Checks are one-line recaps; only the detail is shown (the title is an internal label).
+      item.textContent = typeof check === 'string' ? check : (check.detail || check.title || '');
       checks.append(item);
     }
+    checks.hidden = !checks.children.length;
     this.root.append(dialog);
     dialog.addEventListener('close', () => dialog.remove());
     dialog.showModal();

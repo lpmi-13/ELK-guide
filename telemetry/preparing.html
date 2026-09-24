@@ -30,10 +30,35 @@
   <script>
     (() => {
       const bar = document.querySelector('#p');
-      let shown = 40;
-      const startedAt = Date.now();
+      // A manual refresh drops the __url/__done/__halt flags the opener tab pushes
+      // onto this window, and the opener only signals once — so on its own the bar
+      // would restart and never finish. The opener also mirrors the launch outcome
+      // into this tab's sessionStorage; rehydrate from it so the page can complete,
+      // or show its failure, by itself after a refresh.
+      let store; try { store = window.sessionStorage; } catch (_error) { store = null; }
+      const read = key => { try { return store ? store.getItem(key) : null; } catch (_error) { return null; } };
+      const write = (key, value) => { try { if (store) store.setItem(key, value); } catch (_error) {} };
+      if (window.__url == null) { const saved = read('prep:url'); if (saved) window.__url = saved; }
+      if (window.__url) window.__done = true;
+      if (read('prep:halt') === '1') window.__halt = true;
+      if (window.__halt) {
+        const set = (id, text) => { const el = document.getElementById(id); if (el && text) el.textContent = text; };
+        const heading = read('prep:heading');
+        if (heading) { document.title = heading; set('h', heading); }
+        set('msg', read('prep:msg'));
+        const extra = document.getElementById('extra'), go = document.getElementById('go'), link = read('prep:link');
+        if (link && extra && go) { go.href = link; extra.hidden = false; }
+      }
+      // Keep one start time across refreshes so the bar resumes its curve instead
+      // of snapping back to the beginning.
+      let startedAt = Number(read('prep:started')) || 0;
+      const fresh = !startedAt;
+      if (fresh) { startedAt = Date.now(); write('prep:started', String(startedAt)); }
+      let shown = fresh ? 40 : Math.min(985, 900 * (1 - Math.exp(-((Date.now() - startedAt) / 1000) / 5)));
       function step() {
         if (window.__halt) return;
+        // Persist a URL pushed live so a refresh a moment later can still navigate.
+        if (window.__url && read('prep:url') !== window.__url) write('prep:url', window.__url);
         const ceiling = window.__done ? 1000 : 900 * (1 - Math.exp(-((Date.now() - startedAt) / 1000) / 5));
         shown += (ceiling - shown) * (window.__done ? 0.2 : 0.08);
         if (!window.__done && shown > 985) shown = 985;

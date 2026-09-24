@@ -16,11 +16,11 @@
       "title": "Filter to the failing status code",
       "concept": "Filter on a value you actually saw in the data, not one you guessed. That leaves just the failing records.",
       "narration": "Filter for the status code that stood out — ${param.incident.status}. Click the + next to it in the field's top values, or use Add filter. The results should shrink down to just the failing requests.",
-      "reasoning": "You got this value from the top values you just read, so the filter is based on evidence, not a guess.",
+      "reasoning": "You got this value from the top values you just read, so the filter is based on evidence, not a guess. Adding it as its own filter pill, rather than typing into the query bar, also means one click lifts it back off to widen the view again — without editing any query text.",
       "evidence": "After you filter, the table and histogram shrink down to just the failing requests behind the incident.",
       "demonstration": {
         "narration": "Now that ${param.incident.status_family} stands out, filter for it: open Add filter, choose http.response.status_code, leave the operator on ‘is’, and enter ${param.incident.status} (or click the + next to ${param.incident.status} in the field's top values). This keeps only the failing requests — picked from what we just saw in the data, not guessed up front.",
-        "reasoning": "The window still has healthy 200s and other traffic in it. Filtering for the ${param.incident.status} we saw spike — instead of a code we guessed — leaves only the failing requests, so the next question, which endpoint, has a clean set of records to work from within ${truth.scope}.",
+        "reasoning": "The window still has healthy 200s and other traffic in it. Filtering for the ${param.incident.status} we saw spike — instead of a code we guessed — leaves only the failing requests, so the next question, which endpoint, has a clean set of records to work from within ${truth.scope}. Adding it as its own filter pill, rather than typing into the query bar, keeps it a discrete control we can lift back off with one click to widen the view again.",
         "evidence": "Once the filter applies, the result table and histogram should shrink down to the ${param.incident.status} responses. That filtered set is the signal behind “${truth.conclusion}”. Next we find where those failures are happening."
       },
       "requires": ["survey"],
@@ -99,16 +99,13 @@
   "overrides": {
     "demonstration_summary": {
       "title": "${var.title} complete",
-      "summary": "This walkthrough answered “${scenario.title}” by building up the evidence step by step, instead of just trusting the incident report. It set Discover to the last ${var.window_spelled}, read the status-code top values to find the unusual code, filtered for it, read url.path to find the affected endpoint, and finally opened one typical event to check it.",
       "checks": [
-        {"title": "Time range", "detail": "The time picker at the top was set to the last ${var.window_spelled}, because the report said the incident was first noticed ${detected_offset_minutes} minutes ago. Setting the range first, before reading anything, means Discover refreshes its histogram and results to just that window — dropping older, unrelated data that would otherwise skew what we see."},
-        {"title": "Status codes", "detail": "Instead of assuming a status code, we read the http.response.status_code field's top values directly, and the data showed that ${param.incident.status_family} responses were spiking above the healthy 200s inside the window. Reading the values first made the unusual code something we found, not something we guessed from the report."},
-        {"title": "Filtering", "detail": "We then added a filter for http.response.status_code is ${param.incident.status} — the value we saw in the top values, not one we assumed — so the result table and histogram shrank to just the failing requests. Filtering on what we actually saw kept the signal and left normal 200 traffic and unrelated services out of the picture."},
-        {"title": "Affected endpoint", "detail": "Inside the filtered failures, we read the url.path field's top values to see where the errors were happening, and ${param.incident.route} accounted for almost all of them. This second breakdown pinned the incident to one endpoint in ${param.incident.service}, rather than the whole service being down."},
-        {"title": "Confirming", "detail": "Finally, we opened one of the filtered events and read its fields together, confirming that the failing status code and the affected endpoint both show up in the same real request. Checking a single event this way stops us from resting the conclusion on just a histogram, a count, or a field value that happened to line up."}
+        {"title": "Time range", "detail": "Set the time picker to catch the issue."},
+        {"title": "Status codes", "detail": "Found the top status-code values — ${param.incident.status} stood out."},
+        {"title": "Filtering", "detail": "Filtered for ${param.incident.status}, the failing status code."},
+        {"title": "Affected endpoint", "detail": "Isolated the affected endpoint ${param.incident.route}."},
+        {"title": "Confirming", "detail": "Confirmed ${param.incident.status} and ${param.incident.route} together in the same event."}
       ],
-      "evidence": "The status-code and url.path top values gave us the main signal — which code failed and where — and the event we opened confirmed it in a single record. Because every step points to ${var.finding_phrase} within ${truth.scope}, they all support the same conclusion, rather than relying on what the report said.",
-      "conclusion": "${truth.conclusion} This is backed up by the status-code and endpoint top values we saw, plus a typical event whose fields show the same thing.",
       "answer": {"finding": "${truth.finding}", "scope": "${truth.scope}", "conclusion": "${truth.conclusion}", "evidence_refs": "signal,corroboration", "evidence": "The status-code and url.path top values, plus the event we opened, connect ${var.finding_phrase} to ${truth.scope}."}
     }
   }

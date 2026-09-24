@@ -158,27 +158,31 @@ class RandomizationTests(unittest.TestCase):
                             item for item in goals
                             if item["reference_action"]["command"] not in {"request_answer", "request_diagnosis"}
                         ]
+                        answer = summary.get("answer", {})
+                        # The debrief is a compact recap: one terse line per step plus the graded
+                        # answer (shown as "Problem found"). There is no intro sentence and no
+                        # evidence/conclusion prose — the steps themselves carried the reasoning.
                         summary_copy = " ".join([
-                            summary["summary"], summary["evidence"], summary["conclusion"],
+                            answer.get("conclusion", ""), answer.get("evidence", ""),
                             *(check["detail"] for check in summary["checks"]),
                         ])
                         self.assertIn(finding, summary_copy)
                         self.assertEqual(len(summary["checks"]), len(demonstrated))
                         self.assertEqual(summary["answer"]["conclusion"], manifest["scenario"]["truth"]["answers"]["conclusion"])
                         self.assertLessEqual(len(summary["answer"]["conclusion"].split()), 25)
-                        self.assertGreaterEqual(len(summary["summary"].split()), 35)
-                        self.assertTrue(all(len(check["detail"].split()) >= 28 for check in summary["checks"]))
-                        self.assertGreaterEqual(len(summary["evidence"].split()), 32)
-                        self.assertGreaterEqual(len(summary["conclusion"].split()), 18)
+                        # Each check is a real one-line recap, not a stub — but no longer an essay.
+                        self.assertTrue(all(len(check["detail"].split()) >= 4 for check in summary["checks"]))
                         if entry["id"] == "discover-time-window":
-                            # The debrief now walks the derive-don't-presume flow: survey the status
-                            # codes, filter to the observed one, then survey the endpoints.
+                            # The debrief still walks the derive-don't-presume flow: survey the status
+                            # codes, filter to the observed one, then isolate the endpoint. The lines
+                            # are plain language now, so assert the concept and the observed values
+                            # rather than the raw field ids.
                             titles = [check["title"] for check in summary["checks"]]
                             self.assertEqual(titles, ["Time range", "Status codes", "Filtering", "Affected endpoint", "Confirming"])
                             status_check = next(check for check in summary["checks"] if check["title"] == "Status codes")
-                            self.assertIn("http.response.status_code", status_check["detail"])
+                            self.assertIn("status", status_check["detail"].lower())
                             endpoint_check = next(check for check in summary["checks"] if check["title"] == "Affected endpoint")
-                            self.assertIn("url.path", endpoint_check["detail"])
+                            self.assertIn("endpoint", endpoint_check["detail"].lower())
                             self.assertIn(f"spiked during the {finding}", summary["answer"]["conclusion"])
                     else:
                         explanation = " ".join(command[key] for key in ("narration", "reasoning", "evidence"))
@@ -260,7 +264,10 @@ class RandomizationTests(unittest.TestCase):
             # conclusion, which spells the window as "the <finding>".
             isolate = next(goal for goal in rendered["goals"] if goal["id"] == "isolate")
             self.assertIn(f"spiked during the {finding}", isolate["demonstration"]["evidence"])
-            self.assertGreaterEqual(len(matching_copy), 10)
+            # The finding is still woven through the copy (goal steps + the graded answer), and every
+            # occurrence stays grammar-aware ("the <finding>"); the concise debrief no longer repeats
+            # it at essay length, so this is a breadth floor, not a verbosity one.
+            self.assertGreaterEqual(len(matching_copy), 6)
 
     def test_every_mode_receives_the_same_seeded_incident_briefing(self):
         manifest = self.materialize("slow-payments", 424242)

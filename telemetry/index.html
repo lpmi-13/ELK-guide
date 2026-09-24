@@ -49,7 +49,8 @@
     button.dialog-close { margin:0;padding:2px 8px;background:transparent;color:#c6d4df;font-size:26px;font-weight:400;line-height:1; }
     button.dialog-close:hover { color:#fff;background:#203447; }
     .dialog-actions { display:flex;justify-content:flex-end; }
-    .scenario-catalog { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:16px 0;max-height:390px;overflow:auto;padding-right:4px; }
+    .scenario-catalog { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:16px 0;min-height:390px;max-height:390px;overflow:auto;padding-right:4px; }
+    .scenario-catalog .catalog-msg { grid-column:1/-1;align-self:center;margin:0;text-align:center;color:#90a5b6; }
     .scenario-card { display:block;width:100%;margin:0;padding:14px;text-align:left;border:1px solid #3d566b;border-radius:8px;background:#10202e;color:#eef5fb; }
     .scenario-card:hover:not(:disabled),.scenario-card.selected { border-color:#43d7a0;box-shadow:inset 0 0 0 1px #43d7a0; }
     .scenario-card:disabled { opacity:.55;cursor:not-allowed; }
@@ -84,7 +85,7 @@
       </div>
       <p>Choose a production question, then investigate it in Kibana using demonstration, guided practice, or challenge mode. All learner workflows are read-only.</p>
       <form id="start-form">
-        <div id="scenario-catalog" class="scenario-catalog" role="listbox" aria-label="Available scenarios" aria-live="polite"></div>
+        <div id="scenario-catalog" class="scenario-catalog" role="listbox" aria-label="Available scenarios" aria-live="polite"><p class="catalog-msg">Loading scenarios…</p></div>
         <label id="mode-label" for="mode">Assistance mode</label>
         <span class="select-control">
           <select id="mode"><option value="demonstration" selected>Demonstration</option><option value="guided">Guided practice</option><option value="challenge">Challenge</option></select>
@@ -142,6 +143,21 @@
     let catalogEntries = [];
     let selectedScenario = '';
 
+    function catalogMessage(text) {
+      const message = document.createElement('p');
+      message.className = 'catalog-msg';
+      message.textContent = text;
+      scenarioCatalog.replaceChildren(message);
+    }
+    // Remember the catalog so a reload can paint it synchronously (no empty-to-
+    // populated flash) before the network copy arrives.
+    function cacheCatalog() {
+      try {
+        sessionStorage.setItem('catalog:entries', JSON.stringify(catalogEntries));
+        sessionStorage.setItem('catalog:selected', selectedScenario);
+      } catch (_error) { /* storage may be unavailable */ }
+    }
+
     function renderCatalog() {
       scenarioCatalog.replaceChildren();
       for (const item of catalogEntries) {
@@ -165,10 +181,10 @@
           reason.textContent = item.reason;
           card.append(reason);
         }
-        card.onclick = () => { selectedScenario = item.id; renderCatalog(); document.querySelector('#start').disabled = false; };
+        card.onclick = () => { selectedScenario = item.id; cacheCatalog(); renderCatalog(); document.querySelector('#start').disabled = false; };
         scenarioCatalog.append(card);
       }
-      if (!catalogEntries.length) scenarioCatalog.textContent = 'No scenarios are available.';
+      if (!catalogEntries.length) catalogMessage('No scenarios are available.');
     }
 
     async function loadCatalog() {
@@ -176,10 +192,16 @@
       const catalog = await response.json();
       if (!response.ok) throw new Error(catalog.error || 'Scenario catalog unavailable');
       catalogEntries = catalog.scenarios;
-      const first = catalogEntries.find(item => item.available && item.classification === 'core');
-      selectedScenario = first?.id || '';
+      // Keep a still-valid selection (e.g. one restored from cache on reload)
+      // instead of snapping back to the first card and flickering the highlight.
+      const stillSelectable = catalogEntries.some(item => item.id === selectedScenario && item.available);
+      if (!stillSelectable) {
+        const first = catalogEntries.find(item => item.available && item.classification === 'core');
+        selectedScenario = first?.id || '';
+      }
       document.querySelector('#start').disabled = !selectedScenario;
       renderCatalog();
+      cacheCatalog();
     }
 
     const modeTrigger = document.createElement('button');
@@ -424,7 +446,19 @@
       try { Object.assign(investigationTab, props); return true; }
       catch (_error) { return false; }
     }
+    // Mirror the launch outcome into the prep tab's own sessionStorage. The expando
+    // flags above are lost if the learner refreshes that tab, and the opener only
+    // signals once, so without this a refresh would restart the bar and never
+    // finish; the prep page reads these keys to complete (or show its failure).
+    function persistTab(props) {
+      try {
+        const store = investigationTab && !investigationTab.closed ? investigationTab.sessionStorage : null;
+        if (store) for (const [key, value] of Object.entries(props)) store.setItem(key, value);
+      } catch (_error) { /* best-effort; cross-tab storage may be blocked */ }
+    }
     function tabMessage(heading, message, linkUrl) {
+      // Persist the halt state so a refresh of the prep tab keeps showing it.
+      persistTab({'prep:halt': '1', 'prep:heading': heading || '', 'prep:msg': message || '', 'prep:link': linkUrl || ''});
       const doc = prepTabDoc();
       if (!doc) return false;
       const set = (id, text) => { const el = doc.getElementById(id); if (el && text != null) el.textContent = text; };
@@ -443,7 +477,9 @@
         launched = true;
         // The live tab is about to load Kibana; release the CPU the warm frame holds.
         stopWarmup();
-        // Hand the URL to the prep page: it fills the bar, then navigates itself.
+        // Persist first so a refresh mid-handoff can still land, then hand the URL
+        // to the prep page: it fills the bar, then navigates itself.
+        persistTab({'prep:url': investigationUrl});
         if (signalTab({__url: investigationUrl, __done: true})) clearLaunchStatus();
         else revealManualOpen('Investigation ready.');
       } else if (coachRuntimeResolved) {
@@ -532,7 +568,18 @@
     });
     scenarioKey.value = generateScenarioKey();
     detectCoachRuntime();
-    loadCatalog().catch(error => { scenarioCatalog.textContent = error.message; });
+    // Paint the last-known catalog synchronously so a reload shows the cards at
+    // once, keeping the layout stable while the fresh copy loads in the background.
+    try {
+      const cached = sessionStorage.getItem('catalog:entries');
+      if (cached) {
+        catalogEntries = JSON.parse(cached);
+        selectedScenario = sessionStorage.getItem('catalog:selected') || '';
+        document.querySelector('#start').disabled = !selectedScenario;
+        renderCatalog();
+      }
+    } catch (_error) { /* fall back to the loading placeholder */ }
+    loadCatalog().catch(error => { catalogMessage(error.message); });
     connectTelemetry();
   </script>
 </body>

@@ -49,7 +49,7 @@
     },
     "demonstration_summary": {
       "type": "object",
-      "required": ["title", "summary", "checks", "evidence", "conclusion", "answer"],
+      "required": ["title", "checks", "answer"],
       "properties": {
         "title": {"type": "string"},
         "summary": {"type": "string"},

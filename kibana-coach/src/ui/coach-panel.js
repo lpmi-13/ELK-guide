@@ -39,22 +39,43 @@ class IncidentCoachPanel {
     this.celebrating = false;
     this.pendingCommand = null;
     this.reposition = () => {
-      if (this.panel.hidden || !this.activeTarget?.isConnected) return;
+      if (this.panel.hidden) return;
       // Scroll fires this many times a second; coalesce to one update per frame so the glide isn't
       // repeatedly retargeted mid-flight (which resets its easing and reads as a stutter).
       if (this.repositionScheduled) return;
       this.repositionScheduled = true;
       requestAnimationFrame(() => {
         this.repositionScheduled = false;
-        if (this.panel.hidden || !this.activeTarget?.isConnected) return;
+        if (this.panel.hidden) return;
+        const target = this.activeTarget?.isConnected ? this.activeTarget : null;
+        // Nothing to dodge — no highlighted control and no open doc-viewer flyout — so leave the
+        // card where it rests rather than nudging it for every stray scroll or mutation.
+        if (!target && !this.findFlyout()) return;
         // Keep the panel clear of the control, but only re-dim/-highlight if the spotlight is
         // already revealed — a guided step starts with nothing dimmed until the learner asks.
-        if (this.spotlightRevealed) this.spotlight.show(this.activeTarget);
-        this.placeAwayFrom(this.activeTarget);
+        if (target && this.spotlightRevealed) this.spotlight.show(target);
+        this.placeAwayFrom(target);
       });
     };
     window.addEventListener('resize', this.reposition);
     window.addEventListener('scroll', this.reposition, true);
+    // Expanding a result opens Kibana's doc-viewer flyout, docked over the right of the screen —
+    // exactly where the card usually sits, so it would be hidden underneath. The flyout opens and
+    // closes without any scroll or resize, so watch the DOM for it and re-place the card the moment
+    // it appears (or goes away). The open/closed transition flag keeps this from doing real work on
+    // the flood of unrelated Kibana mutations.
+    this.flyoutObserver = new MutationObserver(() => {
+      if (this.flyoutCheckScheduled) return;
+      this.flyoutCheckScheduled = true;
+      requestAnimationFrame(() => {
+        this.flyoutCheckScheduled = false;
+        const open = !!this.findFlyout();
+        if (open === this.flyoutOpen) return;
+        this.flyoutOpen = open;
+        this.reposition();
+      });
+    });
+    this.flyoutObserver.observe(document.body, {childList: true, subtree: true});
     this.root.querySelector('#pause').onclick = () => this.setPaused(!this.paused);
     this.root.querySelector('#advance').onclick = () => this.onAdvance?.();
     this.root.querySelector('#hint').onclick = () => this.revealHint();
@@ -279,8 +300,20 @@ class IncidentCoachPanel {
     }
   }
 
-  // Stay put unless the current spot would actually cover the highlighted control (or fell
-  // off-screen). Only then glide to the least-disruptive clear corner. Needless hops are jarring.
+  // Kibana's expanded-document viewer opens as a flyout docked on the right. Return its on-screen
+  // rectangle while it's open (and big enough to matter), so placement can treat it as a keep-out
+  // region just like a highlighted control; null when there's no flyout to dodge.
+  findFlyout() {
+    const el = document.querySelector("[data-test-subj='docViewerFlyout']");
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 40 || rect.height < 40) return null;
+    return rect;
+  }
+
+  // Stay put unless the current spot would actually cover the highlighted control or the open
+  // doc-viewer flyout (or fell off-screen). Only then glide to the least-disruptive clear corner.
+  // Needless hops are jarring.
   placeAwayFrom(target) {
     if (this.panel.hidden) return;
     // A null pos means the panel was just revealed: snap to the resting spot instead of gliding
@@ -304,23 +337,34 @@ class IncidentCoachPanel {
     // still approaching rather than once it has already slid underneath, so the move reads as
     // getting out of the way in advance instead of reacting to a collision.
     const lead = 64;
-    const guard = targetRect && targetRect.width
-      ? {left: targetRect.left - lead, right: targetRect.right + lead, top: targetRect.top - lead, bottom: targetRect.bottom + lead}
-      : null;
+    // Everything the card must stay off: the highlighted control (with its lead ring) and, while the
+    // expanded-document viewer is open, the flyout docked on the right. Overlap is summed over all of
+    // them, so an open flyout on the right pushes the card to a clear corner on the left.
+    const guards = [];
+    if (targetRect && targetRect.width) {
+      guards.push({left: targetRect.left - lead, right: targetRect.right + lead, top: targetRect.top - lead, bottom: targetRect.bottom + lead});
+    }
+    const flyoutRect = this.findFlyout();
+    if (flyoutRect) {
+      guards.push({left: flyoutRect.left, right: flyoutRect.right, top: flyoutRect.top, bottom: flyoutRect.bottom});
+    }
     const overlap = position => {
-      if (!guard) return 0;
       const right = position.left + width;
       const bottom = position.top + height;
-      const w = Math.max(0, Math.min(right, guard.right) - Math.max(position.left, guard.left));
-      const h = Math.max(0, Math.min(bottom, guard.bottom) - Math.max(position.top, guard.top));
-      return w * h;
+      let area = 0;
+      for (const guard of guards) {
+        const w = Math.max(0, Math.min(right, guard.right) - Math.max(position.left, guard.left));
+        const h = Math.max(0, Math.min(bottom, guard.bottom) - Math.max(position.top, guard.top));
+        area += w * h;
+      }
+      return area;
     };
-    // Sticky: keep the current placement when it isn't covering the target and still fits.
+    // Sticky: keep the current placement when it isn't covering a keep-out and still fits.
     if (this.pos) {
       const fits = this.pos.left >= margin - 1 && this.pos.top >= topMargin - 1
         && this.pos.left <= maxLeft + 1 && this.pos.top <= maxTop + 1;
       if (fits && overlap(this.pos) === 0) return;
-    } else if (!targetRect) {
+    } else if (!guards.length) {
       this.pos = {left: maxLeft, top: topMargin};
       this.applyPosition(firstPlacement);
       return;
@@ -334,7 +378,8 @@ class IncidentCoachPanel {
       move: this.pos ? Math.hypot(position.left - this.pos.left, position.top - this.pos.top) : 0,
       away: distTo(position),
     }));
-    // Fewest pixels over the target, then (moving) the shortest hop, else the corner farthest from it.
+    // Fewest pixels over the keep-outs, then (moving) the shortest hop, else the corner farthest
+    // from the control.
     ranked.sort((a, b) => a.overlap - b.overlap || (this.pos ? a.move - b.move : b.away - a.away));
     this.pos = {left: Math.round(ranked[0].position.left), top: Math.round(ranked[0].position.top)};
     this.applyPosition(firstPlacement);
