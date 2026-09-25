@@ -34,7 +34,6 @@
       "signal_count": 28,
       "noise_count": 80,
       "signal": {
-        "labels": {"signal": "decisive"},
         "service": {"name": "${param.incident.service}"},
         "event": {"outcome": "failure"},
         "http": {"response": {"status_code": "${param.incident.status}"}},
@@ -45,7 +44,6 @@
         {
           "count": 2,
           "event": {
-            "labels": {"corroboration": true},
             "service": {"name": "${param.incident.service}"},
             "event": {"outcome": "failure"},
             "http": {"response": {"status_code": "${param.incident.status}"}},
@@ -56,7 +54,7 @@
       ]
     },
     "readiness_validators": [
-      {"id": "seeded-signal", "kind": "es_count", "minimum": 20, "query": {"term": {"labels.signal.keyword": "decisive"}}}
+      {"id": "seeded-signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.service} temporarily unavailable"}}}
     ]
   },
   "starting_view": {"app": "discover", "saved_object": "incident-investigation", "path": "/app/discover#/view/incident-investigation?_g=(time:(from:now-1h,to:now))"},
@@ -67,8 +65,8 @@
       "conclusion": "Errors from ${param.incident.service} spiked during the ${param.window.label}."
     },
     "assertions": [
-      {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"labels.signal.keyword": "decisive"}}},
-      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"labels.corroboration": true}}}
+      {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.service} temporarily unavailable"}}},
+      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "support-reported ${param.incident.service} interval confirmed"}}}
     ]
   },
   "answer_schema": {

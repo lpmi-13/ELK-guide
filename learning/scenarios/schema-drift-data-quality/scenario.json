@@ -27,7 +27,6 @@
       "signal_count": 34,
       "noise_count": 90,
       "signal": {
-        "labels": {"signal": "decisive"},
         "service": {"name": "${param.incident.service}", "version": "${param.incident.version}"},
         "telemetry": {"producer": "${param.incident.producer}"},
         "schema": {"route_present": false},
@@ -40,7 +39,6 @@
         {
           "count": 3,
           "event": {
-            "labels": {"corroboration": true},
             "service": {"name": "${param.incident.service}", "version": "${param.incident.version}"},
             "telemetry": {"producer": "${param.incident.producer}"},
             "schema": {"route_present": false},
@@ -50,7 +48,7 @@
       ]
     },
     "readiness_validators": [
-      {"id": "seeded-signal", "kind": "es_count", "minimum": 20, "query": {"term": {"labels.signal.keyword": "decisive"}}}
+      {"id": "seeded-signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "request recorded without expected route field"}}}
     ]
   },
   "starting_view": {"app": "discover", "saved_object": "incident-investigation", "path": "/app/discover#/view/incident-investigation"},
@@ -61,8 +59,8 @@
       "conclusion": "Telemetry producer ${param.incident.producer} on version ${param.incident.version} stopped populating the route field; traffic did not fall."
     },
     "assertions": [
-      {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"labels.signal.keyword": "decisive"}}},
-      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"labels.corroboration": true}}}
+      {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "request recorded without expected route field"}}},
+      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "traffic volume unchanged despite missing route"}}}
     ]
   },
   "answer_schema": {

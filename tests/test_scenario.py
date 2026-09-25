@@ -33,6 +33,31 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual(first_without_identity, second_without_identity)
         self.assertGreaterEqual(first["scenario"]["fault"]["delay_ms"], 3000)
 
+    def test_seeded_scenarios_use_real_event_fields_for_evidence(self):
+        for path in sorted((ROOT / "learning/scenarios").glob("*/scenario.json")):
+            scenario = json.loads(path.read_text())
+            if "seeded_events" not in scenario.get("provisioning", {}):
+                continue
+            for seed in (42, 117):
+                with self.subTest(scenario=scenario["id"], seed=seed):
+                    manifest = self.controller.materialize(scenario, seed, run_id="run-abcdefghijkl")
+                    documents = self.controller.generate_seeded_events(manifest)
+                    self.assertTrue(documents)
+                    for document in documents:
+                        self.assertNotIn("lab", document)
+                        self.assertNotIn("labels", document)
+                        self.assertEqual(document["host"]["os"]["platform"], "linux")
+                    checks = (manifest["scenario"]["provisioning"]["readiness_validators"]
+                              + manifest["scenario"]["truth"]["assertions"])
+                    self.assertTrue({"seeded-signal", "signal", "corroboration"}.issubset(
+                        {check["id"] for check in checks}))
+                    for check in checks:
+                        if check["id"] not in {"seeded-signal", "signal", "corroboration"}:
+                            continue
+                        message = check["query"]["term"]["message.keyword"]
+                        matching = sum(document.get("message") == message for document in documents)
+                        self.assertGreaterEqual(matching, check["minimum"], check["id"])
+
     def test_negative_seed_is_not_a_valid_run_seed(self):
         with self.assertRaisesRegex(ValueError, "non-negative"):
             self.controller.create_run(seed=-1, scenario_name="slow-payments")

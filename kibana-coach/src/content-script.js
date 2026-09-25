@@ -67,7 +67,7 @@ function startIncidentCoach() {
       if (command.mode === 'demonstration') {
         // Beat 4 — learning: summarise what the result showed before moving on.
         coach.showLearning(command);
-        await readBeat([command.evidence, command.concept].filter(Boolean).join(' '));
+        await readBeat(command.evidence);
       }
       coach.finishCommand(command);
       client.acknowledge(command, 'completed', action?.state_after || {});

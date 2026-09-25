@@ -64,7 +64,7 @@ def assert_seeded_data(elasticsearch_url, scenario_id, run_id):
     status, result = request_json(
         f"{elasticsearch_url}/lab-{run_id}/_count",
         "POST",
-        {"query": {"term": {"lab.run_id.keyword": run_id}}},
+        {"query": {"match_all": {}}},
     )
     if status != 200 or result.get("count", 0) < 2:
         raise AssertionError(f"{scenario_id}: isolated seeded data missing ({status}): {result}")

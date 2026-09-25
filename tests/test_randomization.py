@@ -7,7 +7,6 @@ all agree, two seeds require different filters, and the same seed is reproducibl
 
 import importlib.util
 import json
-import re
 import sys
 import unittest
 from pathlib import Path
@@ -198,12 +197,13 @@ class RandomizationTests(unittest.TestCase):
             self.assertEqual(guided_command["reasoning"], "")
             self.assertEqual(guided_command["evidence"], "")
 
-    def test_demonstrated_window_always_covers_the_noticed_offset(self):
-        """The scope step tells the learner it is setting the window because the incident was
-        "noticed N minutes ago", so the demonstrated (and graded) window must always reach back
-        at least that far — otherwise the coach's stated reason contradicts the picker it sets.
-        Exercises the real create_session path (which derives the window for the time-window pack)
-        across every discover-template pack and many seeds."""
+    def test_scope_window_tracks_the_noticed_offset_in_demonstration_and_guided_modes(self):
+        """The coach must not pair a recent report with an independently randomized long range.
+
+        Exercise the real session path across every Discover-template pack and both coached modes.
+        The selected action must be the incident age rounded up to a five-minute boundary; the
+        demonstration and guided hints must describe that same age and range.
+        """
         catalog = json.loads((ROOT / "learning/catalog.json").read_text())["scenarios"]
         discover_packs = [
             entry["id"] for entry in catalog
@@ -213,18 +213,27 @@ class RandomizationTests(unittest.TestCase):
         self.assertIn("slow-payments", discover_packs)
         for pack in discover_packs:
             for seed in range(40):
-                session = self.server.create_session({"manifest": self.materialize(pack, seed)}, "demonstration")
-                scope = next(goal for goal in session["playbook"]["goals"] if goal["id"] == "scope")
-                window_from = scope["reference_action"]["arguments"]["from"]
-                match = re.fullmatch(r"now-(\d+)([mh])", window_from)
-                self.assertIsNotNone(match, f"{pack}: unexpected window '{window_from}'")
-                window_minutes = int(match.group(1)) * (60 if match.group(2) == "h" else 1)
-                offset = session["detected_offset_minutes"]
-                with self.subTest(pack=pack, seed=seed):
-                    self.assertGreaterEqual(
-                        window_minutes, offset,
-                        f"{pack}: window {window_minutes}m does not cover 'noticed {offset}m ago'",
-                    )
+                for mode in ("demonstration", "guided"):
+                    session = self.server.create_session({"manifest": self.materialize(pack, seed)}, mode)
+                    session["run_ready"] = True
+                    scope = next(goal for goal in session["playbook"]["goals"] if goal["id"] == "scope")
+                    command = self.server.next_command(session)
+                    offset = session["detected_offset_minutes"]
+                    expected_minutes = self.server.recommended_window_minutes(offset)
+                    expected_from = f"now-{expected_minutes}m"
+                    expected_words = self.server.spell_duration(f"{expected_minutes}m")
+                    rendered_hints = self.server.substitute(scope["hints"], session)
+
+                    with self.subTest(pack=pack, seed=seed, mode=mode):
+                        self.assertEqual(scope["reference_action"]["arguments"]["from"], expected_from)
+                        self.assertEqual(command["value"]["from"], expected_from)
+                        self.assertIn(str(offset), rendered_hints[0])
+                        self.assertIn(expected_words, rendered_hints[-1])
+                        if mode == "demonstration":
+                            self.assertIn(str(offset), command["narration"])
+                            self.assertIn(expected_words, command["narration"])
+                        else:
+                            self.assertIn("shortest practical time window", command["narration"])
 
     def test_time_window_copy_uses_grammar_aware_finding_for_every_variant(self):
         window_options = self.template("discover-time-window")["parameters"]["window"]["choose"]

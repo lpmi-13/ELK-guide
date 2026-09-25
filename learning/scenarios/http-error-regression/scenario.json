@@ -29,7 +29,6 @@
       "signal_count": 32,
       "noise_count": 90,
       "signal": {
-        "labels": {"signal": "decisive"},
         "service": {"name": "${param.incident.service}", "version": "${param.incident.version}"},
         "event": {"outcome": "failure"},
         "http": {"response": {"status_code": "${param.incident.status}"}},
@@ -41,7 +40,6 @@
         {
           "count": 3,
           "event": {
-            "labels": {"corroboration": true},
             "service": {"name": "${param.incident.service}", "version": "${param.incident.version}"},
             "event": {"outcome": "failure"},
             "http": {"response": {"status_code": "${param.incident.status}"}},
@@ -53,7 +51,7 @@
       ]
     },
     "readiness_validators": [
-      {"id": "seeded-signal", "kind": "es_count", "minimum": 20, "query": {"term": {"labels.signal.keyword": "decisive"}}}
+      {"id": "seeded-signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.message}"}}}
     ]
   },
   "starting_view": {"app": "discover", "saved_object": "incident-investigation", "path": "/app/discover#/view/incident-investigation"},
@@ -64,8 +62,8 @@
       "conclusion": "${param.incident.error_type} on ${param.incident.service} is the post-release regression."
     },
     "assertions": [
-      {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"labels.signal.keyword": "decisive"}}},
-      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"labels.corroboration": true}}}
+      {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.message}"}}},
+      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "representative ${param.incident.error_type} request failed"}}}
     ]
   },
   "answer_schema": {

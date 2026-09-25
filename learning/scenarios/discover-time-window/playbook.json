@@ -19,9 +19,9 @@
       "reasoning": "You got this value from the top values you just read, so the filter is based on evidence, not a guess. Adding it as its own filter pill, rather than typing into the query bar, also means one click lifts it back off to widen the view again — without editing any query text.",
       "evidence": "After you filter, the table and histogram shrink down to just the failing requests behind the incident.",
       "demonstration": {
-        "narration": "Now that ${param.incident.status_family} stands out, filter for it: open Add filter, choose http.response.status_code, leave the operator on ‘is’, and enter ${param.incident.status} (or click the + next to ${param.incident.status} in the field's top values). This keeps only the failing requests — picked from what we just saw in the data, not guessed up front.",
-        "reasoning": "The window still has healthy 200s and other traffic in it. Filtering for the ${param.incident.status} we saw spike — instead of a code we guessed — leaves only the failing requests, so the next question, which endpoint, has a clean set of records to work from within ${truth.scope}. Adding it as its own filter pill, rather than typing into the query bar, keeps it a discrete control we can lift back off with one click to widen the view again.",
-        "evidence": "Once the filter applies, the result table and histogram should shrink down to the ${param.incident.status} responses. That filtered set is the signal behind “${truth.conclusion}”. Next we find where those failures are happening."
+        "narration": "Now that ${param.incident.status_family} stands out, filter for it: open Add filter, choose http.response.status_code, leave the operator on ‘is’, and enter ${param.incident.status} (or click the + next to ${param.incident.status} in the field's top values).\n\nThis keeps only the failing requests — picked from what we just saw in the data, not guessed up front.",
+        "reasoning": "The window still has healthy 200s and other traffic in it.\n\nFiltering for the ${param.incident.status} we saw spike — instead of a code we guessed — leaves only the failing requests, so the next question, which endpoint, has a clean set of records to work from within ${truth.scope}. Adding it as its own filter pill, rather than typing into the query bar, keeps it a discrete control we can lift back off with one click to widen the view again.",
+        "evidence": "Once the filter applies, the result table and histogram should shrink down to the ${param.incident.status} responses.\n\nThat filtered set is the signal behind “${truth.conclusion}”. Next we find where those failures are happening."
       },
       "requires": ["survey"],
       "reference_action": {"command": "add_filter", "target": "kibana.filter_bar", "arguments": {"field": "${var.status_field}", "operator": "is", "value": "${param.incident.status}"}},
@@ -50,9 +50,9 @@
         "reasoning": "The report never named a status code, so reading the top values keeps us honest instead of guessing.",
         "evidence": "The field's top values show the unusual status code standing out from the healthy 200s.",
         "demonstration": {
-          "narration": "Open the http.response.status_code field in the field list and read its Top values. The report only said checkout felt slow and was noticed ${detected_offset_minutes} minutes ago — it never named a status code — so we let the data show us that ${param.incident.status_family} responses are spiking above the healthy 200s.",
-          "reasoning": "If we filtered for a status code we'd guessed, we'd just be assuming the answer. Reading the field's top values first is how we find the unusual code for ourselves, so the evidence for ${truth.scope} comes from the data, not from whatever the report happened to say.",
-          "evidence": "The Top values panel should show ${param.incident.status} rising above the normal 200s across ${var.finding_phrase}. That's the first sign that something is failing in ${truth.scope} — but we haven't confirmed it yet, and it doesn't tell us which endpoint. We check that next."
+          "narration": "Open the http.response.status_code field in the field list and read its Top values.\n\nThe report only said checkout felt slow and was noticed ${detected_offset_minutes} minutes ago — it never named a status code — so we let the data show us that ${param.incident.status_family} responses are spiking above the healthy 200s.",
+          "reasoning": "If we filtered for a status code we'd guessed, we'd just be assuming the answer.\n\nReading the field's top values first is how we find the unusual code for ourselves, so the evidence for ${truth.scope} comes from the data, not from whatever the report happened to say.",
+          "evidence": "The Top values panel should show ${param.incident.status} rising above the normal 200s across ${var.finding_phrase}.\n\nThat's the first sign that something is failing in ${truth.scope} — but we haven't confirmed it yet, and it doesn't tell us which endpoint. We check that next."
         },
         "requires": ["scope"],
         "accepts": [
@@ -77,9 +77,9 @@
         "reasoning": "Knowing the status code isn't the same as knowing where it happens. The url.path top values show whether one route is behind most of them.",
         "evidence": "The url.path top values show the endpoint behind almost all of the failures.",
         "demonstration": {
-          "narration": "With only ${param.incident.status_family} showing, open the url.path field and read its Top values. Almost all of these failing requests point to one endpoint — ${param.incident.route} — which we find from the filtered data instead of assuming.",
-          "reasoning": "A spike in a status code on its own could be spread across many routes (a wider outage) or stuck on just one (a single broken endpoint). Reading url.path inside the filtered set is what tells these apart and ties the incident to ${truth.scope}.",
-          "evidence": "The Top values for url.path should be mostly ${param.incident.route}. That pins the failures to one endpoint in ${param.incident.service} and backs up the status-code signal behind “${truth.conclusion}” — before we've even opened a single event."
+          "narration": "With only ${param.incident.status_family} showing, open the url.path field and read its Top values.\n\nAlmost all of these failing requests point to one endpoint — ${param.incident.route} — which we find from the filtered data instead of assuming.",
+          "reasoning": "A spike in a status code on its own could be spread across many routes (a wider outage) or stuck on just one (a single broken endpoint).\n\nReading url.path inside the filtered set is what tells these apart and ties the incident to ${truth.scope}.",
+          "evidence": "The Top values for url.path should be mostly ${param.incident.route}.\n\nThat pins the failures to one endpoint in ${param.incident.service} and backs up the status-code signal behind “${truth.conclusion}” — before we've even opened a single event."
         },
         "requires": ["isolate"],
         "accepts": [

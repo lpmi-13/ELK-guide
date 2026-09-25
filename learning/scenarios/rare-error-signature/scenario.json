@@ -27,7 +27,6 @@
       "signal_count": 12,
       "noise_count": 180,
       "signal": {
-        "labels": {"signal": "decisive"},
         "service": {"name": "${param.incident.service}"},
         "event": {"outcome": "failure"},
         "error": {"type": "${param.incident.error_type}"},
@@ -40,7 +39,6 @@
         {
           "count": 3,
           "event": {
-            "labels": {"corroboration": true},
             "service": {"name": "${param.incident.service}"},
             "event": {"outcome": "failure"},
             "error": {"type": "${param.incident.error_type}"},
@@ -51,7 +49,7 @@
       ]
     },
     "readiness_validators": [
-      {"id": "seeded-signal", "kind": "es_count", "minimum": 10, "query": {"term": {"labels.signal.keyword": "decisive"}}}
+      {"id": "seeded-signal", "kind": "es_count", "minimum": 10, "query": {"term": {"message.keyword": "${param.incident.message}"}}}
     ]
   },
   "starting_view": {"app": "discover", "saved_object": "incident-investigation", "path": "/app/discover#/view/incident-investigation"},
@@ -62,8 +60,8 @@
       "conclusion": "The rare ${param.incident.error_type} exception correlates with failed ${param.incident.service} requests."
     },
     "assertions": [
-      {"id": "signal", "kind": "es_count", "minimum": 10, "query": {"term": {"labels.signal.keyword": "decisive"}}},
-      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"labels.corroboration": true}}}
+      {"id": "signal", "kind": "es_count", "minimum": 10, "query": {"term": {"message.keyword": "${param.incident.message}"}}},
+      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "request failed after ${param.incident.error_type}"}}}
     ]
   },
   "answer_schema": {

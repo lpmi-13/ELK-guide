@@ -118,6 +118,14 @@ def load_manifest_definition(manifest, kind):
                 with template_path.open(encoding="utf-8") as stream:
                     template = json.load(stream)
                 variables = definition.get("variables", {})
+                # Session creation may derive a tighter Discover window from the incident age.
+                # Let that runtime value override both parameter-backed and fixed playbook defaults
+                # so demonstration, guided hints, and "Show me" all use the same range.
+                if definition.get("extends") == "discover.json" and "window" in parameters:
+                    runtime_window = parameters["window"]
+                    if isinstance(runtime_window, dict):
+                        runtime_window = runtime_window.get("value", variables.get("window"))
+                    variables = {**variables, "window": runtime_window}
                 # Offer a spelled-out companion to any compact window variable so coach copy can
                 # read "the last 15 minutes" while the picker action keeps "now-15m".
                 if "window" in variables and "window_spelled" not in variables:
@@ -327,12 +335,6 @@ def select_detected_offset(manifest):
     return stable_briefing_choice(values, {"manifest": manifest}, "observed_minutes_ago")
 
 
-# Scenarios whose recommended/graded window is derived from when the incident was noticed,
-# rather than drawn independently. The coach should never tell a learner to bound Discover to
-# "the last 30 minutes" for an incident the briefing says was noticed 13 minutes ago.
-INCIDENT_WINDOW_SCENARIOS = {"discover-time-window"}
-
-
 def recommended_window_minutes(offset_minutes):
     """Round the noticed-offset up to the next 5-minute mark (6->10, 13->15, 26->30).
 
@@ -346,21 +348,31 @@ def recommended_window_minutes(offset_minutes):
 def apply_incident_window(manifest, offset_minutes):
     """Align this run's window (coach copy, reference action, and graded truth) with the offset.
 
-    Mutates the run's chosen ``window`` parameter so the playbook expands ``${var.window}`` to the
-    derived value, and rewrites the already-resolved truth answers so the debrief conclusion agrees.
-    It is idempotent: re-deriving from the same (unchanged) offset yields the same window.
+    Every Discover scenario feeds a compact window into the shared scope step. Derive that runtime
+    value from the same incident age shown in the briefing instead of leaving it as an independent
+    random choice (for example, "noticed 12 minutes ago" paired with "last 1 hour"). Both compact
+    string windows and the labelled value used by the dedicated time-window lesson are supported.
+    The latter also appears in its already-resolved truth, so update that copy as well. Re-deriving
+    from the same offset is idempotent.
     """
     scenario = manifest.get("scenario", {})
-    if scenario.get("id") not in INCIDENT_WINDOW_SCENARIOS or offset_minutes is None:
+    if scenario.get("starting_view", {}).get("app") != "discover" or offset_minutes is None:
         return
     parameters = manifest.get("parameters") or {}
     window = parameters.get("window")
-    if not isinstance(window, dict) or "label" not in window:
+    if window is not None and not isinstance(window, (str, dict)):
         return
     minutes = recommended_window_minutes(offset_minutes)
-    new_label = f"last {minutes} minutes"
-    old_label = window.get("label")
-    parameters["window"] = {"value": f"{minutes}m", "label": new_label}
+    new_value = f"{minutes}m"
+    new_label = f"last {spell_duration(new_value)}"
+    old_label = None
+    if isinstance(window, dict):
+        if "value" not in window or "label" not in window:
+            return
+        old_label = window["label"]
+        parameters["window"] = {**window, "value": new_value, "label": new_label}
+    else:
+        parameters["window"] = new_value
     manifest["parameters"] = parameters
     if old_label and old_label != new_label:
         answers = scenario.get("truth", {}).get("answers", {})
@@ -510,8 +522,10 @@ def action_evidence(session, action):
                 value = total.get("value", 0) if isinstance(total, dict) else total
             evidence["assertions"][assertion["id"]] = value >= assertion.get("minimum", 1)
         elif kind == "trace_from_action" and trace_id:
-            run_filter = {"match_phrase": {"scenario.id": session["run_id"]}} if index.startswith("microservices") else {"match_phrase": {"lab.run_id": session["run_id"]}}
-            trace_query = {"size": 0, "query": {"bool": {"filter": [run_filter, {"match_phrase": {"trace.id": str(trace_id)}}]}}, "aggs": {"services": {"cardinality": {"field": "service.name.keyword"}}}}
+            trace_filter = [{"match_phrase": {"trace.id": str(trace_id)}}]
+            if index.startswith("microservices"):
+                trace_filter.append({"match_phrase": {"scenario.id": session["run_id"]}})
+            trace_query = {"size": 0, "query": {"bool": {"filter": trace_filter}}, "aggs": {"services": {"cardinality": {"field": "service.name.keyword"}}}}
             count = elastic_search(trace_query, index).get("aggregations", {}).get("services", {}).get("value", 0)
             evidence["trace_services"] = count
             evidence["assertions"][assertion["id"]] = count >= assertion.get("minimum", 1)

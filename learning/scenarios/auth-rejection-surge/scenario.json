@@ -27,7 +27,6 @@
       "signal_count": 30,
       "noise_count": 100,
       "signal": {
-        "labels": {"signal": "decisive"},
         "service": {"name": "auth"},
         "event": {"outcome": "failure"},
         "http": {"response": {"status_code": 401}},
@@ -43,7 +42,6 @@
         {
           "count": 2,
           "event": {
-            "labels": {"corroboration": true},
             "service": {"name": "auth"},
             "event": {"outcome": "failure"},
             "client": {"application": {"name": "${param.incident.client}"}},
@@ -54,7 +52,7 @@
       ]
     },
     "readiness_validators": [
-      {"id": "seeded-signal", "kind": "es_count", "minimum": 20, "query": {"term": {"labels.signal.keyword": "decisive"}}}
+      {"id": "seeded-signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.message}"}}}
     ]
   },
   "starting_view": {"app": "discover", "saved_object": "incident-investigation", "path": "/app/discover#/view/incident-investigation"},
@@ -65,8 +63,8 @@
       "conclusion": "${param.incident.reason} rejections are abnormally concentrated in the ${param.incident.client} client."
     },
     "assertions": [
-      {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"labels.signal.keyword": "decisive"}}},
-      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"labels.corroboration": true}}}
+      {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.message}"}}},
+      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "${param.incident.corroboration_message}"}}}
     ]
   },
   "answer_schema": {

@@ -581,14 +581,12 @@ def _event_template(manifest, timestamp, trace_id, sequence):
         "@timestamp": timestamp.isoformat(),
         "message": "request completed",
         "service": {"name": "checkout", "version": "1.0.0", "environment": manifest["run_id"], "node": {"name": f"instance-{sequence % 4}"}},
-        "event": {"dataset": "lab.scenario", "category": "web", "type": "transaction", "outcome": "success", "duration": _TEMPLATE_DURATION_NS},
+        "event": {"dataset": "application.request", "category": "web", "type": "transaction", "outcome": "success", "duration": _TEMPLATE_DURATION_NS},
         "http": {"request": {"method": "GET"}, "response": {"status_code": 200}},
         "url": {"path": "/checkout"},
         "trace": {"id": trace_id}, "transaction": {"id": uuid.uuid5(uuid.NAMESPACE_URL, f"{trace_id}:{sequence}").hex[:16], "name": _TEMPLATE_TRANSACTION_NAME, "type": "request", "result": "HTTP 2xx", "sampled": True, "duration": {"us": 120_000}},
         "processor": {"event": "transaction"}, "agent": {"name": "opentelemetry/python", "version": "1.0.0"}, "observer": {"version": "9.5.2"},
         "host": {"name": f"instance-{sequence % 4}", "os": {"platform": "linux"}},
-        "labels": {"scenario_template": manifest["template_id"], "run_id": manifest["run_id"]},
-        "lab": {"run_id": manifest["run_id"], "scenario_id": manifest["template_id"]},
     }
 
 
@@ -791,7 +789,7 @@ def traffic_loop(manifest, stop):
 
 def create_alert_rule(manifest, resource):
     rule_id = resource.get("id", f"lab-{manifest['run_id'][-12:]}")
-    query = json.dumps({"query": {"bool": {"filter": [{"term": {"lab.run_id.keyword": manifest["run_id"]}}, {"term": {"event.outcome.keyword": "failure"}}]}}})
+    query = json.dumps({"query": {"term": {"event.outcome.keyword": "failure"}}})
     payload = {
         "name": resource.get("name", "Active customer-impact signal"), "consumer": "stackAlerts", "rule_type_id": ".es-query", "enabled": True,
         "schedule": {"interval": resource.get("interval", "5s")}, "actions": [],

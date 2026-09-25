@@ -27,7 +27,6 @@
       "signal_count": 35,
       "noise_count": 100,
       "signal": {
-        "labels": {"signal": "decisive"},
         "service": {"name": "${param.incident.service}", "version": "${param.incident.bad_version}"},
         "event": {"outcome": "failure"},
         "http": {"response": {"status_code": "${param.incident.status}"}},
@@ -41,7 +40,6 @@
           "count": 2,
           "offset_seconds": 580,
           "event": {
-            "labels": {"corroboration": true},
             "service": {"name": "${param.incident.service}", "version": "${param.incident.bad_version}"},
             "event": {"outcome": "failure"},
             "message": "first unhealthy request from version ${param.incident.bad_version}"
@@ -50,7 +48,7 @@
       ]
     },
     "readiness_validators": [
-      {"id": "seeded-signal", "kind": "es_count", "minimum": 20, "query": {"term": {"labels.signal.keyword": "decisive"}}}
+      {"id": "seeded-signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "request failed on newly deployed ${param.incident.service} ${param.incident.bad_version}"}}}
     ]
   },
   "starting_view": {"app": "discover", "saved_object": "incident-investigation", "path": "/app/discover#/view/incident-investigation"},
@@ -61,8 +59,8 @@
       "conclusion": "${param.incident.service} version ${param.incident.bad_version} introduced the regression while ${param.incident.good_version} remained healthy."
     },
     "assertions": [
-      {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"labels.signal.keyword": "decisive"}}},
-      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"labels.corroboration": true}}}
+      {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "request failed on newly deployed ${param.incident.service} ${param.incident.bad_version}"}}},
+      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "first unhealthy request from version ${param.incident.bad_version}"}}}
     ]
   },
   "answer_schema": {

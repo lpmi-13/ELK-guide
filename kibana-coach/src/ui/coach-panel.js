@@ -10,7 +10,6 @@ class IncidentCoachPanel {
         <section id="stage" aria-live="polite">
           <p id="phase-eyebrow" class="eyebrow"></p>
           <p id="phase-headline"></p>
-          <p id="phase-detail" class="muted"></p>
           <div id="countdown" class="countdown" aria-hidden="true" hidden><span></span></div>
         </section>
         <div class="actions"><button id="pause">Pause</button><button id="advance" title="Complete this step now and continue">Advance</button><button id="incident-info" title="Review the initial incident briefing">Incident info</button><button id="hint">Hint</button><button id="demonstrate">Show me</button></div>
@@ -199,8 +198,7 @@ class IncidentCoachPanel {
       this.spotlightRevealed = false;
       this.spotlight.hide();
       this.cursor.hide();
-      const lines = [command?.evidence, command?.concept].filter(Boolean);
-      this.renderPhase({eyebrow: 'What we learned', headline: lines[0] || 'Step complete.', detail: lines[1] || ''});
+      this.renderPhase({eyebrow: 'What we learned', headline: command?.evidence || 'Step complete.'});
       this.resetCountdown();
     }
   }
@@ -268,15 +266,12 @@ class IncidentCoachPanel {
     bar.hidden = true;
   }
 
-  renderPhase({eyebrow = '', headline = '', detail = ''}) {
+  renderPhase({eyebrow = '', headline = ''}) {
     const stage = this.root.querySelector('#stage');
     const eyebrowEl = this.root.querySelector('#phase-eyebrow');
-    const detailEl = this.root.querySelector('#phase-detail');
     eyebrowEl.textContent = eyebrow;
     eyebrowEl.hidden = !eyebrow;
     this.root.querySelector('#phase-headline').textContent = headline;
-    detailEl.textContent = detail;
-    detailEl.hidden = !detail;
     stage.classList.toggle('acting', this.phase === 'action');
     stage.classList.remove('phase-in');
     void stage.offsetWidth;
@@ -461,15 +456,12 @@ class IncidentCoachPanel {
     this.resetCountdown();
     const stage = this.root.querySelector('#stage');
     const eyebrow = this.root.querySelector('#phase-eyebrow');
-    const detail = this.root.querySelector('#phase-detail');
     stage.hidden = false;
     stage.classList.remove('acting');
     stage.classList.add('success');
     eyebrow.hidden = false;
     eyebrow.innerHTML = '<span class="stage-tick" aria-hidden="true"></span>Correct';
     this.root.querySelector('#phase-headline').textContent = message || 'That step is complete.';
-    detail.hidden = true;
-    detail.textContent = '';
     // Replay the entrance animation from a clean state.
     stage.classList.remove('celebrate-in', 'phase-in');
     void stage.offsetWidth;
@@ -510,7 +502,7 @@ class IncidentCoachPanel {
     header { display:flex; align-items:center; gap:8px; } header strong { flex:1; } .live-dot { width:9px;height:9px;border-radius:50%;background:#1aa87a;box-shadow:0 0 0 4px #1aa87a22; }
     h2 { margin: 14px 0 8px; font-size: 17px; text-transform: capitalize; } h3 { margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.045em;color:#3f5060; } p { line-height:1.45; } #mode { color:#536170; font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
     #stage { padding:20px 22px;border:1px solid #bcd3e6;border-left:6px solid #006bb4;border-radius:11px;background:#f1f7fd;box-shadow:0 6px 20px #006bb416; } #stage.acting { border-left-color:#e0a200;background:#fff8e8;box-shadow:0 6px 20px #e0a2001f; }
-    .eyebrow { margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#3f6480;font-weight:750; } #phase-headline { margin:0;font-size:20px;line-height:1.38;font-weight:600;letter-spacing:-.01em;color:#0f2231; } .muted { margin:12px 0 0;font-size:14px;line-height:1.5;color:#48586a; }
+    .eyebrow { margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#3f6480;font-weight:750; } #phase-headline { margin:0;font-size:20px;line-height:1.38;font-weight:600;letter-spacing:-.01em;color:#0f2231;white-space:pre-line; }
     #stage.phase-in { animation:phase-in .32s cubic-bezier(.22,1,.36,1); } @keyframes phase-in { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
     .countdown { margin-top:16px;height:7px;border-radius:6px;background:#cfe0ee;overflow:hidden; } .countdown span { display:block;height:100%;width:0;background:#006bb4;border-radius:6px; } #stage.acting .countdown { background:#efdaa6; } #stage.acting .countdown span { background:#d98c00; }
     .countdown.working span { width:34%!important;animation:cd-sweep 1.25s cubic-bezier(.55,0,.45,1) infinite; } @keyframes cd-sweep { 0%{transform:translateX(-115%)} 100%{transform:translateX(310%)} }

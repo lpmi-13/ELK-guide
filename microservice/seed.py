@@ -27,7 +27,6 @@ with destination.open("w", encoding="utf-8") as output:
             "http.response.status_code": status,
             "event.duration": random.randint(500_000, 800_000_000),
             "trace.id": uuid.uuid4().hex,
-            "labels.seeded": True,
         }
         output.write(json.dumps(event, separators=(",", ":")) + "\n")
 print(f"wrote {count} seed events to {destination}")
