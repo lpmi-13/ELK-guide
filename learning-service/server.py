@@ -471,6 +471,14 @@ def next_command(session):
         "concept": explanation_text("concept") if session["mode"] == "demonstration" else "",
         "answer_schema": session["manifest"]["scenario"].get("answer_schema", {}),
     }
+    if session["mode"] == "guided" and command_type not in {"request_diagnosis", "request_answer"}:
+        # "Show me" replays this step as a mini demonstration, so it carries the same scenario-specific
+        # what/why/result the demonstration narrates (e.g. *why* the window reaches back N minutes).
+        walkthrough = step.get("demonstration", {})
+        command["walkthrough"] = {
+            field: substitute(walkthrough.get(field, step.get(field, "")), session)
+            for field in ("narration", "reasoning", "evidence")
+        }
     session["pending_command"] = command
     return command
 

@@ -28,7 +28,7 @@ class IncidentBriefing {
 
   modeCopy(mode) {
     return {
-      demonstration: {label: 'Demonstration', action: 'Begin demonstration', waiting: 'Demonstration begins'},
+      demonstration: {label: 'Demonstration', action: 'Begin demonstration', waiting: 'Demonstration will automatically begin'},
       guided: {label: 'Guided practice', action: 'Begin guided practice', waiting: 'Guided practice begins'},
       challenge: {label: 'Challenge', action: 'Begin investigation', waiting: 'Investigation begins'},
     }[mode] || {label: mode, action: 'Begin investigation', waiting: 'Investigation begins'};

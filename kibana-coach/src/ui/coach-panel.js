@@ -4,7 +4,7 @@ class IncidentCoachPanel {
     this.root = host.attachShadow({mode: 'open'});
     this.root.innerHTML = `<style>${IncidentCoachPanel.styles}</style>
       <aside class="panel" aria-label="Incident coach" hidden>
-        <header><span class="live-dot"></span><strong>Incident coach</strong><button id="stop" title="Stop automation">Stop</button></header>
+        <header title="Drag to move the coach"><span class="live-dot"></span><strong>Incident coach</strong><button id="stop" title="Stop automation">Stop</button></header>
         <div class="progress" aria-hidden="true"><span></span></div>
         <p id="mode"></p><h2 id="objective"></h2>
         <section id="stage" aria-live="polite">
@@ -37,7 +37,12 @@ class IncidentCoachPanel {
     // A correct action is confirmed inside the panel; the next step is held until it finishes.
     this.celebrating = false;
     this.pendingCommand = null;
-    this.reposition = () => {
+    const dragHandle = this.root.querySelector('header');
+    dragHandle.addEventListener('pointerdown', event => this.startDrag(event));
+    dragHandle.addEventListener('pointermove', event => this.moveDrag(event));
+    dragHandle.addEventListener('pointerup', event => this.endDrag(event));
+    dragHandle.addEventListener('pointercancel', event => this.endDrag(event));
+    this.reposition = event => {
       if (this.panel.hidden) return;
       // Scroll fires this many times a second; coalesce to one update per frame so the glide isn't
       // repeatedly retargeted mid-flight (which resets its easing and reads as a stutter).
@@ -49,7 +54,8 @@ class IncidentCoachPanel {
         const target = this.activeTarget?.isConnected ? this.activeTarget : null;
         // Nothing to dodge — no highlighted control and no open doc-viewer flyout — so leave the
         // card where it rests rather than nudging it for every stray scroll or mutation.
-        if (!target && !this.findFlyout()) return;
+        if (this.dragging) return;
+        if (!target && !this.findFlyout() && !this.evidenceField && event?.type !== 'resize') return;
         // Keep the panel clear of the control, but only re-dim/-highlight if the spotlight is
         // already revealed — a guided step starts with nothing dimmed until the learner asks.
         if (target && this.spotlightRevealed) this.spotlight.show(target);
@@ -69,7 +75,7 @@ class IncidentCoachPanel {
       requestAnimationFrame(() => {
         this.flyoutCheckScheduled = false;
         const open = !!this.findFlyout();
-        if (open === this.flyoutOpen) return;
+        if (open === this.flyoutOpen && !this.evidenceField) return;
         this.flyoutOpen = open;
         this.reposition();
       });
@@ -129,6 +135,7 @@ class IncidentCoachPanel {
     this.root.querySelector('#stage').classList.remove('success', 'celebrate-in');
     this.activeCommandId = command.command_id;
     this.activeTarget = target;
+    this.evidenceField = null;
     this.currentCommand = command;
     this.root.querySelector('#mode').textContent = `${command.mode} · step ${command.step_index + 1} of ${command.step_count}`;
     this.root.querySelector('#objective').textContent = command.step_id.replaceAll('-', ' ');
@@ -138,6 +145,7 @@ class IncidentCoachPanel {
     this.root.querySelector('#incident-info').hidden = command.mode !== 'guided' || !this.currentBriefing;
     const advance = this.root.querySelector('#advance');
     advance.hidden = command.mode !== 'demonstration';
+    advance.title = 'Continue to the next part';
     this.root.querySelector('#hint').hidden = command.mode === 'demonstration';
     if (command.type === 'request_diagnosis' || command.type === 'request_answer') this.renderAnswerSchema(command.answer_schema);
     this.root.querySelector('#diagnosis').hidden = !['request_diagnosis', 'request_answer'].includes(command.type) || command.mode === 'demonstration';
@@ -180,6 +188,7 @@ class IncidentCoachPanel {
   enterPhase(phase, command = this.currentCommand) {
     this.phase = phase;
     this.currentCommand = command;
+    this.root.querySelector('#advance').title = 'Continue to the next part';
     const stage = this.root.querySelector('#stage');
     stage.hidden = false;
     if (phase === 'what') {
@@ -198,9 +207,34 @@ class IncidentCoachPanel {
       this.spotlightRevealed = false;
       this.spotlight.hide();
       this.cursor.hide();
+      this.activeTarget = null;
+      this.evidenceField = command?.type === 'add_column' ? command.value?.field : null;
       this.renderPhase({eyebrow: 'What we learned', headline: command?.evidence || 'Step complete.'});
       this.resetCountdown();
+      // The added column is the evidence to read next. Return the coach to the left before the
+      // browser paints the refreshed table, then keep that column clear if the user moves the coach.
+      if (this.evidenceField && !this.dragging) {
+        this.pos = {left: 18, top: 72};
+        this.applyPosition();
+        requestAnimationFrame(() => this.placeAwayFrom(null));
+      }
     }
+  }
+
+  // "Show me" on a guided step: the coach takes over this one step and narrates it like a
+  // demonstration (what → why → action → learning), spotlighting the control it is about to use.
+  // Advance skips a reading beat; Hint and Show me are moot while the coach is doing it.
+  beginWalkthrough(command) {
+    this.root.querySelector('#demonstrate').hidden = true;
+    this.root.querySelector('#hint').hidden = true;
+    this.root.querySelector('#incident-info').hidden = true;
+    this.root.querySelector('#advance').hidden = false;
+    if (this.activeTarget?.isConnected) {
+      this.spotlightRevealed = true;
+      this.spotlight.show(this.activeTarget);
+    }
+    this.enterPhase('what', command);
+    requestAnimationFrame(() => this.placeAwayFrom(this.activeTarget));
   }
 
   showWhy(command = this.currentCommand) { this.enterPhase('why', command); }
@@ -255,6 +289,16 @@ class IncidentCoachPanel {
     bar.classList.remove('working');
   }
 
+  // Continue a frozen reading bar using the time still left in its beat.
+  resumeCountdown(remaining) {
+    const bar = this.root.querySelector('#countdown');
+    if (bar.hidden || bar.classList.contains('working')) return;
+    const fill = bar.querySelector('span');
+    void fill.offsetWidth;
+    fill.style.transition = `width ${Math.max(0, remaining)}ms linear`;
+    fill.style.width = '100%';
+  }
+
   resetCountdown() {
     const bar = this.root.querySelector('#countdown');
     const fill = bar.querySelector('span');
@@ -295,6 +339,34 @@ class IncidentCoachPanel {
     }
   }
 
+  showInfo(target, activity) {
+    this.phase = 'info';
+    this.resetCountdown();
+    this.renderPhase({eyebrow: 'Note', headline: activity});
+    this.showTarget(target);
+    this.root.querySelector('#advance').title = 'Continue after reading this note';
+  }
+
+  waitForAdvance(signal) {
+    if (signal?.aborted) return Promise.reject(new DOMException('Demonstration stopped', 'AbortError'));
+    return new Promise((resolve, reject) => {
+      const clear = () => {
+        signal?.removeEventListener('abort', abort);
+        if (this.completeInfoBeat === done) this.completeInfoBeat = null;
+      };
+      const done = () => { clear(); resolve(); };
+      const abort = () => { clear(); reject(new DOMException('Demonstration stopped', 'AbortError')); };
+      this.completeInfoBeat = done;
+      signal?.addEventListener('abort', abort, {once: true});
+    });
+  }
+
+  advanceInfo() {
+    if (!this.completeInfoBeat) return false;
+    this.completeInfoBeat();
+    return true;
+  }
+
   // Kibana's expanded-document viewer opens as a flyout docked on the right. Return its on-screen
   // rectangle while it's open (and big enough to matter), so placement can treat it as a keep-out
   // region just like a highlighted control; null when there's no flyout to dodge.
@@ -306,11 +378,56 @@ class IncidentCoachPanel {
     return rect;
   }
 
+  findEvidenceRect() {
+    if (!this.evidenceField) return null;
+    const header = [...document.querySelectorAll("[role='columnheader'], th")]
+      .find(node => node.textContent?.trim() === this.evidenceField);
+    if (!header) return null;
+    const rect = header.getBoundingClientRect();
+    if (!rect.width || rect.right <= 0 || rect.left >= innerWidth) return null;
+    return {left: rect.left - 24, right: rect.right + 24, top: rect.top - 24, bottom: innerHeight};
+  }
+
+  clampPosition(left, top) {
+    const rect = this.panel.getBoundingClientRect();
+    return {
+      left: Math.round(Math.max(18, Math.min(left, Math.max(18, innerWidth - rect.width - 18)))),
+      top: Math.round(Math.max(72, Math.min(top, Math.max(72, innerHeight - Math.min(rect.height, innerHeight - 90) - 18)))),
+    };
+  }
+
+  startDrag(event) {
+    if (event.button !== 0 || event.target.closest('button') || this.panel.hidden) return;
+    event.preventDefault();
+    const handle = this.root.querySelector('header');
+    handle.setPointerCapture(event.pointerId);
+    const rect = this.panel.getBoundingClientRect();
+    this.dragging = {pointerId: event.pointerId, x: event.clientX - rect.left, y: event.clientY - rect.top};
+    this.panel.style.transition = 'none';
+    handle.classList.add('dragging');
+  }
+
+  moveDrag(event) {
+    if (this.dragging?.pointerId !== event.pointerId) return;
+    this.pos = this.clampPosition(event.clientX - this.dragging.x, event.clientY - this.dragging.y);
+    this.applyPosition(true);
+  }
+
+  endDrag(event) {
+    if (this.dragging?.pointerId !== event.pointerId) return;
+    this.dragging = null;
+    const handle = this.root.querySelector('header');
+    if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+    handle.classList.remove('dragging');
+    this.panel.style.transition = '';
+    this.placeAwayFrom(this.activeTarget?.isConnected ? this.activeTarget : null);
+  }
+
   // Stay put unless the current spot would actually cover the highlighted control or the open
   // doc-viewer flyout (or fell off-screen). Only then glide to the least-disruptive clear corner.
   // Needless hops are jarring.
   placeAwayFrom(target) {
-    if (this.panel.hidden) return;
+    if (this.panel.hidden || this.dragging) return;
     // A null pos means the panel was just revealed: snap to the resting spot instead of gliding
     // there from the CSS default corner (the load-time jerk/reflow). Later moves stay animated.
     const firstPlacement = !this.pos;
@@ -343,6 +460,8 @@ class IncidentCoachPanel {
     if (flyoutRect) {
       guards.push({left: flyoutRect.left, right: flyoutRect.right, top: flyoutRect.top, bottom: flyoutRect.bottom});
     }
+    const evidenceRect = this.findEvidenceRect();
+    if (evidenceRect) guards.push(evidenceRect);
     const overlap = position => {
       const right = position.left + width;
       const bottom = position.top + height;
@@ -402,7 +521,7 @@ class IncidentCoachPanel {
     this.panel.style.maxHeight = `${Math.max(160, innerHeight - this.pos.top - 18)}px`;
     if (instant) {
       void this.panel.offsetWidth; // flush the placement before re-enabling the transition
-      this.panel.style.transition = '';
+      if (!this.dragging) this.panel.style.transition = '';
     }
     this.appliedPos = {left: this.pos.left, top: this.pos.top};
   }
@@ -499,7 +618,7 @@ class IncidentCoachPanel {
     :host { all: initial; position: fixed; z-index: 2147483647; inset: 0; pointer-events: none; font: 14px system-ui,sans-serif; color: #17212b; }
     .panel { pointer-events: auto; position: fixed; z-index:3; top: 0; left: 0; width: min(468px, calc(100vw - 36px)); max-height: calc(100vh - 90px); overflow: auto; box-sizing: border-box; padding: 18px; border: 1px solid #b6c6d6; border-radius: 12px; background: #fff; box-shadow: 0 16px 46px #17212b40; transform: translate(18px, 72px); transition: transform var(--panel-move, .6s) cubic-bezier(.4, 0, .2, 1); will-change: transform; }
     [hidden] { display:none!important; }
-    header { display:flex; align-items:center; gap:8px; } header strong { flex:1; } .live-dot { width:9px;height:9px;border-radius:50%;background:#1aa87a;box-shadow:0 0 0 4px #1aa87a22; }
+    header { display:flex; align-items:center; gap:8px; cursor:grab; touch-action:none; user-select:none; } header.dragging { cursor:grabbing; } header strong { flex:1; } .live-dot { width:9px;height:9px;border-radius:50%;background:#1aa87a;box-shadow:0 0 0 4px #1aa87a22; }
     h2 { margin: 14px 0 8px; font-size: 17px; text-transform: capitalize; } h3 { margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.045em;color:#3f5060; } p { line-height:1.45; } #mode { color:#536170; font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
     #stage { padding:20px 22px;border:1px solid #bcd3e6;border-left:6px solid #006bb4;border-radius:11px;background:#f1f7fd;box-shadow:0 6px 20px #006bb416; } #stage.acting { border-left-color:#e0a200;background:#fff8e8;box-shadow:0 6px 20px #e0a2001f; }
     .eyebrow { margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#3f6480;font-weight:750; } #phase-headline { margin:0;font-size:20px;line-height:1.38;font-weight:600;letter-spacing:-.01em;color:#0f2231;white-space:pre-line; }

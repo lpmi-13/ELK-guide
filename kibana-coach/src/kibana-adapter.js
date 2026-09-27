@@ -32,15 +32,31 @@ class KibanaAdapter {
     this.setNativeValue(element, '', {data: null, inputType: 'deleteContentBackward', commit: false});
     let typed = '';
     const characters = Array.from(String(value));
-    for (const [index, character] of characters.entries()) {
-      if (signal?.aborted) throw new DOMException('Demonstration stopped', 'AbortError');
-      element.dispatchEvent(new KeyboardEvent('keydown', {key: character, bubbles: true}));
-      typed += character;
-      this.setNativeValue(element, typed, {data: character, commit: false});
-      element.dispatchEvent(new KeyboardEvent('keyup', {key: character, bubbles: true}));
-      if (index < characters.length - 1) await this.wait(this.typingIntervalMs, signal);
+    const typing = {skip: false};
+    this.activeTyping = typing;
+    try {
+      for (const [index, character] of characters.entries()) {
+        if (signal?.aborted) throw new DOMException('Demonstration stopped', 'AbortError');
+        if (typing.skip) {
+          this.setNativeValue(element, String(value), {data: String(value).slice(typed.length), commit: false});
+          break;
+        }
+        element.dispatchEvent(new KeyboardEvent('keydown', {key: character, bubbles: true}));
+        typed += character;
+        this.setNativeValue(element, typed, {data: character, commit: false});
+        element.dispatchEvent(new KeyboardEvent('keyup', {key: character, bubbles: true}));
+        if (index < characters.length - 1) await this.wait(this.typingIntervalMs, signal);
+      }
+      element.dispatchEvent(new Event('change', {bubbles: true}));
+    } finally {
+      if (this.activeTyping === typing) this.activeTyping = null;
     }
-    element.dispatchEvent(new Event('change', {bubbles: true}));
+  }
+
+  advanceTyping() {
+    if (!this.activeTyping) return false;
+    this.activeTyping.skip = true;
+    return true;
   }
 
   async waitFor(name, timeout = 20000, signal) {
@@ -89,7 +105,19 @@ class KibanaAdapter {
   }
 
   async pointAt(target, coach, timingScale, signal, activity, {activate = false, showClick = true} = {}) {
-    coach.showTarget(target, activity);
+    // Every application adapter uses this path. Reveal controls inside scrollable panels before
+    // placing the spotlight or cursor, so the visible pointer lands on the control we act on.
+    await coach.cursor.reveal(target, {timingScale, signal});
+    const informationOnly = !activate && !showClick;
+    if (informationOnly) coach.showInfo(target, activity);
+    else coach.showTarget(target, activity);
+    // A pointer with no click is an explanation, not an action. Keep its blue card visible until
+    // the learner advances, including when a recommended time range is already selected.
+    if (informationOnly) {
+      // Start listening before the cursor finishes moving, so an early Advance still counts.
+      await Promise.all([coach.cursor.moveTo(target, {timingScale, signal}), coach.waitForAdvance(signal)]);
+      return;
+    }
     await coach.cursor.moveTo(target, {timingScale, signal});
     if (showClick) coach.cursor.click();
     if (activate) target.click();

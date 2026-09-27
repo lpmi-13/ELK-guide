@@ -10,6 +10,10 @@ function startIncidentCoach() {
   let observer = null;
   let currentCommand = null;
   let executionController = null;
+  // Set while a guided "Show me" walkthrough plays. The coach reports its own action once the
+  // walkthrough ends, so the observer must not report the coach's changes as the learner's —
+  // that would complete the step early and cut off the "What we learned" beat.
+  let walkthroughController = null;
   const activeSessionKey = 'incident-coach:auto-connect';
   const demonstrationSlowdown = 3;
   const demonstrationTimingScale = 10 * demonstrationSlowdown;
@@ -24,15 +28,41 @@ function startIncidentCoach() {
   // countdown bar filling — after which the demonstration carries on at its normal pace. Only one
   // reading beat runs at a time, so a single resolver is enough.
   let completeReadingBeat = null;
+  let activeReadingBeat = null;
 
   function readingBeatWait(milliseconds, signal) {
     if (signal?.aborted) return Promise.reject(new DOMException('Demonstration stopped', 'AbortError'));
     return new Promise((resolve, reject) => {
-      const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); if (completeReadingBeat === done) completeReadingBeat = null; resolve(); };
-      const abort = () => { clearTimeout(timer); if (completeReadingBeat === done) completeReadingBeat = null; reject(new DOMException('Demonstration stopped', 'AbortError')); };
-      const timer = setTimeout(done, milliseconds);
+      let remaining = milliseconds;
+      let startedAt = 0;
+      let timer = null;
+      const clear = () => {
+        clearTimeout(timer);
+        timer = null;
+        signal?.removeEventListener('abort', abort);
+        if (completeReadingBeat === done) completeReadingBeat = null;
+        if (activeReadingBeat === beat) activeReadingBeat = null;
+      };
+      const done = () => { clear(); resolve(); };
+      const abort = () => { clear(); reject(new DOMException('Demonstration stopped', 'AbortError')); };
+      const beat = {
+        get remaining() { return remaining; },
+        pause() {
+          if (timer === null) return;
+          remaining = Math.max(0, remaining - (performance.now() - startedAt));
+          clearTimeout(timer);
+          timer = null;
+        },
+        resume() {
+          if (timer !== null) return;
+          startedAt = performance.now();
+          timer = setTimeout(done, remaining);
+        },
+      };
+      activeReadingBeat = beat;
       completeReadingBeat = done;
       signal?.addEventListener('abort', abort, {once: true});
+      if (!coach.paused) beat.resume();
     });
   }
 
@@ -63,11 +93,25 @@ function startIncidentCoach() {
         // Beat 3 — action: hand the card over to the live step's narration.
         coach.beginActionPhase(command);
       }
+      // "Show me" in guided mode walks the same beats for this one step, so the learner hears why
+      // the coach makes the move (e.g. why the window reaches back to when the incident began).
+      const walkthrough = explicitlyRequested && command.mode === 'guided' && command.walkthrough
+        ? {...command, ...command.walkthrough} : null;
+      if (walkthrough) {
+        walkthroughController = controller;
+        coach.beginWalkthrough(walkthrough);
+        await readBeat(walkthrough.narration);
+        if (walkthrough.reasoning) {
+          coach.showWhy(walkthrough);
+          await readBeat(walkthrough.reasoning);
+        }
+        coach.beginActionPhase(walkthrough);
+      }
       const action = await adapter.perform(command, coach, {timingScale, signal: controller.signal});
-      if (command.mode === 'demonstration') {
+      if (command.mode === 'demonstration' || walkthrough?.evidence) {
         // Beat 4 — learning: summarise what the result showed before moving on.
-        coach.showLearning(command);
-        await readBeat(command.evidence);
+        coach.showLearning(walkthrough || command);
+        await readBeat((walkthrough || command).evidence);
       }
       coach.finishCommand(command);
       client.acknowledge(command, 'completed', action?.state_after || {});
@@ -79,6 +123,7 @@ function startIncidentCoach() {
       client.acknowledge(command, 'failed', {error: error.message});
     } finally {
       if (executionController === controller) executionController = null;
+      if (walkthroughController === controller) walkthroughController = null;
     }
   }
 
@@ -121,6 +166,14 @@ function startIncidentCoach() {
       // Safety net: reveal Kibana here too, for any flow that reaches a command
       // without first showing a briefing.
       window.__coachBootOverlay?.release();
+      // Resume re-sends the pending command. Its reading beat is already running (or paused), so
+      // leave that execution and its countdown in place instead of starting the step over.
+      // The same holds for a guided "Show me" walkthrough that is still playing.
+      if (executionController && !executionController.signal.aborted &&
+          currentCommand?.command_id === command.command_id) return;
+      // A new guided step means the one being walked through is already complete (e.g. the learner's
+      // own action satisfied it), so stop explaining it rather than narrate over the next step.
+      if (command.mode === 'guided') executionController?.abort();
       currentCommand = command;
       if (command.mode === 'demonstration' && command.type === 'show_debrief') {
         finishDemonstration(command);
@@ -139,6 +192,7 @@ function startIncidentCoach() {
     };
     const session = await client.connect();
     observer = new KibanaActionObserver(adapter, action => {
+      if (walkthroughController) return;
       // Tag a learner's window change with when the incident was noticed (from the briefing) so
       // the service can accept any window that reaches back far enough to include it.
       if (action.type === 'time_range_changed') {
@@ -152,20 +206,26 @@ function startIncidentCoach() {
     observer.start();
     coach.onPause = paused => {
       if (paused) {
-        executionController?.abort();
+        if (activeReadingBeat) activeReadingBeat.pause();
+        else executionController?.abort();
         coach.stopCountdown();
+      } else if (activeReadingBeat) {
+        coach.resumeCountdown(activeReadingBeat.remaining);
+        activeReadingBeat.resume();
       }
       client.send({message_type: paused ? 'pause' : 'resume'});
     };
     coach.onHint = () => client.requestHint();
     coach.onDemonstrate = () => currentCommand && execute(currentCommand, true);
     coach.onAdvance = () => {
-      if (!currentCommand || currentCommand.mode !== 'demonstration') return;
-      if (coach.paused) {
+      if (!currentCommand) return;
+      if (currentCommand.mode === 'demonstration' && coach.paused) {
         // Nothing is counting down while paused — resume so the demonstration plays on.
         coach.setPaused(false);
         return;
       }
+      if (coach.advanceInfo()) return;
+      if (adapter.advanceTyping()) return;
       // Complete the reading pause on screen now, exactly as if its countdown bar had filled. The
       // demonstration then continues at its normal pace — the action still runs and updates Kibana,
       // and the following beats and steps are unchanged. Outside a reading pause this is a no-op.
