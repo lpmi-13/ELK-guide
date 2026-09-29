@@ -6,21 +6,29 @@
   <title>Preparing investigation…</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxODAgMTgwIj48c3R5bGU+cGF0aHtmaWxsOiMxYzFlMjN9QG1lZGlhIChwcmVmZXJzLWNvbG9yLXNjaGVtZTpkYXJrKXtwYXRoe2ZpbGw6I2ZmZn19PC9zdHlsZT48cGF0aCBkPSJNMTgwIDk0LjI3YTM1LjU0IDM1LjU0IDAgMCAwLTIzLjQzLTMzLjUyIDUwLjgyIDUwLjgyIDAgMCAwLTkxLjEyLTM5LjU4QTI3IDI3IDAgMCAwIDIzLjYyIDUyYTM1Ljg4IDM1Ljg4IDAgMCAwLTE3LjE4IDU0LjI2IDM1LjUgMzUuNSAwIDAgMCAxNy4xIDEzLjA3IDUxLjYgNTEuNiAwIDAgMC0uODkgOS43IDUwLjY2IDUwLjY2IDAgMCAwIDkyIDI5LjY2IDI3IDI3IDAgMCAwIDQxLjg1LTMwLjc1QTM2IDM2IDAgMCAwIDE4MCA5NC4yN002OS42OSAyNi42MmE0NC40NiA0NC40NiAwIDAgMSA4MC4yIDM0bC0zOS43MyAzNC45LTM5LjM5LTE4TDYzLjA4IDYxWm0tMTkuOTItNC40NGEyMS4yNSAyMS4yNSAwIDAgMSAxMi45MyA0LjM5bC02IDMwLjc4LTI3LTYuNGEyMS40MyAyMS40MyAwIDAgMSAyMC0yOC43N1pNNyA4NS43N2EzMC4xNiAzMC4xNiAwIDAgMSAyMC40MS0yOC4zOUw1NyA2NC40bDcgMTQuOTEtMzcuODkgMzQuMzhBMjkuODggMjkuODggMCAwIDEgNyA4NS43N20xMDMuNTMgNjcuNjFhNDQuNTIgNDQuNTIgMCAwIDEtODEuMzUtMjUuMTIgNDUuNSA0NS41IDAgMCAxIC44OS04Ljg3bDM4LjY4LTM1LjE4IDM5LjU0IDE4LjA5IDguNzYgMTYuNzlabTE5Ljc4IDQuNDRhMjEgMjEgMCAwIDEtMTIuODYtNC40NGw1Ljg3LTMwLjY4IDI3IDYuMzNhMjEuNDkgMjEuNDkgMCAwIDEtMTAuMTQgMjYuMzIgMjEuMjQgMjEuMjQgMCAwIDEtOS44NCAyLjQ1Wm0yMi4zMi0zNS4yNC0yOS42OS03LTcuOTQtMTUuMDUgMzguODQtMzQuMTVBMjkuODEgMjkuODEgMCAwIDEgMTczIDk0LjI1YTMwLjE2IDMwLjE2IDAgMCAxLTIwLjQ1IDI4LjMxWiIvPjwvc3ZnPg==">
   <style>
-    :root { color-scheme:dark; font:15px system-ui,sans-serif; background:#0d1721; color:#eef5fb; }
-    body { margin:0;min-height:100vh;display:grid;place-items:center; }
-    main { width:min(520px,calc(100% - 48px));padding:24px;text-align:center; }
-    h1 { margin:0 0 10px;font-size:20px; }
-    #msg { margin:0 0 18px;color:#c6d4df;line-height:1.5; }
-    progress { width:100%;height:14px;border:0;border-radius:999px;background:#09121a;accent-color:#32b8eb; }
-    progress::-webkit-progress-bar { border-radius:999px;background:#09121a;box-shadow:inset 0 0 0 1px #334b5e; }
-    progress::-webkit-progress-value { border-radius:999px;background:linear-gradient(90deg,#1b78b5,#32b8eb); }
-    progress::-moz-progress-bar { border-radius:999px;background:linear-gradient(90deg,#1b78b5,#32b8eb); }
-    a { display:inline-block;margin-top:18px;padding:10px 16px;border-radius:6px;background:#1b78b5;color:#fff;font-weight:700;text-decoration:none; }
+    :root { color-scheme:dark; font:15px system-ui,sans-serif; background:#03080c; color:#e3f1f8; }
+    body { margin:0;min-height:100vh;display:grid;place-items:center;isolation:isolate;background:radial-gradient(ellipse 90% 70% at 50% 45%,#07182a,#03080c); }
+    #board,#current { position:fixed;inset:0;z-index:-1;width:100%;height:100%;pointer-events:none; }
+    #board { z-index:-2; }
+    main { box-sizing:border-box;width:min(480px,calc(100% - 32px));padding:34px 36px 36px;text-align:center;background:#030b12a6;border:1px solid #19c6f324;border-radius:16px;box-shadow:0 30px 80px #000a;-webkit-backdrop-filter:blur(12px) saturate(1.4);backdrop-filter:blur(12px) saturate(1.4); }
+    h1 { margin:0 0 8px;font-size:21px;font-weight:600;letter-spacing:-.01em; }
+    #msg { margin:0 0 24px;color:#9fbccd;line-height:1.5; }
+    progress { display:block;width:100%;height:6px;border:0;border-radius:999px;background:#19c6f314;accent-color:#19c6f3;filter:drop-shadow(0 0 6px #19c6f3a0); }
+    progress::-webkit-progress-bar { border-radius:999px;background:#19c6f314; }
+    /* The filled bar is a glowing filament whose leading edge burns white-hot. */
+    progress::-webkit-progress-value { border-radius:999px;background:linear-gradient(90deg,transparent 0 42%,#e8ffffb0 50%,transparent 58%) 0 0/60% 100% repeat-x,linear-gradient(90deg,#0d72b1,#19c6f3 80%,#e8ffff);animation:filament 2.4s linear infinite; }
+    progress::-moz-progress-bar { border-radius:999px;background:linear-gradient(90deg,transparent 0 42%,#e8ffffb0 50%,transparent 58%) 0 0/60% 100% repeat-x,linear-gradient(90deg,#0d72b1,#19c6f3 80%,#e8ffff);animation:filament 2.4s linear infinite; }
+    a { display:inline-block;margin-top:20px;padding:10px 16px;border-radius:6px;background:#0d72b1;color:#fff;font-weight:700;text-decoration:none; }
     a:focus-visible { outline:3px solid #ffb000;outline-offset:3px; }
     [hidden] { display:none; }
+    @keyframes filament { to { background-position:300% 0,0 0; } }
+    @media (max-width:480px) { main { padding:30px 24px; } }
+    @media (prefers-reduced-motion:reduce) { progress::-webkit-progress-value,progress::-moz-progress-bar { animation:none; } }
   </style>
 </head>
 <body>
+  <canvas id="board" aria-hidden="true"></canvas>
+  <canvas id="current" aria-hidden="true"></canvas>
   <main>
     <h1 id="h">Preparing your investigation…</h1>
     <p id="msg">Setting up evidence in Kibana…</p>
@@ -72,6 +80,317 @@
         requestAnimationFrame(step);
       }
       requestAnimationFrame(step);
+    })();
+  </script>
+  <script>
+    // Current crackling through banks of circuit traces. Each pulse runs a bank
+    // with its bits slightly staggered: the head burns white-hot, the trace behind
+    // it shimmers electric cyan and slowly sinks to deep blue, like disturbed
+    // plankton. Pads flare where current lands, small arcs crackle off them, and
+    // the resting board twinkles.
+    (() => {
+      const board = document.getElementById('board'), canvas = document.getElementById('current');
+      const btx = board && board.getContext('2d'), ctx = canvas && canvas.getContext('2d');
+      if (!btx || !ctx) return;
+      const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const TAU = Math.PI * 2, rand = (lo, hi) => lo + Math.random() * (hi - lo);
+      // Everything is drawn as batched strokes on a half-resolution layer so it
+      // stays smooth on CPU-only machines; the static board keeps full resolution.
+      const LEVELS = 8, CHUNK = 3;
+      const GRID = 20, STEP = 3, PITCH = 7, MAX_POINTS = 70000;
+      const DIRS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+      let W = 0, H = 0, dpr = 1, lay = .5, t = 0, total = 0, xs, ys, en, lines = [], banks = [], near = new Map();
+      const pulses = [], sparks = [], glints = [];
+
+      // Route banks of parallel traces on a grid, 45° jogs only, never crossing
+      // another bank, so the board reads as ordered circuitry rather than noise.
+      function route() {
+        const taken = new Map(), cellKey = (cx, cy) => cx * 4096 + cy;
+        const fits = (x, y, reach, id) => {
+          for (let cx = Math.floor((x - reach) / GRID); cx <= Math.floor((x + reach) / GRID); cx++)
+            for (let cy = Math.floor((y - reach) / GRID); cy <= Math.floor((y + reach) / GRID); cy++) {
+              const owner = taken.get(cellKey(cx, cy)); if (owner !== undefined && owner !== id) return false;
+            }
+          return true;
+        };
+        const claim = (x, y, reach, id) => {
+          for (let cx = Math.floor((x - reach) / GRID); cx <= Math.floor((x + reach) / GRID); cx++)
+            for (let cy = Math.floor((y - reach) / GRID); cy <= Math.floor((y + reach) / GRID); cy++) taken.set(cellKey(cx, cy), id);
+        };
+        const paths = [];
+        for (let attempt = 0; attempt < 500 && paths.length < 90; attempt++) {
+          const id = attempt, width = Math.random() < .2 ? 1 : 3 + Math.floor(rand(0, 4));
+          const reach = (width - 1) * PITCH / 2 + 8;
+          let x = Math.round(rand(-2, W / GRID + 2)) * GRID, y = Math.round(rand(-2, H / GRID + 2)) * GRID;
+          if (!fits(x, y, reach, id)) continue;
+          let d = 2 * Math.floor(rand(0, 4));
+          const pts = [[x, y]], marks = [[x, y]];
+          for (let seg = 0, segs = 3 + Math.floor(rand(0, 6)); seg < segs; seg++) {
+            const run = d % 2 ? 1 + Math.floor(rand(0, 3)) : 3 + Math.floor(rand(0, 12));
+            let moved = 0;
+            for (; moved < run; moved++) {
+              const nx = x + DIRS[d][0] * GRID, ny = y + DIRS[d][1] * GRID;
+              if (nx < -3 * GRID || ny < -3 * GRID || nx > W + 3 * GRID || ny > H + 3 * GRID || !fits(nx, ny, reach, id)) break;
+              x = nx; y = ny; marks.push([x, y]);
+            }
+            if (moved) pts.push([x, y]);
+            if (moved < run && seg > 0) break;
+            // A diagonal either jogs back to the old heading or completes a 90° turn.
+            d = (d + (Math.random() < .5 ? 1 : 7)) % 8;
+          }
+          if (marks.length < 8 || pts.length < 2) continue;
+          marks.forEach(([mx, my]) => claim(mx, my, reach, id));
+          paths.push({ pts, width });
+        }
+        return paths;
+      }
+
+      // Offset a bank's centerline into its parallel traces (mitred corners).
+      function offset(pts, o) {
+        const n = [];
+        for (let i = 0; i < pts.length - 1; i++) {
+          const dx = pts[i + 1][0] - pts[i][0], dy = pts[i + 1][1] - pts[i][1], len = Math.hypot(dx, dy);
+          n.push([-dy / len, dx / len]);
+        }
+        return pts.map(([x, y], i) => {
+          if (i === 0) return [x + n[0][0] * o, y + n[0][1] * o];
+          if (i === pts.length - 1) return [x + n[i - 1][0] * o, y + n[i - 1][1] * o];
+          const a = n[i - 1], b = n[i], m = o / (1 + a[0] * b[0] + a[1] * b[1]);
+          return [x + (a[0] + b[0]) * m, y + (a[1] + b[1]) * m];
+        });
+      }
+
+      function build() {
+        dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+        W = window.innerWidth; H = window.innerHeight;
+        lay = Math.min(.75, .5 * dpr);
+        board.width = Math.round(W * dpr); board.height = Math.round(H * dpr);
+        canvas.width = Math.round(W * lay); canvas.height = Math.round(H * lay);
+        xs = new Float32Array(MAX_POINTS); ys = new Float32Array(MAX_POINTS); en = new Float32Array(MAX_POINTS);
+        lines = []; banks = []; near = new Map(); pulses.length = 0; sparks.length = 0; glints.length = 0;
+        let used = 0;
+        for (const path of route()) {
+          const bank = { lines: [] };
+          for (let j = 0; j < path.width && used < MAX_POINTS - 2000; j++) {
+            const verts = offset(path.pts, (j - (path.width - 1) / 2) * PITCH), start = used;
+            for (let v = 0; v < verts.length - 1; v++) {
+              const [ax, ay] = verts[v], [bx, by] = verts[v + 1], steps = Math.max(1, Math.round(Math.hypot(bx - ax, by - ay) / STEP));
+              for (let s = 0; s < steps; s++, used++) { xs[used] = ax + (bx - ax) * s / steps; ys[used] = ay + (by - ay) * s / steps; }
+            }
+            xs[used] = verts[verts.length - 1][0]; ys[used] = verts[verts.length - 1][1]; used++;
+            const line = { start, count: used - start, verts, bank, padA: 0, padB: 0 };
+            for (let k = start; k < used; k += 2) {
+              const key = Math.floor(xs[k] / 24) * 4096 + Math.floor(ys[k] / 24);
+              if (!near.has(key)) near.set(key, []); near.get(key).push(k, lines.length);
+            }
+            lines.push(line); bank.lines.push(line);
+          }
+          if (bank.lines.length) banks.push(bank);
+        }
+        total = used;
+        drawBoard();
+      }
+
+      // The resting board: faint traces and pads on near-black.
+      function drawBoard() {
+        btx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        btx.clearRect(0, 0, W, H);
+        btx.fillStyle = '#5fb8e80a';
+        for (let x = GRID / 2; x < W; x += GRID) for (let y = GRID / 2; y < H; y += GRID) btx.fillRect(x, y, 1, 1);
+        btx.lineWidth = 1.3; btx.lineJoin = 'round'; btx.strokeStyle = '#2a8cc62e';
+        for (const line of lines) {
+          btx.beginPath(); line.verts.forEach(([x, y], i) => i ? btx.lineTo(x, y) : btx.moveTo(x, y)); btx.stroke();
+        }
+        btx.fillStyle = '#03080c'; btx.strokeStyle = '#3aa6dc47'; btx.lineWidth = 1.2;
+        for (const line of lines) for (const [x, y] of [line.verts[0], line.verts[line.verts.length - 1]]) {
+          btx.beginPath(); btx.arc(x, y, 2.6, 0, TAU); btx.fill(); btx.stroke();
+        }
+      }
+
+      const fire = (line, at, dir, o = {}) => pulses.push({
+        line, pos: at, dir, speed: (o.speed ?? rand(260, 620)) / STEP, power: o.power ?? rand(.95, 1.35), delay: o.delay ?? 0,
+      });
+      // A whole bank carries the signal, each bit a few milliseconds apart.
+      const fireBank = (bank, o = {}) => {
+        const reverse = o.reverse ?? Math.random() < .5, speed = o.speed ?? rand(260, 620), power = o.power ?? rand(.95, 1.35);
+        for (const line of bank.lines) fire(line, reverse ? line.count - 1 : 0, reverse ? -1 : 1, { speed, power, delay: rand(0, o.stagger ?? .09) });
+      };
+      const spark = (x, y, o = {}) => sparks.push({ x, y, age: 0, life: o.life ?? rand(.08, .2), reach: o.reach ?? rand(16, 34), heading: o.heading ?? rand(0, TAU), power: o.power ?? 1 });
+
+      let nextBank = .2, swept = false;
+      const fade = τ => Math.exp(-1 / τ);
+      function update(dt) {
+        t += dt;
+        if ((nextBank -= dt) <= 0 && banks.length) {
+          nextBank = rand(.16, .5);
+          fireBank(banks[Math.floor(rand(0, banks.length))]);
+        }
+        // When the investigation is ready, every bank fires at once.
+        if (window.__done && !swept) {
+          swept = true;
+          banks.forEach(bank => fireBank(bank, { speed: 1500, power: 1.5, stagger: .05 }));
+        }
+        for (let i = pulses.length - 1; i >= 0; i--) {
+          const p = pulses[i];
+          if (p.delay > 0) { p.delay -= dt; continue; }
+          const from = p.pos, last = p.line.count - 1;
+          p.pos = Math.max(0, Math.min(last, p.pos + p.dir * p.speed * dt));
+          const lo = Math.floor(Math.min(from, p.pos)), hi = Math.ceil(Math.max(from, p.pos));
+          for (let k = lo; k <= hi; k++) { const g = p.line.start + k; if (en[g] < p.power) en[g] = p.power; }
+          // Soft crackle: the hot head occasionally throws a tiny arc sideways.
+          if (Math.random() < dt * 3) {
+            const g = p.line.start + Math.round(p.pos);
+            spark(xs[g], ys[g], { reach: rand(9, 18), life: rand(.06, .14), power: .85 });
+          }
+          if (p.pos === 0 || p.pos === last) {
+            if (p.pos === last) p.line.padB = 1.5; else p.line.padA = 1.5;
+            if (Math.random() < .45) {
+              const g = p.line.start + p.pos;
+              spark(xs[g], ys[g]);
+            }
+            pulses.splice(i, 1);
+          }
+        }
+        // Resting traces twinkle: brief glints scattered over the whole board.
+        for (let n = Math.floor(dt * 70 + Math.random()); n > 0 && total; n--) glints.push({ k: Math.floor(rand(0, total)), age: 0, life: rand(.12, .35), power: rand(.35, 1) });
+        const trace = Math.pow(fade(.75), dt), pad = Math.pow(fade(1.3), dt);
+        for (let k = 0; k < total; k++) if (en[k] > .004) en[k] *= trace; else en[k] = 0;
+        for (const line of lines) { line.padA *= pad; line.padB *= pad; }
+        // Short-lived effects survive until drawn at least once, so they still
+        // show when a busy machine only manages a few frames a second.
+        for (const list of [sparks, glints]) for (let i = list.length - 1; i >= 0; i--) {
+          const item = list[i]; if ((item.age += dt) >= item.life && item.shown) list.splice(i, 1);
+        }
+      }
+
+      // Sparks are re-jagged every frame, which is what makes them crackle.
+      function arc(s) {
+        let x = s.x, y = s.y, heading = s.heading;
+        ctx.beginPath(); ctx.moveTo(x, y);
+        for (let seg = 0, segs = 4; seg < segs; seg++) {
+          heading += rand(-1, 1); const len = s.reach / segs * rand(.6, 1.4);
+          x += Math.cos(heading) * len; y += Math.sin(heading) * len; ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+      const dots = (points, radius) => {
+        ctx.beginPath();
+        for (let i = 0; i < points.length; i += 2) { ctx.moveTo(points[i] + radius, points[i + 1]); ctx.arc(points[i], points[i + 1], radius, 0, TAU); }
+        ctx.fill();
+      };
+
+      function draw() {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.setTransform(lay, 0, 0, lay, 0, 0);
+        ctx.lineJoin = 'round';
+        // Bucket lit chunks of trace by brightness, so each pass is a few strokes.
+        // A ripple of brightness running along the current is the shimmer.
+        const buckets = Array.from({ length: LEVELS }, () => []), hot = [];
+        const ripple = t * 7;
+        for (const line of lines) {
+          const end = line.start + line.count - 1;
+          for (let k = line.start; k < end; k += CHUNK) {
+            const e = en[k]; if (e < .04) continue;
+            const next = Math.min(k + CHUNK, end), lit = e * (.7 + .3 * Math.sin(k * .45 - ripple));
+            buckets[Math.min(LEVELS - 1, Math.floor(lit / 1.4 * LEVELS))].push(k, next);
+            if (lit > .85) hot.push(k, next);
+          }
+        }
+        ctx.lineCap = 'butt';
+        for (const [width, color, gain] of [[14, '#0d72b1', .5], [6, '#19c6f3', .75], [2, '#8ff0ff', 1.3]]) {
+          ctx.lineWidth = width; ctx.strokeStyle = color;
+          buckets.forEach((chunks, level) => {
+            if (!chunks.length) return;
+            ctx.globalAlpha = Math.min(1, (level + .5) / LEVELS * 1.4 * gain);
+            ctx.beginPath();
+            for (let i = 0; i < chunks.length; i += 2) { ctx.moveTo(xs[chunks[i]], ys[chunks[i]]); ctx.lineTo(xs[chunks[i + 1]], ys[chunks[i + 1]]); }
+            ctx.stroke();
+          });
+        }
+        if (hot.length) {
+          ctx.lineWidth = 1.3; ctx.strokeStyle = '#f4ffff'; ctx.globalAlpha = .85;
+          ctx.beginPath();
+          for (let i = 0; i < hot.length; i += 2) { ctx.moveTo(xs[hot[i]], ys[hot[i]]); ctx.lineTo(xs[hot[i + 1]], ys[hot[i + 1]]); }
+          ctx.stroke();
+        }
+        // Pulse heads and the pads current has just reached.
+        const heads = [];
+        for (const p of pulses) if (p.delay <= 0) { const g = p.line.start + Math.round(p.pos); heads.push(xs[g], ys[g]); }
+        ctx.fillStyle = '#19c6f3'; ctx.globalAlpha = .35; dots(heads, 10);
+        ctx.fillStyle = '#f4ffff'; ctx.globalAlpha = .95; dots(heads, 2.2);
+        for (const line of lines) for (const [amount, [x, y]] of [[line.padA, line.verts[0]], [line.padB, line.verts[line.verts.length - 1]]]) {
+          if (amount < .03) continue;
+          ctx.fillStyle = '#19c6f3'; ctx.globalAlpha = Math.min(1, amount * .22); dots([x, y], 6 + amount * 6);
+          ctx.fillStyle = '#e8ffff'; ctx.globalAlpha = Math.min(1, amount * .7); dots([x, y], 2.6);
+        }
+        for (const g of glints) {
+          g.shown = true;
+          const a = g.power * Math.sin(Math.PI * Math.min(1, g.age / g.life));
+          ctx.fillStyle = '#19c6f3'; ctx.globalAlpha = a * .35; dots([xs[g.k], ys[g.k]], 6);
+          ctx.fillStyle = '#c8faff'; ctx.globalAlpha = a; dots([xs[g.k], ys[g.k]], 1.7);
+        }
+        ctx.lineCap = 'round';
+        for (const s of sparks) {
+          s.shown = true;
+          const flicker = s.power * (.45 + .55 * Math.random()) * Math.max(.3, 1 - s.age / s.life);
+          ctx.strokeStyle = '#19c6f3'; ctx.lineWidth = 5; ctx.globalAlpha = flicker * .4; arc(s);
+          ctx.strokeStyle = '#e8ffff'; ctx.lineWidth = 1.4; ctx.globalAlpha = flicker; arc(s);
+        }
+      }
+
+      // The pointer is a probe: touching a trace sends current both ways from there.
+      const nearest = (x, y, radius) => {
+        let best = null, bestD = radius * radius;
+        for (let cx = Math.floor((x - radius) / 24); cx <= Math.floor((x + radius) / 24); cx++)
+          for (let cy = Math.floor((y - radius) / 24); cy <= Math.floor((y + radius) / 24); cy++) {
+            const hits = near.get(cx * 4096 + cy); if (!hits) continue;
+            for (let i = 0; i < hits.length; i += 2) {
+              const d = (xs[hits[i]] - x) ** 2 + (ys[hits[i]] - y) ** 2;
+              if (d < bestD) { bestD = d; best = { point: hits[i], line: lines[hits[i + 1]] }; }
+            }
+          }
+        return best;
+      };
+      let lastProbe = 0;
+      window.addEventListener('pointermove', event => {
+        const now = performance.now(); if (now - lastProbe < 90) return;
+        const hit = nearest(event.clientX, event.clientY, 14); if (!hit) return;
+        lastProbe = now;
+        const at = hit.point - hit.line.start;
+        fire(hit.line, at, 1, { power: 1.2 }); fire(hit.line, at, -1, { power: 1.2 });
+        spark(xs[hit.point], ys[hit.point], { power: .8 });
+      }, { passive: true });
+      window.addEventListener('pointerdown', event => {
+        const hit = nearest(event.clientX, event.clientY, 60); if (!hit) return;
+        const at = (hit.point - hit.line.start) / hit.line.count;
+        for (const line of hit.line.bank.lines) {
+          const k = Math.round(at * (line.count - 1));
+          fire(line, k, 1, { power: 1.45, speed: 700 }); fire(line, k, -1, { power: 1.45, speed: 700 });
+        }
+        for (let i = 0; i < 3; i++) spark(xs[hit.point], ys[hit.point], { reach: rand(18, 34), power: 1.2 });
+      }, { passive: true });
+
+      build();
+      if (still) {
+        // Reduced motion: settle a single still frame of a few lit banks.
+        const settle = () => { for (let i = 0; i < 6 && banks.length; i++) fireBank(banks[Math.floor(rand(0, banks.length))], { speed: 900 }); for (let i = 0; i < 70; i++) update(1 / 60); sparks.length = 0; draw(); };
+        settle(); window.addEventListener('resize', () => { build(); settle(); });
+        return;
+      }
+      let rebuild = 0;
+      window.addEventListener('resize', () => { clearTimeout(rebuild); rebuild = setTimeout(build, 150); });
+      // Keep real time even when frames are scarce, and cap at ~30fps to leave
+      // the CPU to Kibana, which is booting in the background meanwhile.
+      let prev = performance.now(), drawn = -Infinity;
+      (function frame(now) {
+        requestAnimationFrame(frame);
+        if (now - drawn < 32) return;
+        const dt = Math.min(.25, Math.max(0, now - prev) / 1000); prev = drawn = now;
+        update(dt); draw();
+      })(prev);
     })();
   </script>
 </body>
