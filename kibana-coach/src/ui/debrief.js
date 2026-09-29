@@ -6,12 +6,24 @@ class IncidentDebrief {
   show(feedback) {
     const dialog = document.createElement('dialog');
     dialog.className = 'incident-debrief';
-    if (feedback.scored === false && feedback.assistance?.step_count != null) {
+    if (feedback.assistance?.step_count != null) {
       const help = feedback.assistance;
       const steps = help.step_count;
+      const score = Math.max(0, Math.min(100, Number(feedback.total) || 0));
+      const phaseCredit = steps ? Number((100 / steps).toFixed(1)) : 0;
+      const hintCredit = steps ? Number((50 / steps).toFixed(1)) : 0;
       dialog.innerHTML = `<form method="dialog"><button class="dialog-close" aria-label="Close debrief">×</button></form>
         <h2>Guided investigation complete</h2>
         <p></p>
+        <div class="guided-score">
+          <div class="guided-score-heading"><strong>Guided practice score</strong><strong>${score}%</strong></div>
+          <div class="guided-score-track" role="progressbar" aria-label="Guided investigation score" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${score}" style="--score:${score}%">
+            <span class="guided-score-unearned" aria-hidden="true"></span>
+            <span class="guided-score-ticks" aria-hidden="true">${Array.from({length: 6}, () => '<i></i>').join('')}</span>
+          </div>
+          <div class="guided-score-labels" aria-hidden="true">${Array.from({length: 6}, (_, index) => `<span>${index * 20}%</span>`).join('')}</div>
+          <p class="guided-score-rule">Per phase: ${phaseCredit}% without help · ${hintCredit}% with hints only · 0% with Show me</p>
+        </div>
         <ul>
           <li><span>Steps completed without help</span><strong>${help.independent_steps} of ${steps}</strong></li>
           <li><span>Hints requested</span><strong>${help.hints} across ${help.hinted_steps} of ${steps} steps</strong></li>

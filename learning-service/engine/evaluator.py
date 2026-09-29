@@ -411,7 +411,7 @@ def score_session(session, trace_is_valid=False, evidence=None):
 
 
 def guided_feedback(session):
-    """Summarize guided practice from completed steps and recorded help requests."""
+    """Score completed guided steps by the most assistance used on each one."""
     goals = playbook_goals(session)
     practice_ids = {
         goal["id"] for goal in goals
@@ -425,17 +425,22 @@ def guided_feedback(session):
     } & practice_ids
     assistance = session.get("assistance", {})
     step_count = len(practice_ids)
+    completed_ids = session["completed_goals"] & practice_ids
     helped_ids = hinted_ids | shown_ids
+    independent_ids = completed_ids - helped_ids
+    hint_only_ids = (completed_ids & hinted_ids) - shown_ids
+    total = round(100 * (len(independent_ids) + 0.5 * len(hint_only_ids)) / max(1, step_count), 1)
     return {
-        "scored": False,
-        "completion": round(100 * len(session["completed_goals"] & practice_ids) / max(1, step_count), 1),
-        "summary": "Guided investigation complete. This feedback reflects the help you used while completing the steps.",
+        "scored": True,
+        "total": total,
+        "completion": round(100 * len(completed_ids) / max(1, step_count), 1),
+        "summary": "Guided investigation complete. Your score reflects the help you used in each phase.",
         "assistance": {
             "hints": assistance.get("hints", 0),
             "demonstrated_steps": assistance.get("demonstrated_steps", 0),
             "hinted_steps": len(hinted_ids),
             "shown_steps": len(shown_ids),
-            "independent_steps": len((session["completed_goals"] & practice_ids) - helped_ids),
+            "independent_steps": len(independent_ids),
             "step_count": step_count,
         },
     }

@@ -762,6 +762,15 @@ class IncidentCoachPanel {
     .incident-cursor span { position:absolute;inset:0;border:2px solid #ffb000;border-radius:50%;opacity:0; }.incident-cursor.clicked span { animation:click-ring .5s; }
     @keyframes click-ring { from{opacity:1;transform:scale(.3)}to{opacity:0;transform:scale(2)} }
     dialog.incident-debrief { pointer-events:auto;width:min(720px,calc(100vw - 48px));max-width:none;max-height:calc(100vh - 48px);overflow:auto;box-sizing:border-box;border:0;border-radius:10px;padding:24px;box-shadow:0 14px 50px #0006;color:#17212b; }.incident-debrief::backdrop{background:#101820aa}.dialog-close{float:right;border:0;font-size:22px}.incident-debrief li{display:flex;justify-content:space-between;padding:5px 0}.incident-debrief .total{font-size:20px;font-weight:750}.incident-debrief .demo-checks{padding-left:20px}.incident-debrief .demo-checks li{display:list-item;padding:5px 0}.incident-debrief .demo-checks p{margin:3px 0}.incident-problem{margin:12px 0 18px;padding:14px 16px;border-left:5px solid #d64a3a;background:#fff3f1;border-radius:6px}.incident-problem strong{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#8c2418}.incident-problem p{margin:5px 0 0;font-size:17px;font-weight:750;line-height:1.4}.incident-conclusion{padding:12px 14px;border-left:4px solid #1aa87a;background:#eef9f5;border-radius:6px}
+    .guided-score { margin:18px 0 16px; }
+    .guided-score-heading { display:flex;justify-content:space-between;align-items:baseline;margin-bottom:9px;font-size:16px; }
+    .guided-score-heading strong:last-child { font-size:24px;font-variant-numeric:tabular-nums; }
+    .guided-score-track { position:relative;height:20px;overflow:hidden;border-radius:6px;background:linear-gradient(90deg,#b42318 0%,#d84227 14%,#eb7330 29%,#f2aa38 42%,#e7cf49 53%,#aacc50 67%,#63b65a 82%,#148d61 100%); }
+    .guided-score-unearned { position:absolute;top:0;bottom:0;left:var(--score);right:0;background:#e4e9ed; }
+    .guided-score-ticks { position:absolute;inset:0;display:flex;justify-content:space-between;pointer-events:none; }
+    .guided-score-ticks i { display:block;width:1px;height:100%;background:#fff;box-shadow:0 0 0 1px #17212b66; }
+    .guided-score-labels { display:flex;justify-content:space-between;margin-top:5px;color:#536170;font-size:11px;font-variant-numeric:tabular-nums; }
+    .incident-debrief .guided-score-rule { margin:10px 0 0;color:#3f5060;font-size:12px; }
     @media (prefers-reduced-motion: reduce) { *, .incident-cursor, .progress span { transition:none!important;animation:none!important; } .stage-tick { transform:none!important; } }
   `;
 }
