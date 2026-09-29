@@ -14,6 +14,7 @@ function startIncidentCoach() {
   // walkthrough ends, so the observer must not report the coach's changes as the learner's —
   // that would complete the step early and cut off the "What we learned" beat.
   let walkthroughController = null;
+  let guidedFeedbackShown = false;
   const activeSessionKey = 'incident-coach:auto-connect';
   const demonstrationSlowdown = 3;
   const demonstrationTimingScale = 10 * demonstrationSlowdown;
@@ -139,10 +140,24 @@ function startIncidentCoach() {
   async function startSession(config) {
     client?.stop();
     observer?.stop();
+    guidedFeedbackShown = false;
     await adapter.initialize();
     client = new IncidentSessionClient(config);
     client.onStatus = message => coach.toast(message);
     client.onError = message => coach.toast(message, true);
+    client.onComplete = async () => {
+      if (client.mode !== 'guided' || guidedFeedbackShown) return;
+      guidedFeedbackShown = true;
+      try {
+        const feedback = await client.getFeedback();
+        observer?.stop();
+        coach.showGuidedCompletion();
+        coach.debrief.show(feedback);
+      } catch (error) {
+        guidedFeedbackShown = false;
+        coach.toast(error.message, true);
+      }
+    };
     client.onHint = hint => coach.showHint(hint);
     client.onActionResult = result => {
       if (result.evaluation.outcome === 'accepted') {
@@ -179,12 +194,16 @@ function startIncidentCoach() {
         execute(command);
         return;
       }
-      let target = adapter.resolve(command.target);
-      if (!target && command.target.startsWith('kibana.')) {
-        target = await adapter.waitFor(command.target, 20000).catch(() => null);
-        if (currentCommand !== command) return;
-      }
+      const target = adapter.resolve(command.target);
+      // Guided cards should appear as soon as the command arrives. Some reference actions use an
+      // anchor that is deliberately absent from the selector registry (for example filter_bar),
+      // and waiting for it here leaves the previous success card on screen for 20 seconds.
       coach.showCommand(command, target);
+      if (!target && adapter.registry?.targets?.[command.target]) {
+        adapter.waitFor(command.target, 20000).then(found => {
+          if (currentCommand === command) coach.updateCommandTarget(command, found);
+        }).catch(() => {});
+      }
     };
     await client.connect();
     observer = new KibanaActionObserver(adapter, action => {
@@ -212,9 +231,14 @@ function startIncidentCoach() {
       client.send({message_type: paused ? 'pause' : 'resume'});
     };
     coach.onHint = () => client.requestHint();
+    coach.onReviewFeedback = async () => {
+      try { coach.debrief.show(await client.getFeedback()); }
+      catch (error) { coach.toast(error.message, true); }
+    };
     coach.onDemonstrate = () => currentCommand && execute(currentCommand, true);
     coach.onAdvance = () => {
       if (!currentCommand) return;
+      if (coach.advanceCelebration()) return;
       if (currentCommand.mode === 'demonstration' && coach.paused) {
         // Nothing is counting down while paused — resume so the demonstration plays on.
         coach.setPaused(false);

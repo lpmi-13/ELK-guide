@@ -6,6 +6,23 @@ class IncidentDebrief {
   show(feedback) {
     const dialog = document.createElement('dialog');
     dialog.className = 'incident-debrief';
+    if (feedback.scored === false && feedback.assistance?.step_count != null) {
+      const help = feedback.assistance;
+      const steps = help.step_count;
+      dialog.innerHTML = `<form method="dialog"><button class="dialog-close" aria-label="Close debrief">×</button></form>
+        <h2>Guided investigation complete</h2>
+        <p></p>
+        <ul>
+          <li><span>Steps completed without help</span><strong>${help.independent_steps} of ${steps}</strong></li>
+          <li><span>Hints requested</span><strong>${help.hints} across ${help.hinted_steps} of ${steps} steps</strong></li>
+          <li><span>Show me used</span><strong>${help.demonstrated_steps} times across ${help.shown_steps} of ${steps} steps</strong></li>
+        </ul>`;
+      dialog.querySelector('p').textContent = feedback.summary;
+      this.root.append(dialog);
+      dialog.addEventListener('close', () => dialog.remove());
+      dialog.showModal();
+      return;
+    }
     const components = Object.entries(feedback.components || {}).map(([name, score]) => `<li><span>${name.replaceAll('_', ' ')}</span><strong>${score}</strong></li>`).join('');
     const result = feedback.scored === false
       ? `Completion: ${feedback.completion ?? 'unscored walkthrough'}${feedback.completion != null ? '%' : ''}`

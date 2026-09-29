@@ -30,9 +30,10 @@ function makeClock() {
 
 async function makeDemo() {
   const clock = makeClock();
-  const calls = {countdowns: [], resumes: [], commands: 0, actions: 0, messages: [], phases: [], learning: null};
+  const calls = {countdowns: [], resumes: [], commands: 0, actions: 0, messages: [], phases: [], learning: null, updatedTargets: []};
   let coach;
   let client;
+  let adapter;
   class Coach {
     constructor() { coach = this; this.paused = false; }
     setPaused(paused) { this.paused = paused; this.onPause?.(paused); }
@@ -44,9 +45,11 @@ async function makeDemo() {
     beginWalkthrough() { calls.phases.push('action'); }
     beginActionPhase() {}
     finishCommand() {}
+    updateCommandTarget(command, target) { calls.updatedTargets.push({command, target}); }
     toast() {}
   }
   class Adapter {
+    constructor() { adapter = this; }
     async initialize() {}
     resolve() { return {}; }
     async resolveAnchor() { return null; }
@@ -76,8 +79,32 @@ async function makeDemo() {
     clock.setTimeout.bind(clock), clock.clearTimeout.bind(clock), clock.performance);
   await Promise.resolve();
   await Promise.resolve();
-  return {clock, calls, get coach() { return coach; }, get client() { return client; }};
+  return {clock, calls, get coach() { return coach; }, get client() { return client; }, get adapter() { return adapter; }};
 }
+
+test('guided steps render before waiting for an unavailable Kibana anchor', async () => {
+  const demo = await makeDemo();
+  const command = {command_id: 'guided-isolate', step_id: 'isolate', mode: 'guided',
+    target: 'kibana.filter_bar', narration: 'Filter the status code'};
+  demo.adapter.resolve = () => null;
+  demo.adapter.registry = {targets: {}};
+  let waits = 0;
+  demo.adapter.waitFor = () => { waits++; return new Promise(() => {}); };
+
+  await demo.client.onCommand(command);
+  assert.equal(demo.calls.commands, 1);
+  assert.equal(waits, 0);
+
+  let resolveTarget;
+  const next = {...command, command_id: 'guided-survey', step_id: 'survey', target: 'kibana.field_list'};
+  demo.adapter.registry.targets['kibana.field_list'] = ['[data-test-subj="fieldList"]'];
+  demo.adapter.waitFor = () => new Promise(resolve => { resolveTarget = resolve; });
+  await demo.client.onCommand(next);
+  assert.equal(demo.calls.commands, 2);
+  resolveTarget({id: 'field-list'});
+  await Promise.resolve();
+  assert.deepEqual(demo.calls.updatedTargets, [{command: next, target: {id: 'field-list'}}]);
+});
 
 test('pause freezes a reading beat; resume continues its remaining time without replaying the command', async () => {
   const demo = await makeDemo();

@@ -44,7 +44,10 @@ class IncidentSessionClient {
     else if (message.message_type === 'command') this.onCommand?.(message);
     else if (message.message_type === 'hint') this.onHint?.(message);
     else if (message.message_type === 'action_result') this.onActionResult?.(message);
-    else if (message.message_type === 'complete') this.onStatus?.('Investigation goals complete.');
+    else if (message.message_type === 'complete') {
+      this.onStatus?.('Investigation goals complete.');
+      this.onComplete?.();
+    }
     else if (message.message_type === 'error') this.onError?.(message.error || 'Learning session error.');
   }
 
@@ -83,6 +86,13 @@ class IncidentSessionClient {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `Diagnosis failed (${response.status})`);
+    return result;
+  }
+
+  async getFeedback() {
+    const response = await fetch(`${this.server}/api/sessions/${this.sessionId}/feedback`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `Feedback unavailable (${response.status})`);
     return result;
   }
 

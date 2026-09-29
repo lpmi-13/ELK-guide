@@ -18,7 +18,7 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qs, quote, urlparse
 from urllib.request import Request, urlopen
 
-from engine.evaluator import evaluate_action, playbook_goals, score_session
+from engine.evaluator import evaluate_action, guided_feedback, playbook_goals, score_session
 from engine.contracts import assert_catalog_valid, insert_goals
 
 PORT = int(os.getenv("PORT", "8091"))
@@ -255,6 +255,17 @@ def current_step_index(session):
     return len(playbook_goals(session))
 
 
+def guided_practice_complete(session):
+    """Every guided investigation goal before the answer card is complete."""
+    goals = playbook_goals(session)
+    return (
+        session["mode"] == "guided"
+        and bool(goals)
+        and goals[-1].get("reference_action", {}).get("command") in {"request_answer", "request_diagnosis"}
+        and all(goal["id"] in session["completed_goals"] for goal in goals[:-1])
+    )
+
+
 def run_investigation_url(manifest):
     space_id = manifest.get("space_id")
     starting = manifest["scenario"].get("starting_view", {})
@@ -486,7 +497,10 @@ def next_command(session):
 
 def refresh_run_ready(session):
     status, run = http_json(f"{CONTROLLER_URL}/api/runs/{session['run_id']}")
-    session["run_ready"] = status == 200 and run.get("state") in {"READY", "INVESTIGATING"}
+    state = run.get("state")
+    session["run_ready"] = status == 200 and (
+        state in {"READY", "INVESTIGATING"} or (state == "COMPLETED" and bool(session["feedback"]))
+    )
     return session["run_ready"]
 
 
@@ -563,6 +577,13 @@ def record_action(session, action):
         session["pending_command"] = None
     session["actions"].append({"action": action, "evaluation": evaluation})
     emit(session, action, evaluation)
+    if guided_practice_complete(session) and not session["feedback"]:
+        # The answer goal is a terminal marker in guided practice. Close it without recording an
+        # answer that the learner never submitted.
+        session["completed_goals"].add(playbook_goals(session)[-1]["id"])
+        session["pending_command"] = None
+        session["feedback"] = guided_feedback(session)
+        transition_run(session, "COMPLETED")
     return evaluation
 
 
@@ -646,7 +667,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not session:
                     self.respond(404, {"error": "session not found"})
                 elif not session["feedback"]:
-                    self.respond(409, {"error": "diagnosis has not been submitted"})
+                    self.respond(409, {"error": "feedback is not available yet"})
                 else:
                     self.respond(200, session["feedback"])
             return
@@ -722,6 +743,12 @@ class Handler(BaseHTTPRequestHandler):
                     if not session["run_ready"] and not refresh_run_ready(session):
                         self.respond(409, {"error": "run evidence is not ready"})
                         return
+                    if session["mode"] == "guided":
+                        if session["feedback"]:
+                            self.respond(200, session["feedback"])
+                        else:
+                            self.respond(409, {"error": "finish the guided investigation steps first"})
+                        return
                     session["answer"] = payload
                     actor = "tutorial" if session["mode"] == "demonstration" else "learner"
                     synthetic = {"protocol_version": 2, "run_id": session["run_id"], "session_id": session["id"], "sequence": session["last_action_sequence"] + 1, "type": "answer_submitted", "actor": actor, "observed_at": now_iso(), "details": payload}
@@ -767,7 +794,8 @@ class Handler(BaseHTTPRequestHandler):
             send_frame(connection, json.dumps({"message_type": "failed", "error": "run evidence did not become ready"}))
             return
         if session["briefing_acknowledged"]:
-            transition_run(session, "INVESTIGATING")
+            if not session["feedback"]:
+                transition_run(session, "INVESTIGATING")
             initial = next_command(session)
             send_frame(connection, json.dumps(initial or {"message_type": "complete", "session_id": session_id}))
         else:
@@ -792,6 +820,8 @@ class Handler(BaseHTTPRequestHandler):
                         command = next_command(session)
                         if command:
                             send_frame(connection, json.dumps(command))
+                        elif session["mode"] == "guided" and session["feedback"]:
+                            send_frame(connection, json.dumps({"message_type": "complete", "session_id": session_id}))
                 elif message_type == "ack":
                     send_frame(connection, json.dumps({"message_type": "acknowledged", "command_id": message.get("command_id")}))
                 elif message_type == "briefing_ack":

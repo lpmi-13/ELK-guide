@@ -89,9 +89,13 @@ def run_pack(entry, mode):
         session["actions"].append({"action": action, "evaluation": evaluation})
         if goal["id"] not in session["completed_goals"]:
             raise AssertionError(f"{entry['id']}/{mode}: reference route did not complete {goal['id']}")
-    session["answer"] = {**scenario["truth"]["answers"], "evidence_refs": [item["id"] for item in scenario["truth"]["assertions"]], "evidence": "The reference route established every declared assertion."}
+    if mode != "guided":
+        session["answer"] = {**scenario["truth"]["answers"], "evidence_refs": [item["id"] for item in scenario["truth"]["assertions"]], "evidence": "The reference route established every declared assertion."}
     feedback = score_session(session, evidence=evidence)
-    if not feedback["task_correct"]:
+    if mode == "guided":
+        if feedback["scored"] or feedback["completion"] != 100 or feedback["assistance"]["independent_steps"] != len(playbook["goals"]) - 1:
+            raise AssertionError(f"{entry['id']}/{mode}: guided completion or help summary is wrong")
+    elif not feedback["task_correct"]:
         raise AssertionError(f"{entry['id']}/{mode}: reference answer rejected")
     if mode == "challenge" and feedback["total"] != 100:
         raise AssertionError(f"{entry['id']}/{mode}: expected score 100, got {feedback['total']}")

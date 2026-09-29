@@ -78,13 +78,13 @@ test('learning highlights the HTTP status and version columns in the visible tab
   assert.ok(highlights.every(highlight => highlight.removed));
 });
 
-test('hints stay with their step and disappear before the next card or success card', () => {
+test('hints stay with their step and Advance moves through a success card', () => {
   const Panel = loadClass('../src/ui/coach-panel.js', 'IncidentCoachPanel',
     ['requestAnimationFrame'], [callback => callback()]);
   const panel = Object.create(Panel.prototype);
   const nodes = Object.fromEntries([
     '#hint-card', '#hint-label', '#hint-text', '#mode', '#objective', '#pause',
-    '#demonstrate', '#incident-info', '#advance', '#hint', '#diagnosis',
+    '#demonstrate', '#incident-info', '#advance', '#hint', '#diagnosis', '#review-feedback',
     '#phase-eyebrow', '#phase-headline',
   ].map(selector => [selector, {hidden: false, textContent: '', style: {}}]));
   nodes['#stage'] = {hidden: false, offsetWidth: 300, classList: {add() {}, remove() {}}};
@@ -120,4 +120,15 @@ test('hints stay with their step and disappear before the next card or success c
   assert.equal(nodes['#hint-card'].hidden, true);
   panel.showHint({step_id: 'survey', level: 2, text: 'Late reply during confirmation.'});
   assert.equal(nodes['#hint-card'].hidden, true);
+  assert.equal(panel.advanceCelebration(), true);
+  panel.showCommand(command('isolate', 1), null);
+  assert.equal(nodes['#objective'].textContent, 'isolate');
+  assert.equal(panel.celebrating, false);
+
+  panel.celebrate('Filter applied.');
+  panel.showCommand(command('endpoints', 1), null);
+  assert.equal(nodes['#objective'].textContent, 'isolate');
+  assert.equal(panel.advanceCelebration(), true);
+  assert.equal(nodes['#objective'].textContent, 'endpoints');
+  assert.equal(panel.advanceCelebration(), false);
 });

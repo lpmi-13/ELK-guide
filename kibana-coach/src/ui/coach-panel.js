@@ -12,7 +12,7 @@ class IncidentCoachPanel {
           <p id="phase-headline"></p>
           <div id="countdown" class="countdown" aria-hidden="true" hidden><span></span></div>
         </section>
-        <div class="actions"><button id="pause">Pause</button><button id="advance" title="Complete this step now and continue">Advance</button><button id="incident-info" title="Review the initial incident briefing">Incident info</button><button id="hint">Hint</button><button id="demonstrate">Show me</button></div>
+        <div class="actions"><button id="pause">Pause</button><button id="advance" title="Complete this step now and continue">Advance</button><button id="incident-info" title="Review the initial incident briefing">Incident info</button><button id="hint">Hint</button><button id="demonstrate">Show me</button><button id="review-feedback" hidden>Review feedback</button></div>
         <section id="hint-card" aria-live="polite" hidden><span id="hint-label"></span><p id="hint-text"></p></section>
         <form id="diagnosis" hidden>
           <label>Faulty service<input name="service" required></label>
@@ -39,6 +39,7 @@ class IncidentCoachPanel {
     this.spotlightRevealed = false;
     // New evidence is confirmed inside the panel; the next step is held until it finishes.
     this.celebrating = false;
+    this.advanceRequested = false;
     this.pendingCommand = null;
     const dragHandle = this.root.querySelector('header');
     dragHandle.addEventListener('pointerdown', event => this.startDrag(event));
@@ -89,6 +90,7 @@ class IncidentCoachPanel {
     this.root.querySelector('#advance').onclick = () => this.onAdvance?.();
     this.root.querySelector('#hint').onclick = () => this.revealHint();
     this.root.querySelector('#demonstrate').onclick = () => this.onDemonstrate?.();
+    this.root.querySelector('#review-feedback').onclick = () => this.onReviewFeedback?.();
     this.root.querySelector('#incident-info').onclick = () => {
       if (this.currentBriefing) this.briefing.show(this.currentBriefing, {review: true});
     };
@@ -133,7 +135,11 @@ class IncidentCoachPanel {
   showCommand(command, target) {
     // Hold the next step behind an in-progress confirmation so the learner sees the success land
     // before the card flips to the next task; finishCelebrate() replays this once it settles.
-    if (this.celebrating) { this.pendingCommand = {command, target}; return; }
+    if (this.celebrating) {
+      this.pendingCommand = {command, target};
+      if (this.advanceRequested) this.finishCelebrate();
+      return;
+    }
     this.clearHint();
     this.host.hidden = false;
     this.panel.hidden = false;
@@ -148,6 +154,7 @@ class IncidentCoachPanel {
     this.root.querySelector('.progress span').style.width = `${100 * command.step_index / command.step_count}%`;
     this.root.querySelector('#pause').hidden = command.mode !== 'demonstration';
     this.root.querySelector('#demonstrate').hidden = command.mode !== 'guided';
+    this.root.querySelector('#review-feedback').hidden = true;
     this.root.querySelector('#incident-info').hidden = command.mode !== 'guided' || !this.currentBriefing;
     const advance = this.root.querySelector('#advance');
     advance.hidden = command.mode !== 'demonstration';
@@ -176,6 +183,37 @@ class IncidentCoachPanel {
     this.spotlightRevealed = command.mode === 'demonstration';
     if (target && this.spotlightRevealed) this.spotlight.show(target); else this.spotlight.hide();
     requestAnimationFrame(() => this.placeAwayFrom(target));
+  }
+
+  updateCommandTarget(command, target) {
+    if (this.pendingCommand?.command === command) this.pendingCommand.target = target;
+    else if (this.activeCommandId === command.command_id) this.activeTarget = target;
+  }
+
+  showGuidedCompletion() {
+    clearTimeout(this.celebrateTimer);
+    this.celebrating = false;
+    this.advanceRequested = false;
+    this.pendingCommand = null;
+    this.phase = null;
+    this.clearHint();
+    this.spotlight.hide();
+    this.host.hidden = false;
+    this.panel.hidden = false;
+    this.root.querySelector('.progress span').style.width = '100%';
+    this.root.querySelector('#mode').textContent = 'guided · complete';
+    this.root.querySelector('#objective').textContent = 'Investigation complete';
+    this.root.querySelector('#pause').hidden = true;
+    this.root.querySelector('#advance').hidden = true;
+    this.root.querySelector('#hint').hidden = true;
+    this.root.querySelector('#demonstrate').hidden = true;
+    this.root.querySelector('#review-feedback').hidden = false;
+    this.root.querySelector('#incident-info').hidden = !this.currentBriefing;
+    this.root.querySelector('#diagnosis').hidden = true;
+    this.root.querySelector('#stage').classList.remove('success', 'celebrate-in');
+    this.root.querySelector('#stage').hidden = false;
+    this.renderPhase({eyebrow: 'Finished', headline: 'Your guided investigation is complete.'});
+    requestAnimationFrame(() => this.placeAwayFrom(null));
   }
 
   // A hint in guided mode dims the page and highlights the control the step is about — the first
@@ -636,6 +674,7 @@ class IncidentCoachPanel {
     this.host.hidden = false;
     this.panel.hidden = false;
     this.celebrating = true;
+    this.advanceRequested = false;
     this.phase = 'success';
     this.resetCountdown();
     const stage = this.root.querySelector('#stage');
@@ -658,11 +697,20 @@ class IncidentCoachPanel {
   // The hold is over: drop the confirmation and render the step that arrived while it was playing.
   // With no next step yet (it is still resolving, or this was the final goal) the card simply stays.
   finishCelebrate() {
+    clearTimeout(this.celebrateTimer);
     this.celebrating = false;
+    this.advanceRequested = false;
     if (!this.pendingCommand) return;
     const {command, target} = this.pendingCommand;
     this.pendingCommand = null;
     this.showCommand(command, target);
+  }
+
+  advanceCelebration() {
+    if (!this.celebrating) return false;
+    this.advanceRequested = true;
+    if (this.pendingCommand) this.finishCelebrate();
+    return true;
   }
 
   stop() {
@@ -677,6 +725,7 @@ class IncidentCoachPanel {
     this.appliedPos = null;
     clearTimeout(this.celebrateTimer);
     this.celebrating = false;
+    this.advanceRequested = false;
     this.pendingCommand = null;
     this.root.querySelector('#stage').classList.remove('success', 'celebrate-in');
   }
