@@ -13,6 +13,12 @@ import re
 
 IGNORED_ACTIONS = {"hint_requested", "command_acknowledged", "step_demonstrated"}
 
+# Actions that reshape what the learner is looking at. When the browser reports that one left
+# zero matching documents (``state_after.result_count == 0``) it is a dead end, not evidence: a
+# query that merely *mentions* the right field and value (``status_code is 503``) must not
+# complete a step while Discover shows "No results".
+SEARCH_ACTIONS = {"query_submitted", "esql_submitted", "filter_added", "filter_changed"}
+
 # A window is accepted when its look-back reaches within this many minutes of when the incident
 # was first noticed, so a 15-minute window still covers an incident reported 13 minutes ago while a
 # 10-minute one (which would miss it) does not.
@@ -285,9 +291,20 @@ def _route_matches(session, action, evidence, route):
     return True
 
 
+def returned_no_results(action):
+    """True only when the browser explicitly measured an empty result for a search action."""
+    if action.get("type") not in SEARCH_ACTIONS:
+        return False
+    count = _after(action).get("result_count", _details(action).get("result_count"))
+    return count is not None and _number(count) == 0
+
+
 def evaluate_action(session, action, evidence=None):
     """Progress every eligible goal satisfied by this normalized observation."""
     evidence = evidence or {}
+    if returned_no_results(action):
+        return {"outcome": "empty_result", "goals_progressed": [], "meaningful": False,
+                "reason": "That search returned no results, so it cannot establish a goal."}
     completed = session["completed_goals"]
     progressed, matching_titles = [], []
     # A single observation may establish multiple independent outcomes, but it
@@ -430,11 +447,23 @@ def guided_feedback(session):
     independent_ids = completed_ids - helped_ids
     hint_only_ids = (completed_ids & hinted_ids) - shown_ids
     total = round(100 * (len(independent_ids) + 0.5 * len(hint_only_ids)) / max(1, step_count), 1)
+
+    def outcome(goal_id):
+        if goal_id not in completed_ids:
+            return "incomplete"
+        if goal_id in shown_ids:
+            return "shown"
+        return "hinted" if goal_id in hinted_ids else "independent"
+
+    steps = [
+        {"id": goal["id"], "title": goal.get("title", goal["id"]), "outcome": outcome(goal["id"])}
+        for goal in goals if goal["id"] in practice_ids
+    ]
     return {
         "scored": True,
         "total": total,
         "completion": round(100 * len(completed_ids) / max(1, step_count), 1),
-        "summary": "Guided investigation complete. Your score reflects the help you used in each phase.",
+        "summary": "Your score reflects the help you used in each phase.",
         "assistance": {
             "hints": assistance.get("hints", 0),
             "demonstrated_steps": assistance.get("demonstrated_steps", 0),
@@ -443,4 +472,5 @@ def guided_feedback(session):
             "independent_steps": len(independent_ids),
             "step_count": step_count,
         },
+        "steps": steps,
     }

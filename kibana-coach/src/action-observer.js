@@ -17,6 +17,12 @@ class KibanaActionObserver {
     this.timePoll = setInterval(() => { if (!this.adapter.performing) this.captureTimeRange(false); }, 700);
   }
 
+  // Adopt the window currently applied as the new baseline, so a change the coach made itself (a
+  // restored search) is not later reported by the poll as the learner's.
+  rebaseline() {
+    this.lastTimeSignature = this.timeSignature();
+  }
+
   stop() {
     document.removeEventListener('click', this.boundClick, true);
     document.removeEventListener('keydown', this.boundKey, true);
@@ -24,6 +30,47 @@ class KibanaActionObserver {
   }
 
   queryValue() { return this.adapter.resolve('kibana.query_bar')?.value || ''; }
+
+  // How many documents Discover shows once the search settles: 0 on its "No results" prompt, the
+  // hit counter otherwise, null when it can't tell (another app, or still loading at the deadline).
+  // A search that leaves nothing to read is a dead end, so the service must see the count rather
+  // than accept a query that merely mentions the right field and value.
+  async resultCount(timeout = 8000, fetchGrace = 1000) {
+    if (this.appName() !== 'discover') return null;
+    const resultsUi = () => document.querySelector("[data-test-subj='discoverQueryHits']") || KibanaActionObserver.noResultsShown();
+    if (!resultsUi()) return null; // not a document view (e.g. an ES|QL chart), nothing to count
+    // Discover keeps the previous hit count on screen for the ~1s its refetch takes, and Kibana's
+    // global loading indicator does not track that search. So wait for Discover's own busy markers
+    // (verified 9.5.2: the grid's "updating" overlay, the loading spinner) to appear and then clear;
+    // if none shows within `fetchGrace`, no refetch happened and the count on screen is current.
+    const busy = () => document.querySelector("[data-test-subj='discoverDataGridUpdating'], [data-test-subj='loadingSpinner'], [data-test-subj='globalLoadingIndicator']");
+    const startedAt = Date.now();
+    let sawBusy = false;
+    while (Date.now() - startedAt < timeout) {
+      if (busy()) sawBusy = true;
+      else if (sawBusy || Date.now() - startedAt > fetchGrace) {
+        if (KibanaActionObserver.noResultsShown()) return 0;
+        const hits = document.querySelector("[data-test-subj='discoverQueryHits']")?.textContent || '';
+        const count = Number(hits.replace(/[^\d]/g, ''));
+        if (hits && Number.isFinite(count)) return count;
+      }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return null;
+  }
+
+  static noResultsShown() {
+    const prompt = document.querySelector("[data-test-subj='discoverNoResults']");
+    return Boolean(prompt && prompt.getClientRects().length);
+  }
+
+  // Report a search-shaping action once its results settle, carrying the measured count.
+  reportWithCount(action) {
+    this.resultCount().then(count => {
+      if (count != null) action.state_after = {...(action.state_after || {}), result_count: count};
+      this.report(action);
+    });
+  }
 
   appName() {
     return location.pathname.match(/\/app\/([^/?#]+)/)?.[1] || '';
@@ -169,7 +216,8 @@ class KibanaActionObserver {
     if (this.adapter.performing || event.key !== 'Enter') return;
     if (event.target === this.adapter.resolve('kibana.query_bar') || event.target === this.adapter.resolve('kibana.esql_editor')) {
       const esql = event.target === this.adapter.resolve('kibana.esql_editor');
-      setTimeout(() => this.report({type: esql ? 'esql_submitted' : 'query_submitted', details: {query: event.target.value, language: esql ? 'esql' : 'kql'}, state_after: {query: event.target.value, query_language: esql ? 'esql' : 'kql'}}), 50);
+      const query = event.target.value;
+      setTimeout(() => this.reportWithCount({type: esql ? 'esql_submitted' : 'query_submitted', details: {query, language: esql ? 'esql' : 'kql'}, state_after: {query, query_language: esql ? 'esql' : 'kql'}}), 50);
     }
   }
 
@@ -178,10 +226,10 @@ class KibanaActionObserver {
     const node = event.target.closest?.('[data-test-subj]');
     const subject = node?.getAttribute('data-test-subj') || '';
     if (subject === 'querySubmitButton') {
-      setTimeout(() => this.report({type: 'query_submitted', details: {query: this.queryValue()}, state_after: {query: this.queryValue()}}), 50);
+      setTimeout(() => this.reportWithCount({type: 'query_submitted', details: {query: this.queryValue()}, state_after: {query: this.queryValue()}}), 50);
     } else if (/esql.*(submit|run)/i.test(subject)) {
       const query = this.adapter.resolve('kibana.esql_editor')?.value || '';
-      setTimeout(() => this.report({type: 'esql_submitted', details: {query, language: 'esql'}, state_after: {query, query_language: 'esql'}}), 50);
+      setTimeout(() => this.reportWithCount({type: 'esql_submitted', details: {query, language: 'esql'}, state_after: {query, query_language: 'esql'}}), 50);
     } else if (/queryLanguage/i.test(subject)) {
       setTimeout(() => this.report({type: 'query_language_changed', details: {language: this.adapter.resolve('kibana.esql_editor') ? 'esql' : 'kql'}, state_after: {query_language: this.adapter.resolve('kibana.esql_editor') ? 'esql' : 'kql'}}), 100);
     } else if (/superDatePickerApplyTimeButton|euiQuickSelect__applyButton|dateRangePicker\w*Apply|dateRangePickerPresetItem|CommonlyUsed|superDatePickerQuickMenu/i.test(subject)) {
@@ -205,7 +253,7 @@ class KibanaActionObserver {
       setTimeout(() => {
         const filters = this.readFilterPills();
         const latest = filters[filters.length - 1] || {};
-        this.report({type: 'filter_added', details: {...latest}, state_after: {filters}});
+        this.reportWithCount({type: 'filter_added', details: {...latest}, state_after: {filters}});
       }, 250);
     } else if (/fieldToggle|fieldPopoverHeader_addField|FieldListPanel(Add|Remove)|dscFieldDetails(Add|Remove)|removeColumn|add.?column|remove.?column/i.test(subject)) {
       // Column add/remove. `fieldToggle-<field>` is the verified 9.5.2 field-list toggle; it

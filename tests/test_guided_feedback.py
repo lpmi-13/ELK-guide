@@ -55,6 +55,31 @@ class GuidedFeedbackTests(unittest.TestCase):
     def tearDown(self):
         server.sessions.pop(self.session["id"], None)
 
+    def test_feedback_lists_each_practice_step_with_the_help_it_took(self):
+        self.session["hint_level"] = {"scope": 1}
+        self.session["actions"] = [{"action": {"type": "step_demonstrated", "details": {"step_id": "inspect"}}}]
+        steps = server.guided_feedback(self.session)["steps"]
+        self.assertEqual([(step["id"], step["outcome"]) for step in steps], [("scope", "hinted"), ("inspect", "shown")])
+        self.session["completed_goals"] = {"scope"}
+        self.session["hint_level"] = {}
+        self.session["actions"] = []
+        steps = server.guided_feedback(self.session)["steps"]
+        self.assertEqual([step["outcome"] for step in steps], ["independent", "incomplete"])
+
+    def test_guided_commands_carry_the_search_state_earned_so_far(self):
+        goals = self.session["playbook"]["goals"]
+        goals[0]["reference_action"] = {"command": "set_time_range", "arguments": {"from": "now-10m", "to": "now"}}
+        goals.insert(1, {"id": "isolate", "requires": ["scope"], "accepts": [], "reference_action": {"command": "add_filter", "arguments": {"field": "http.response.status_code", "operator": "is", "value": "503"}}})
+        self.session["manifest"]["scenario"]["starting_view"] = {"path": "/app/discover#/view/x?_g=(time:(from:now-1h,to:now))"}
+        self.session.update({"paused": False, "last_command_sequence": 0, "policy": {"show_narration": True}})
+        self.session["completed_goals"] = {"scope"}
+        state = server.next_command(self.session)["restore_state"]
+        self.assertEqual(state, {"baseline_time": {"from": "now-1h", "to": "now"}, "time": {"from": "now-10m", "to": "now"}, "filters": [], "query": None})
+        self.session["completed_goals"] = {"scope", "isolate"}
+        self.session["pending_command"] = None
+        state = server.next_command(self.session)["restore_state"]
+        self.assertEqual(state["filters"], [{"field": "http.response.status_code", "value": "503", "negate": False}])
+
     def test_feedback_counts_requests_and_distinct_helped_steps(self):
         self.session["actions"] = [
             {"action": {"type": "step_demonstrated", "details": {"step_id": "inspect"}}},

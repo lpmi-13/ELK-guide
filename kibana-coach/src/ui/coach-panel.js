@@ -10,6 +10,7 @@ class IncidentCoachPanel {
         <section id="stage" aria-live="polite">
           <p id="phase-eyebrow" class="eyebrow"></p>
           <p id="phase-headline"></p>
+          <p id="phase-detail" hidden></p>
           <div id="countdown" class="countdown" aria-hidden="true" hidden><span></span></div>
         </section>
         <div class="actions"><button id="pause">Pause</button><button id="advance" title="Complete this step now and continue">Advance</button><button id="incident-info" title="Review the initial incident briefing">Incident info</button><button id="hint">Hint</button><button id="demonstrate">Show me</button><button id="review-feedback" hidden>Review feedback</button></div>
@@ -59,7 +60,7 @@ class IncidentCoachPanel {
         // Nothing to dodge — no highlighted control and no open doc-viewer flyout — so leave the
         // card where it rests rather than nudging it for every stray scroll or mutation.
         if (this.dragging) return;
-        if (!target && !this.findFlyout() && !this.evidenceField && !this.evidenceFields.length && event?.type !== 'resize') return;
+        if (!target && !this.findFlyout() && !this.findPopovers().length && !this.evidenceField && !this.evidenceFields.length && event?.type !== 'resize') return;
         // Keep the panel clear of the control, but only re-dim/-highlight if the spotlight is
         // already revealed — a guided step starts with nothing dimmed until the learner asks.
         if (target && this.spotlightRevealed) this.spotlight.show(target);
@@ -70,17 +71,20 @@ class IncidentCoachPanel {
     window.addEventListener('resize', this.reposition);
     window.addEventListener('scroll', this.reposition, true);
     // Expanding a result opens Kibana's doc-viewer flyout, docked over the right of the screen —
-    // exactly where the card usually sits, so it would be hidden underneath. The flyout opens and
-    // closes without any scroll or resize, so watch the DOM for it and re-place the card the moment
-    // it appears (or goes away). The open/closed transition flag keeps this from doing real work on
-    // the flood of unrelated Kibana mutations.
+    // exactly where the card usually sits, so it would be hidden underneath. Popovers (the time
+    // picker, a field's Top values, Add filter) open over the page the same way, and the step's own
+    // control can render — or shift — only after its command arrived, as Discover finishes loading.
+    // None of that fires a scroll or resize, so watch the DOM and re-check placement (one frame at a
+    // time). placeAwayFrom is sticky, so this only moves the card when it actually covers something
+    // the learner needs; the open/closed flag skips the flood of unrelated mutations otherwise.
     this.flyoutObserver = new MutationObserver(() => {
       if (this.flyoutCheckScheduled) return;
       this.flyoutCheckScheduled = true;
       requestAnimationFrame(() => {
         this.flyoutCheckScheduled = false;
         const open = !!this.findFlyout();
-        if (open === this.flyoutOpen && !this.evidenceField && !this.evidenceFields.length) return;
+        const watching = this.activeTarget?.isConnected || this.findPopovers().length || this.evidenceField || this.evidenceFields.length;
+        if (open === this.flyoutOpen && !watching) return;
         this.flyoutOpen = open;
         this.reposition();
       });
@@ -143,7 +147,7 @@ class IncidentCoachPanel {
     this.clearHint();
     this.host.hidden = false;
     this.panel.hidden = false;
-    this.root.querySelector('#stage').classList.remove('success', 'celebrate-in');
+    this.root.querySelector('#stage').classList.remove('success', 'celebrate-in', 'recovery');
     this.activeCommandId = command.command_id;
     this.activeTarget = target;
     this.evidenceField = null;
@@ -158,6 +162,7 @@ class IncidentCoachPanel {
     this.root.querySelector('#incident-info').hidden = command.mode !== 'guided' || !this.currentBriefing;
     const advance = this.root.querySelector('#advance');
     advance.hidden = command.mode !== 'demonstration';
+    advance.textContent = 'Advance';
     advance.title = 'Continue to the next part';
     this.root.querySelector('#hint').hidden = command.mode === 'demonstration';
     if (command.type === 'request_diagnosis' || command.type === 'request_answer') this.renderAnswerSchema(command.answer_schema);
@@ -187,7 +192,43 @@ class IncidentCoachPanel {
 
   updateCommandTarget(command, target) {
     if (this.pendingCommand?.command === command) this.pendingCommand.target = target;
-    else if (this.activeCommandId === command.command_id) this.activeTarget = target;
+    else if (this.activeCommandId === command.command_id) {
+      // The step's control rendered after its card did (Discover was still loading), so the card was
+      // placed with nothing to avoid. Re-place it now so it never sits on the control to use.
+      this.activeTarget = target;
+      requestAnimationFrame(() => this.placeAwayFrom(target));
+    }
+  }
+
+  // The learner's own input left the view with no results. Explain what went wrong and that the
+  // coach is about to put the search back; Advance ("Restore now") skips the reading countdown.
+  showRecovery({headline, detail}) {
+    clearTimeout(this.celebrateTimer);
+    this.celebrating = false;
+    this.advanceRequested = false;
+    this.clearHint();
+    this.spotlight.hide();
+    this.cursor.hide();
+    this.host.hidden = false;
+    this.panel.hidden = false;
+    this.phase = 'recovery';
+    for (const id of ['#hint', '#demonstrate', '#incident-info', '#pause', '#review-feedback']) this.root.querySelector(id).hidden = true;
+    const advance = this.root.querySelector('#advance');
+    advance.hidden = false;
+    advance.textContent = 'Restore now';
+    advance.title = 'Put the search back now';
+    const stage = this.root.querySelector('#stage');
+    stage.hidden = false;
+    stage.classList.remove('success', 'celebrate-in', 'acting');
+    stage.classList.add('recovery');
+    this.renderPhase({eyebrow: 'No results — back on track', headline, detail});
+    requestAnimationFrame(() => this.placeAwayFrom(this.activeTarget?.isConnected ? this.activeTarget : null));
+  }
+
+  showRecoveryWorking() {
+    this.root.querySelector('#advance').hidden = true;
+    this.renderPhase({eyebrow: 'Restoring the search', headline: 'Clearing the dead end and re-applying what the investigation has established so far…'});
+    this.startWorking();
   }
 
   showGuidedCompletion() {
@@ -210,7 +251,7 @@ class IncidentCoachPanel {
     this.root.querySelector('#review-feedback').hidden = false;
     this.root.querySelector('#incident-info').hidden = !this.currentBriefing;
     this.root.querySelector('#diagnosis').hidden = true;
-    this.root.querySelector('#stage').classList.remove('success', 'celebrate-in');
+    this.root.querySelector('#stage').classList.remove('success', 'celebrate-in', 'recovery');
     this.root.querySelector('#stage').hidden = false;
     this.renderPhase({eyebrow: 'Finished', headline: 'Your guided investigation is complete.'});
     requestAnimationFrame(() => this.placeAwayFrom(null));
@@ -326,6 +367,8 @@ class IncidentCoachPanel {
     void fill.offsetWidth;
     fill.style.transition = `width ${Math.max(0, duration)}ms linear`;
     fill.style.width = '100%';
+    // The bar adds height after the card was fitted; lift the card so nothing below it is clipped.
+    this.refit();
   }
 
   // The action beat has no fixed length, so sweep a clearly-moving block ("working…").
@@ -338,6 +381,7 @@ class IncidentCoachPanel {
     fill.style.transform = '';
     fill.style.animation = '';
     bar.classList.add('working');
+    this.refit();
   }
 
   // Freeze the bar where it is (used when the demo is paused).
@@ -374,12 +418,16 @@ class IncidentCoachPanel {
     bar.hidden = true;
   }
 
-  renderPhase({eyebrow = '', headline = ''}) {
+  renderPhase({eyebrow = '', headline = '', detail = ''}) {
     const stage = this.root.querySelector('#stage');
     const eyebrowEl = this.root.querySelector('#phase-eyebrow');
     eyebrowEl.textContent = eyebrow;
     eyebrowEl.hidden = !eyebrow;
     this.root.querySelector('#phase-headline').textContent = headline;
+    const detailEl = this.root.querySelector('#phase-detail');
+    detailEl.textContent = detail;
+    detailEl.hidden = !detail;
+    if (this.phase !== 'recovery') stage.classList.remove('recovery');
     stage.classList.toggle('acting', this.phase === 'action');
     stage.classList.remove('phase-in');
     void stage.offsetWidth;
@@ -440,6 +488,14 @@ class IncidentCoachPanel {
     const rect = el.getBoundingClientRect();
     if (rect.width < 40 || rect.height < 40) return null;
     return rect;
+  }
+
+  // Kibana's open popovers — the time picker, a field's Top values, Add filter, combo-box option
+  // lists. Whatever the learner has open is what they are working in, so it is a keep-out region.
+  findPopovers() {
+    return [...document.querySelectorAll('[data-popover-panel], .euiPopover__panel, .euiComboBoxOptionsList')]
+      .map(node => node.getBoundingClientRect())
+      .filter(rect => rect.width >= 40 && rect.height >= 40 && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth);
   }
 
   findEvidenceRect() {
@@ -562,6 +618,10 @@ class IncidentCoachPanel {
     }
     const evidenceRect = this.findEvidenceRect();
     if (evidenceRect) guards.push(evidenceRect);
+    const pad = 16;
+    for (const rect of this.findPopovers()) {
+      guards.push({left: rect.left - pad, right: rect.right + pad, top: rect.top - pad, bottom: rect.bottom + pad});
+    }
     const overlap = position => {
       const right = position.left + width;
       const bottom = position.top + height;
@@ -631,7 +691,7 @@ class IncidentCoachPanel {
   // margin — that its bottom keeps a comfortable margin. Horizontal placement is left untouched (no
   // jarring corner hop), and the move is instant so it reads as part of the card's own transition.
   refit() {
-    if (this.panel.hidden || !this.pos) return;
+    if (!this.panel || this.panel.hidden || !this.pos) return;
     const margin = 18;
     const topMargin = 72;
     const capped = this.panel.style.maxHeight;
@@ -680,7 +740,7 @@ class IncidentCoachPanel {
     const stage = this.root.querySelector('#stage');
     const eyebrow = this.root.querySelector('#phase-eyebrow');
     stage.hidden = false;
-    stage.classList.remove('acting');
+    stage.classList.remove('acting', 'recovery');
     stage.classList.add('success');
     eyebrow.hidden = false;
     eyebrow.innerHTML = '<span class="stage-tick" aria-hidden="true"></span>New evidence found';
@@ -727,7 +787,7 @@ class IncidentCoachPanel {
     this.celebrating = false;
     this.advanceRequested = false;
     this.pendingCommand = null;
-    this.root.querySelector('#stage').classList.remove('success', 'celebrate-in');
+    this.root.querySelector('#stage').classList.remove('success', 'celebrate-in', 'recovery');
   }
 
   static styles = `
@@ -751,6 +811,8 @@ class IncidentCoachPanel {
     label { display:block;font-weight:650;margin-top:10px; } input,select,textarea { display:block;width:100%;box-sizing:border-box;margin-top:3px;padding:7px;border:1px solid #9ba9b6;border-radius:4px;font:inherit; } textarea { min-height:58px; }
     #diagnosis button { margin-top:12px;background:#006bb4;color:#fff;border:0; } #status { min-height:18px;color:#147d5c; } #status:empty { display:none; }.error { color:#a32b1c!important; }
     #stage.success { border-left-color:#12a56b;background:#ecf8f2;box-shadow:0 6px 22px #12a56b24; } #stage.success .eyebrow { display:flex;align-items:center;gap:8px;color:#0b7a4f; } #stage.success #phase-headline { color:#0c3d2b; }
+    #phase-detail { margin:12px 0 0;color:#3a4d5c;font-size:14px;line-height:1.5;white-space:pre-line; }
+    #stage.recovery { border-left-color:#d4602a;background:#fff4ec;box-shadow:0 6px 22px #d4602a24; } #stage.recovery .eyebrow { color:#a8431a; } #stage.recovery #phase-headline { color:#4a1d08;font-size:18px; } #stage.recovery .countdown { background:#f4d6c4; } #stage.recovery .countdown span { background:#d4602a; }
     .stage-tick { flex:0 0 auto;display:inline-block;width:18px;height:18px;border-radius:50%;background:#12a56b;position:relative;transform:none;animation:tick-pop .4s .1s cubic-bezier(.22,1.4,.4,1) both; }
     .stage-tick::after { content:"";position:absolute;left:6px;top:3px;width:4px;height:8px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(42deg); }
     @keyframes tick-pop { from{transform:scale(0)} to{transform:scale(1)} }

@@ -436,6 +436,42 @@ def build_incident_briefing(session):
     }
 
 
+def restore_state(session):
+    """The search state the investigation should hold before the current step.
+
+    Replays the reference action of every completed goal that shapes the result set (time window,
+    filter pills, query) on top of the scenario's opening window. The guided coach applies it when
+    the learner's own input leaves Discover with no results, so they are put back on the path they
+    had already earned instead of being stranded in an empty view.
+    """
+    starting_path = session["manifest"]["scenario"].get("starting_view", {}).get("path", "")
+    opening = re.search(r"time:\(from:([^,)]+),to:([^,)]+)\)", starting_path)
+    state = {
+        "baseline_time": {"from": opening.group(1).strip("'"), "to": opening.group(2).strip("'")} if opening else None,
+        "time": None,
+        "filters": [],
+        "query": None,
+    }
+    for goal in playbook_goals(session):
+        if goal["id"] not in session["completed_goals"]:
+            continue
+        reference = goal.get("reference_action", {})
+        command = reference.get("command")
+        value = substitute(reference.get("arguments"), session)
+        if command == "set_time_range" and isinstance(value, dict):
+            state["time"] = {"from": value.get("from"), "to": value.get("to", "now")}
+        elif command == "add_filter" and isinstance(value, dict) and value.get("field"):
+            operator = str(value.get("operator", "is"))
+            state["filters"].append({
+                "field": value["field"],
+                "value": value.get("value"),
+                "negate": operator.lower() in {"is not", "not"} or bool(value.get("negate")),
+            })
+        elif command in {"enter_kql", "enter_query"}:
+            state["query"] = value.get("query", "") if isinstance(value, dict) else str(value or "")
+    return state
+
+
 def next_command(session):
     if not session["run_ready"] or session["paused"]:
         return None
@@ -491,6 +527,8 @@ def next_command(session):
             field: substitute(walkthrough.get(field, step.get(field, "")), session)
             for field in ("narration", "reasoning", "evidence", "learning_focus")
         }
+    if session["mode"] == "guided":
+        command["restore_state"] = restore_state(session)
     session["pending_command"] = command
     return command
 

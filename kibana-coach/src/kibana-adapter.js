@@ -1,3 +1,88 @@
+// Minimal rison codec for Discover's URL state (`_g` / `_a`). Rewriting that state is the reliable
+// way to put a search back as it should be: Discover re-syncs its query, filters and time window
+// from the URL, which avoids driving several fragile popovers just to delete what the learner added.
+const KibanaRison = {
+  notIdChar: " '!:(),*@$",
+
+  parse(text) {
+    let index = 0;
+    const fail = () => { throw new Error(`Unreadable URL state near "${text.slice(index, index + 12)}"`); };
+    const value = () => {
+      const char = text[index];
+      if (char === '(') {
+        index += 1;
+        const object = {};
+        while (text[index] !== ')') {
+          if (index >= text.length) fail();
+          const key = value();
+          if (text[index] !== ':') fail();
+          index += 1;
+          object[key] = value();
+          if (text[index] === ',') index += 1;
+        }
+        index += 1;
+        return object;
+      }
+      if (char === '!') {
+        const next = text[index + 1];
+        index += 2;
+        if (next === 't') return true;
+        if (next === 'f') return false;
+        if (next === 'n') return null;
+        if (next !== '(') fail();
+        const list = [];
+        while (text[index] !== ')') {
+          if (index >= text.length) fail();
+          list.push(value());
+          if (text[index] === ',') index += 1;
+        }
+        index += 1;
+        return list;
+      }
+      if (char === "'") {
+        index += 1;
+        let result = '';
+        while (text[index] !== "'") {
+          if (index >= text.length) fail();
+          if (text[index] === '!') index += 1;
+          result += text[index];
+          index += 1;
+        }
+        index += 1;
+        return result;
+      }
+      const number = /^-?\d+(\.\d+)?([eE][+-]?\d+)?/.exec(text.slice(index));
+      if (number) {
+        index += number[0].length;
+        return Number(number[0]);
+      }
+      const start = index;
+      while (index < text.length && !KibanaRison.notIdChar.includes(text[index])) index += 1;
+      if (index === start) fail();
+      return text.slice(start, index);
+    };
+    const result = value();
+    if (index !== text.length) fail();
+    return result;
+  },
+
+  encode(value) {
+    if (value === null || value === undefined) return '!n';
+    if (value === true) return '!t';
+    if (value === false) return '!f';
+    if (typeof value === 'number') return Number.isFinite(value) ? String(value) : '!n';
+    if (Array.isArray(value)) return `!(${value.map(item => KibanaRison.encode(item)).join(',')})`;
+    if (typeof value === 'object') {
+      return `(${Object.entries(value).map(([key, item]) => `${KibanaRison.encode(key)}:${KibanaRison.encode(item)}`).join(',')})`;
+    }
+    const text = String(value);
+    const bareId = text && !/^[-0-9]/.test(text) && ![...text].some(char => KibanaRison.notIdChar.includes(char));
+    return bareId ? text : `'${text.replace(/!/g, '!!').replace(/'/g, "!'")}'`;
+  },
+};
+
+globalThis.KibanaRison = KibanaRison;
+
 class KibanaAdapter {
   constructor() {
     this.registry = null;
@@ -288,6 +373,51 @@ class KibanaAdapter {
     );
     await this.wait(Math.min(6000, 500 * timingScale), signal);
     return {type: 'trace_opened', details: {trace_id: traceId}, state_after: {trace_id: traceId, query: traceQuery}};
+  }
+
+  // Put Discover's search back to `state` (see the service's restore_state): drop whatever query and
+  // filter pills are applied now and apply the ones the completed steps established instead. The
+  // window is kept unless `includeTime` asks for it too (it is only reset when the query and filters
+  // alone don't bring results back). Returns false when the page has no Discover state to rewrite.
+  restoreDiscoverState(state = {}, {includeTime = false} = {}) {
+    const hash = location.hash || '';
+    const split = hash.indexOf('?');
+    if (split < 0 || !/\/app\/discover/.test(location.pathname)) return false;
+    const params = hash.slice(split + 1).split('&').map(part => {
+      const at = part.indexOf('=');
+      return at < 0 ? [part, null] : [part.slice(0, at), decodeURIComponent(part.slice(at + 1))];
+    });
+    const read = key => {
+      const entry = params.find(([name]) => name === key);
+      if (!entry?.[1]) return {};
+      try { return KibanaRison.parse(entry[1]); } catch (_error) { return null; }
+    };
+    const app = read('_a');
+    const global = read('_g');
+    if (!app || !global) return false;
+    const dataViewId = app.dataSource?.dataViewId || app.index;
+    const esql = typeof app.query?.esql === 'string';
+    if (!esql) app.query = {language: 'kuery', query: state.query || ''};
+    app.filters = (state.filters || []).map(filter => {
+      const value = filter.value == null ? '' : String(filter.value);
+      return {
+        '$state': {store: 'appState'},
+        meta: {alias: null, disabled: false, index: dataViewId, key: filter.field, negate: Boolean(filter.negate), params: {query: value}, type: 'phrase'},
+        query: {match_phrase: {[filter.field]: value}},
+      };
+    });
+    global.filters = [];
+    const time = state.time || state.baseline_time;
+    if (includeTime && time?.from) global.time = {from: time.from, to: time.to || 'now'};
+    const encode = value => encodeURIComponent(KibanaRison.encode(value)).replace(/%(21|27|28|29|2A|2C|3A|40|24)/gi, escaped => decodeURIComponent(escaped));
+    const replaced = new Map([['_a', encode(app)], ['_g', encode(global)]]);
+    const rebuilt = params.map(([name, value]) => replaced.has(name)
+      ? `${name}=${replaced.get(name)}`
+      : value == null ? name : `${name}=${encodeURIComponent(value)}`);
+    for (const [name, value] of replaced) if (!params.some(([key]) => key === name)) rebuilt.push(`${name}=${value}`);
+    const next = `${hash.slice(0, split)}?${rebuilt.join('&')}`;
+    if (next !== hash) location.hash = next;
+    return true;
   }
 
   // A brief pause that only lets Kibana's DOM catch up after a click — a popover opening, a filter

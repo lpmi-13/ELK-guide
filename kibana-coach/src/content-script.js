@@ -15,6 +15,10 @@ function startIncidentCoach() {
   // that would complete the step early and cut off the "What we learned" beat.
   let walkthroughController = null;
   let guidedFeedbackShown = false;
+  // Guided dead-end recovery: set while the coach explains and undoes a search that left no results.
+  let recoveryController = null;
+  let deadEndSince = 0;
+  let deadEndPoll = null;
   const activeSessionKey = 'incident-coach:auto-connect';
   const demonstrationSlowdown = 3;
   const demonstrationTimingScale = 10 * demonstrationSlowdown;
@@ -124,6 +128,93 @@ function startIncidentCoach() {
     }
   }
 
+  // A guided learner can type or filter their way into an empty view ("No results match your search
+  // criteria") — e.g. `status_code is 503`, which KQL reads as free text. Nothing on screen can move
+  // the investigation forward from there, so once that state persists the coach says what caused it,
+  // undoes it, and re-applies the search the completed steps had established (restore_state). If the
+  // learner fixes it themselves first, the coach steps aside.
+  function checkDeadEnd() {
+    const command = currentCommand;
+    const eligible = client?.mode === 'guided' && !guidedFeedbackShown && !recoveryController &&
+      !executionController && !adapter.performing && command?.mode === 'guided' && command.restore_state &&
+      !coach.briefing.active;
+    if (!eligible || !KibanaActionObserver.noResultsShown()) {
+      deadEndSince = 0;
+      return;
+    }
+    deadEndSince ||= Date.now();
+    if (Date.now() - deadEndSince < 1500) return;
+    deadEndSince = 0;
+    recoverFromDeadEnd(command);
+  }
+
+  function describeDeadEnd(state) {
+    const query = (adapter.resolve('kibana.query_bar')?.value || '').trim();
+    const expected = state.filters || [];
+    const stray = observer.readFilterPills().filter(pill => !expected.some(filter =>
+      filter.field === pill.field && String(filter.value) === String(pill.value) && Boolean(filter.negate) === pill.negate));
+    const causes = [];
+    if (query && query !== (state.query || '').trim()) causes.push(`The query “${query}”`);
+    for (const pill of stray) causes.push(`${causes.length ? 'the' : 'The'} filter ${pill.negate ? 'NOT ' : ''}${pill.field}: ${pill.value}`);
+    const cause = causes.length
+      ? causes.length === 1 ? causes[0] : `${causes.slice(0, -1).join(', ')} and ${causes[causes.length - 1]}`
+      : 'The current search';
+    const detail = [];
+    // KQL compares a field with a colon; "field is value" or "field = value" is read as free text.
+    if (query && !query.includes(':') && /\s(is|equals|==?)\s/i.test(query)) {
+      detail.push('Tip: KQL matches a field with a colon — field: value.');
+    }
+    detail.push('I’ll clear it and put the search back to where this step starts. Or fix it yourself — I’ll step aside as soon as results come back.');
+    return {headline: `${cause} left no matching results, so there’s nothing here to investigate.`, detail: detail.join('\n\n')};
+  }
+
+  async function searchIsEmpty() {
+    // A URL-driven restore can take over a second to start Discover's refetch; allow for it so the
+    // stale "No results" prompt isn't read as the outcome.
+    const count = await observer.resultCount(8000, 2500);
+    return count === 0 || (count == null && KibanaActionObserver.noResultsShown());
+  }
+
+  async function recoverFromDeadEnd(command) {
+    const controller = new AbortController();
+    recoveryController = controller;
+    const state = command.restore_state;
+    // The learner fixing it themselves during the explanation cancels the restore.
+    const selfFixed = setInterval(() => {
+      if (!KibanaActionObserver.noResultsShown()) controller.abort();
+    }, 400);
+    let restored = false;
+    try {
+      const problem = describeDeadEnd(state);
+      coach.showRecovery(problem);
+      const pause = readingPause(problem.headline, problem.detail);
+      coach.startCountdown(pause);
+      await readingBeatWait(pause, controller.signal);
+      clearInterval(selfFixed);
+      coach.showRecoveryWorking();
+      // Mute the observer: the coach's own restore must not be reported as the learner's action.
+      adapter.performing = true;
+      if (!adapter.restoreDiscoverState(state)) throw new Error('The search could not be restored automatically. Clear the query and filters to continue.');
+      // Query and filters first; reset the window too only if that alone doesn't bring results back.
+      if (await searchIsEmpty()) {
+        adapter.restoreDiscoverState(state, {includeTime: true});
+        if (await searchIsEmpty()) throw new Error('The search is still empty after restoring it. Try widening the time range.');
+      }
+      restored = true;
+    } catch (error) {
+      if (error.name !== 'AbortError') coach.toast(error.message, true);
+    } finally {
+      clearInterval(selfFixed);
+      adapter.performing = false;
+      observer?.rebaseline();
+      if (recoveryController === controller) recoveryController = null;
+      if (currentCommand && client) {
+        coach.showCommand(currentCommand, adapter.resolve(currentCommand.target));
+        if (restored) coach.toast('Search restored — carry on with this step.');
+      }
+    }
+  }
+
   async function finishDemonstration(command) {
     const summary = command.value;
     try {
@@ -160,6 +251,9 @@ function startIncidentCoach() {
     };
     client.onHint = hint => coach.showHint(hint);
     client.onActionResult = result => {
+      // The service measured the learner's search as empty; start recovering without waiting out
+      // the usual grace period.
+      if (result.evaluation.outcome === 'empty_result') deadEndSince = 1;
       if (result.evaluation.outcome === 'accepted') {
         const reason = String(result.evaluation.reason || '').replace(/^Completed:\s*/i, '').trim();
         coach.celebrate(reason || 'This step revealed useful evidence.');
@@ -219,6 +313,12 @@ function startIncidentCoach() {
       client.sendAction(action, 'learner');
     });
     observer.start();
+    clearTimeout(deadEndPoll);
+    const pollDeadEnd = () => {
+      checkDeadEnd();
+      deadEndPoll = setTimeout(pollDeadEnd, 500);
+    };
+    deadEndPoll = setTimeout(pollDeadEnd, 500);
     coach.onPause = paused => {
       if (paused) {
         if (activeReadingBeat) activeReadingBeat.pause();
@@ -253,6 +353,9 @@ function startIncidentCoach() {
     };
     coach.onStop = () => {
       executionController?.abort();
+      currentCommand = null;
+      recoveryController?.abort();
+      clearTimeout(deadEndPoll);
       observer.stop();
       client.forget();
       sessionStorage.removeItem(activeSessionKey);
