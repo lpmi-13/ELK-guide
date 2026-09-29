@@ -473,8 +473,8 @@ def next_command(session):
         "answer_schema": session["manifest"]["scenario"].get("answer_schema", {}),
     }
     if session["mode"] == "guided" and command_type not in {"request_diagnosis", "request_answer"}:
-        # "Show me" replays this step as a mini demonstration, so it carries the same scenario-specific
-        # what/optional why/result the demonstration narrates (e.g. why the range reaches back N minutes).
+        # "Show me" performs this step immediately, then explains its scenario-specific reasoning
+        # and result (e.g. why the range reaches back N minutes).
         walkthrough = step.get("demonstration", {})
         command["walkthrough"] = {
             field: substitute(walkthrough.get(field, step.get(field, "")), session)

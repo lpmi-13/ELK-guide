@@ -30,7 +30,7 @@ function makeClock() {
 
 async function makeDemo() {
   const clock = makeClock();
-  const calls = {countdowns: [], resumes: [], commands: 0, actions: 0, messages: []};
+  const calls = {countdowns: [], resumes: [], commands: 0, actions: 0, messages: [], phases: [], learning: null};
   let coach;
   let client;
   class Coach {
@@ -40,13 +40,15 @@ async function makeDemo() {
     startCountdown(duration) { calls.countdowns.push(duration); }
     stopCountdown() {}
     resumeCountdown(remaining) { calls.resumes.push(remaining); }
-    showLearning() {}
+    showLearning(command) { calls.phases.push('learning'); calls.learning = command; }
+    beginWalkthrough() { calls.phases.push('action'); }
     beginActionPhase() {}
     finishCommand() {}
     toast() {}
   }
   class Adapter {
     async initialize() {}
+    resolve() { return {}; }
     async resolveAnchor() { return null; }
     async perform() { calls.actions++; return null; }
   }
@@ -54,6 +56,7 @@ async function makeDemo() {
     constructor() { client = this; }
     async connect() { return {session_id: 'test'}; }
     send(message) { calls.messages.push(message); }
+    sendAction(action) { calls.messages.push(action); }
     acknowledge() {}
   }
   class Observer { start() {} stop() {} }
@@ -103,6 +106,32 @@ test('pause freezes a reading beat; resume continues its remaining time without 
   await Promise.resolve();
   await Promise.resolve();
   assert.equal(demo.calls.actions, 1);
+});
+
+test('guided Show me starts the action on the click and explains the result afterward', async () => {
+  const demo = await makeDemo();
+  const command = {
+    command_id: 'guided-1', step_id: 'scope', mode: 'guided', type: 'set_time_range', target: 'time',
+    narration: 'Set the time range', walkthrough: {
+      narration: 'First I will set the time range.',
+      reasoning: 'This includes the incident.',
+      evidence: 'The histogram now shows the range.',
+    },
+  };
+  await demo.client.onCommand(command);
+  const showing = demo.coach.onDemonstrate();
+  assert.deepEqual(demo.calls.phases, ['action']);
+  assert.equal(demo.calls.actions, 1);
+  assert.deepEqual(demo.calls.countdowns, []);
+
+  await Promise.resolve();
+  assert.deepEqual(demo.calls.phases, ['action', 'learning']);
+  assert.equal(demo.calls.learning.evidence,
+    'This includes the incident.\n\nThe histogram now shows the range.');
+  assert.equal(demo.calls.countdowns.length, 1);
+  demo.clock.advance(demo.calls.countdowns[0]);
+  await showing;
+  assert.deepEqual(demo.calls.messages.map(message => message.type), ['step_demonstrated']);
 });
 
 test('the countdown bar continues from its frozen width for the remaining duration', () => {

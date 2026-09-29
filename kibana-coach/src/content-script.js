@@ -93,24 +93,21 @@ function startIncidentCoach() {
         // Beat 3 — action: hand the card over to the live step's narration.
         coach.beginActionPhase(command);
       }
-      // "Show me" in guided mode uses the same step copy and skips an empty why card too.
+      // "Show me" starts the guided action immediately. Its explanation follows the action.
       const walkthrough = explicitlyRequested && command.mode === 'guided' && command.walkthrough
         ? {...command, ...command.walkthrough} : null;
       if (walkthrough) {
         walkthroughController = controller;
         coach.beginWalkthrough(walkthrough);
-        await readBeat(walkthrough.narration);
-        if (walkthrough.reasoning) {
-          coach.showWhy(walkthrough);
-          await readBeat(walkthrough.reasoning);
-        }
-        coach.beginActionPhase(walkthrough);
       }
       const action = await adapter.perform(command, coach, {timingScale, signal: controller.signal, readBeat});
-      if (command.mode === 'demonstration' || walkthrough?.evidence) {
+      const learning = walkthrough
+        ? {...walkthrough, evidence: [walkthrough.reasoning, walkthrough.evidence].filter(Boolean).join('\n\n')}
+        : command;
+      if (command.mode === 'demonstration' || learning.evidence) {
         // Beat 4 — learning: summarise what the result showed before moving on.
-        coach.showLearning(walkthrough || command);
-        await readBeat((walkthrough || command).evidence);
+        coach.showLearning(learning);
+        await readBeat(learning.evidence);
       }
       coach.finishCommand(command);
       client.acknowledge(command, 'completed', action?.state_after || {});

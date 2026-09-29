@@ -51,14 +51,17 @@ class ContractTests(unittest.TestCase):
         self.assertIn("<strong>Problem found</strong>", debrief)
         self.assertIn("summary.answer?.conclusion || summary.conclusion", debrief)
 
-    def test_guided_show_me_explains_why(self):
+    def test_guided_show_me_starts_with_the_action_and_explains_it_afterward(self):
         learning_service = (ROOT / "learning-service/server.py").read_text(encoding="utf-8")
         coach = (ROOT / "kibana-coach/src/ui/coach-panel.js").read_text(encoding="utf-8")
         content = (ROOT / "kibana-coach/src/content-script.js").read_text(encoding="utf-8")
         self.assertIn('command["walkthrough"]', learning_service)
         self.assertIn("beginWalkthrough(command)", coach)
+        self.assertIn("this.enterPhase('action', command)", coach)
         self.assertIn("coach.beginWalkthrough(walkthrough)", content)
-        self.assertIn("await readBeat(walkthrough.reasoning)", content)
+        self.assertNotIn("await readBeat(walkthrough.narration)", content)
+        self.assertNotIn("await readBeat(walkthrough.reasoning)", content)
+        self.assertIn("[walkthrough.reasoning, walkthrough.evidence]", content)
 
     def test_demonstration_cursor_is_snappy_and_form_values_are_typed(self):
         cursor = (ROOT / "kibana-coach/src/ui/cursor.js").read_text(encoding="utf-8")

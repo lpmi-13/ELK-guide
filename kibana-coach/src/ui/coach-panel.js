@@ -248,9 +248,8 @@ class IncidentCoachPanel {
     }
   }
 
-  // "Show me" on a guided step: the coach takes over this one step and narrates it like a
-  // demonstration (what → optional why → action → learning), spotlighting the control it is about to use.
-  // Advance skips a reading beat; Hint and Show me are moot while the coach is doing it.
+  // "Show me" on a guided step starts the action right away, then explains it after the result.
+  // Advance can skip that final reading beat; Hint and Show me are moot while the coach acts.
   beginWalkthrough(command) {
     this.root.querySelector('#demonstrate').hidden = true;
     this.root.querySelector('#hint').hidden = true;
@@ -260,7 +259,7 @@ class IncidentCoachPanel {
       this.spotlightRevealed = true;
       this.spotlight.show(this.activeTarget);
     }
-    this.enterPhase('what', command);
+    this.enterPhase('action', command);
     requestAnimationFrame(() => this.placeAwayFrom(this.activeTarget));
   }
 
