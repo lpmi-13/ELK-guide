@@ -37,7 +37,7 @@ class IncidentCoachPanel {
     this.evidenceHighlights = [];
     // A guided step starts undimmed; the spotlight is only revealed on demonstration or a hint.
     this.spotlightRevealed = false;
-    // A correct action is confirmed inside the panel; the next step is held until it finishes.
+    // New evidence is confirmed inside the panel; the next step is held until it finishes.
     this.celebrating = false;
     this.pendingCommand = null;
     const dragHandle = this.root.querySelector('header');
@@ -626,8 +626,8 @@ class IncidentCoachPanel {
     if (error) { this.host.hidden = false; this.panel.hidden = false; }
   }
 
-  // Confirm the learner's correct action in the already-open panel: the current step's card turns
-  // into a green "Correct" card that animates in, holds briefly, then flips to the next step. The
+  // Confirm newly found evidence in the already-open panel: the current step's card turns
+  // into a green "New evidence found" card that animates in, holds briefly, then flips to the next step. The
   // next command (showCommand) is deferred while this plays so the success is seen before advancing.
   celebrate(message = '') {
     // A demonstration narrates its own "What we learned" beat, so it needs no separate confirmation.
@@ -644,7 +644,7 @@ class IncidentCoachPanel {
     stage.classList.remove('acting');
     stage.classList.add('success');
     eyebrow.hidden = false;
-    eyebrow.innerHTML = '<span class="stage-tick" aria-hidden="true"></span>Correct';
+    eyebrow.innerHTML = '<span class="stage-tick" aria-hidden="true"></span>New evidence found';
     this.root.querySelector('#phase-headline').textContent = message || 'That step is complete.';
     // Replay the entrance animation from a clean state.
     stage.classList.remove('celebrate-in', 'phase-in');

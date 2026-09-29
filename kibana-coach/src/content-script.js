@@ -147,7 +147,7 @@ function startIncidentCoach() {
     client.onActionResult = result => {
       if (result.evaluation.outcome === 'accepted') {
         const reason = String(result.evaluation.reason || '').replace(/^Completed:\s*/i, '').trim();
-        coach.celebrate(reason || 'Correct — that step is complete.');
+        coach.celebrate(reason || 'This step revealed useful evidence.');
       }
     };
     client.onBriefing = async briefing => {
