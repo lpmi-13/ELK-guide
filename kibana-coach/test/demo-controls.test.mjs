@@ -77,3 +77,47 @@ test('learning highlights the HTTP status and version columns in the visible tab
   panel.clearEvidenceHighlights();
   assert.ok(highlights.every(highlight => highlight.removed));
 });
+
+test('hints stay with their step and disappear before the next card or success card', () => {
+  const Panel = loadClass('../src/ui/coach-panel.js', 'IncidentCoachPanel',
+    ['requestAnimationFrame'], [callback => callback()]);
+  const panel = Object.create(Panel.prototype);
+  const nodes = Object.fromEntries([
+    '#hint-card', '#hint-label', '#hint-text', '#mode', '#objective', '#pause',
+    '#demonstrate', '#incident-info', '#advance', '#hint', '#diagnosis',
+    '#phase-eyebrow', '#phase-headline',
+  ].map(selector => [selector, {hidden: false, textContent: '', style: {}}]));
+  nodes['#stage'] = {hidden: false, offsetWidth: 300, classList: {add() {}, remove() {}}};
+  nodes['.progress span'] = {style: {}};
+  panel.root = {querySelector: selector => nodes[selector]};
+  panel.host = {hidden: true};
+  panel.panel = {hidden: true};
+  panel.spotlight = {hide() {}};
+  panel.clearEvidenceHighlights = () => {};
+  panel.renderPhase = () => {};
+  panel.resetCountdown = () => {};
+  panel.refit = () => {};
+  panel.placeAwayFrom = () => {};
+
+  const command = (step_id, step_index) => ({command_id: step_id, step_id, step_index,
+    step_count: 2, mode: 'guided', narration: 'Investigate the incident.'});
+  panel.showCommand(command('scope', 0), null);
+  panel.showHint({step_id: 'scope', level: 2, text: 'Use the date picker.'});
+  assert.equal(nodes['#hint-card'].hidden, false);
+  assert.equal(nodes['#hint-label'].textContent, 'Hint 2');
+  assert.equal(nodes['#hint-text'].textContent, 'Use the date picker.');
+
+  panel.showCommand(command('survey', 1), null);
+  assert.equal(nodes['#hint-card'].hidden, true);
+  assert.equal(nodes['#hint-text'].textContent, '');
+  panel.showHint({step_id: 'scope', level: 2, text: 'Late reply from the old step.'});
+  assert.equal(nodes['#hint-card'].hidden, true);
+  panel.showHint({step_id: 'survey', level: 1, text: 'Inspect the field.'});
+  assert.equal(nodes['#hint-text'].textContent, 'Inspect the field.');
+
+  panel.celebrate('Step complete.');
+  clearTimeout(panel.celebrateTimer);
+  assert.equal(nodes['#hint-card'].hidden, true);
+  panel.showHint({step_id: 'survey', level: 2, text: 'Late reply during confirmation.'});
+  assert.equal(nodes['#hint-card'].hidden, true);
+});

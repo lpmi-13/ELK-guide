@@ -227,15 +227,21 @@ class RandomizationTests(unittest.TestCase):
                             self.assertIn(f"spiked during the {finding}", summary["answer"]["conclusion"])
                     else:
                         explanation = " ".join(command[key] for key in ("narration", "reasoning", "evidence"))
-                        self.assertIn(finding, explanation)
+                        if command["type"] != "set_time_range":
+                            self.assertIn(finding, explanation)
                         self.assertGreater(len(command["narration"].split()), 20)
-                        self.assertGreater(len(command["reasoning"].split()), 20)
+                        if command["type"] == "set_time_range":
+                            # Its opening card already explains the chosen range, so there is no
+                            # second reading card before the picker action.
+                            self.assertEqual(command["reasoning"], "")
+                        else:
+                            self.assertGreater(len(command["reasoning"].split()), 20)
                         self.assertGreater(len(command["evidence"].split()), 20)
 
             guided = self.server.create_session({"manifest": manifest}, "guided")
             guided["run_ready"] = True
             guided_command = self.server.next_command(guided)
-            self.assertEqual(guided_command["narration"], goals[0]["narration"])
+            self.assertEqual(guided_command["narration"], self.server.substitute(goals[0]["narration"], guided))
             self.assertEqual(guided_command["reasoning"], "")
             self.assertEqual(guided_command["evidence"], "")
 
@@ -274,8 +280,15 @@ class RandomizationTests(unittest.TestCase):
                         if mode == "demonstration":
                             self.assertIn(str(offset), command["narration"])
                             self.assertIn(expected_words, command["narration"])
+                            self.assertIn("five-minute boundary", command["narration"])
+                            self.assertEqual(command["reasoning"], "")
                         else:
-                            self.assertIn("shortest practical time window", command["narration"])
+                            self.assertIn(str(offset), command["narration"])
+                            self.assertIn(expected_words, command["narration"])
+                            self.assertIn("five-minute boundary", command["narration"])
+                            self.assertEqual(command["walkthrough"]["reasoning"], "")
+                            self.assertEqual(command["walkthrough"]["narration"],
+                                             self.server.substitute(scope["demonstration"]["narration"], session))
 
     def test_time_window_copy_uses_grammar_aware_finding_for_every_variant(self):
         window_options = self.template("discover-time-window")["parameters"]["window"]["choose"]

@@ -78,7 +78,7 @@ function startIncidentCoach() {
         await readingBeatWait(pause, controller.signal);
       };
       if (command.mode === 'demonstration') {
-        // Beat 1 — what: name the next move; Beat 2 — why: the reason, each its own card.
+        // Start with the next move; show a separate why card only when it adds new guidance.
         // The anchor is only the control the opening cards point at; perform() resolves the controls
         // the step actually drives. Some steps (e.g. add_filter) deliberately point at an anchor the
         // registry does not hold, like the filter bar, so a missing anchor must never abort the run —
@@ -93,8 +93,7 @@ function startIncidentCoach() {
         // Beat 3 — action: hand the card over to the live step's narration.
         coach.beginActionPhase(command);
       }
-      // "Show me" in guided mode walks the same beats for this one step, so the learner hears why
-      // the coach makes the move (e.g. why the window reaches back to when the incident began).
+      // "Show me" in guided mode uses the same step copy and skips an empty why card too.
       const walkthrough = explicitlyRequested && command.mode === 'guided' && command.walkthrough
         ? {...command, ...command.walkthrough} : null;
       if (walkthrough) {
@@ -147,7 +146,7 @@ function startIncidentCoach() {
     client = new IncidentSessionClient(config);
     client.onStatus = message => coach.toast(message);
     client.onError = message => coach.toast(message, true);
-    client.onHint = hint => coach.toast(`Hint ${hint.level}: ${hint.text}`);
+    client.onHint = hint => coach.showHint(hint);
     client.onActionResult = result => {
       if (result.evaluation.outcome === 'accepted') {
         const reason = String(result.evaluation.reason || '').replace(/^Completed:\s*/i, '').trim();
@@ -190,7 +189,7 @@ function startIncidentCoach() {
       }
       coach.showCommand(command, target);
     };
-    const session = await client.connect();
+    await client.connect();
     observer = new KibanaActionObserver(adapter, action => {
       if (walkthroughController) return;
       // Tag a learner's window change with when the incident was noticed (from the briefing) so
@@ -244,7 +243,6 @@ function startIncidentCoach() {
         coach.debrief.show(feedback);
       } catch (error) { coach.toast(error.message, true); }
     };
-    coach.toast(`Connected to ${session.session_id}. Automation is visibly active.`);
   }
 
   const savedConfig = sessionStorage.getItem(activeSessionKey);

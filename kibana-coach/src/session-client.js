@@ -29,7 +29,7 @@ class IncidentSessionClient {
   openSocket() {
     const socketUrl = this.server.replace(/^http/, 'ws');
     this.socket = new WebSocket(`${socketUrl}/api/sessions/${this.sessionId}/events?token=${encodeURIComponent(this.token)}`);
-    this.socket.onopen = () => this.onStatus?.('Connected to the learning session.');
+    this.socket.onopen = () => this.onStatus?.('');
     this.socket.onmessage = event => this.handle(JSON.parse(event.data));
     this.socket.onclose = () => {
       if (!this.stopped) {

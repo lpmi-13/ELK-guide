@@ -13,6 +13,7 @@ class IncidentCoachPanel {
           <div id="countdown" class="countdown" aria-hidden="true" hidden><span></span></div>
         </section>
         <div class="actions"><button id="pause">Pause</button><button id="advance" title="Complete this step now and continue">Advance</button><button id="incident-info" title="Review the initial incident briefing">Incident info</button><button id="hint">Hint</button><button id="demonstrate">Show me</button></div>
+        <section id="hint-card" aria-live="polite" hidden><span id="hint-label"></span><p id="hint-text"></p></section>
         <form id="diagnosis" hidden>
           <label>Faulty service<input name="service" required></label>
           <label>Failure type<select name="fault_type"><option value="latency">Latency</option><option value="error">Errors</option><option value="unavailable">Unavailable</option></select></label>
@@ -133,6 +134,7 @@ class IncidentCoachPanel {
     // Hold the next step behind an in-progress confirmation so the learner sees the success land
     // before the card flips to the next task; finishCelebrate() replays this once it settles.
     if (this.celebrating) { this.pendingCommand = {command, target}; return; }
+    this.clearHint();
     this.host.hidden = false;
     this.panel.hidden = false;
     this.root.querySelector('#stage').classList.remove('success', 'celebrate-in');
@@ -187,9 +189,28 @@ class IncidentCoachPanel {
     this.onHint?.();
   }
 
-  // The demonstration is revealed as one idea per card: what → why → action → learning.
-  // "what" and "why" are separate full cards, each with its own countdown to read it.
+  showHint(hint) {
+    // A reply can arrive after the learner has moved to another card or step.
+    if (this.panel.hidden || this.phase ||
+        !['guided', 'challenge'].includes(this.currentCommand?.mode) ||
+        hint.step_id !== this.currentCommand.step_id) return;
+    this.root.querySelector('#hint-label').textContent = hint.level > 0 ? `Hint ${hint.level}` : 'Hint';
+    this.root.querySelector('#hint-text').textContent = hint.text;
+    this.root.querySelector('#hint-card').hidden = false;
+    this.refit();
+    this.placeAwayFrom(this.activeTarget?.isConnected ? this.activeTarget : null);
+  }
+
+  clearHint() {
+    this.root.querySelector('#hint-card').hidden = true;
+    this.root.querySelector('#hint-label').textContent = '';
+    this.root.querySelector('#hint-text').textContent = '';
+  }
+
+  // The demonstration is revealed as one idea per card: what → optional why → action → learning.
+  // When supplied, "what" and "why" are separate full cards with their own reading countdowns.
   enterPhase(phase, command = this.currentCommand) {
+    this.clearHint();
     if (phase !== 'learning') this.clearEvidenceHighlights();
     this.phase = phase;
     this.currentCommand = command;
@@ -228,7 +249,7 @@ class IncidentCoachPanel {
   }
 
   // "Show me" on a guided step: the coach takes over this one step and narrates it like a
-  // demonstration (what → why → action → learning), spotlighting the control it is about to use.
+  // demonstration (what → optional why → action → learning), spotlighting the control it is about to use.
   // Advance skips a reading beat; Hint and Show me are moot while the coach is doing it.
   beginWalkthrough(command) {
     this.root.querySelector('#demonstrate').hidden = true;
@@ -568,7 +589,7 @@ class IncidentCoachPanel {
     this.appliedPos = {left: this.pos.left, top: this.pos.top};
   }
 
-  // A demonstration reveals one card at a time (what → why → action → learning) and the cards
+  // A demonstration reveals one card at a time (what → optional why → action → learning) and the cards
   // differ in height, so after each one renders, lift the panel just enough — never above the top
   // margin — that its bottom keeps a comfortable margin. Horizontal placement is left untouched (no
   // jarring corner hop), and the move is instant so it reads as part of the card's own transition.
@@ -587,6 +608,7 @@ class IncidentCoachPanel {
 
   finishCommand(command) {
     if (command?.command_id !== this.activeCommandId) return;
+    this.clearHint();
     this.clearEvidenceHighlights();
     this.spotlight.hide();
     this.cursor.hide();
@@ -611,6 +633,7 @@ class IncidentCoachPanel {
   celebrate(message = '') {
     // A demonstration narrates its own "What we learned" beat, so it needs no separate confirmation.
     if (this.currentCommand?.mode === 'demonstration') return;
+    this.clearHint();
     this.host.hidden = false;
     this.panel.hidden = false;
     this.celebrating = true;
@@ -644,6 +667,7 @@ class IncidentCoachPanel {
   }
 
   stop() {
+    this.clearHint();
     this.briefing.close();
     this.clearEvidenceHighlights();
     this.spotlight.hide();
@@ -672,9 +696,12 @@ class IncidentCoachPanel {
     @media (prefers-reduced-motion: reduce) { .countdown.working span { transform:none!important;width:100%!important;opacity:.55; } .countdown span { width:100%!important; } }
     button { border:1px solid #8293a3;border-radius:5px;background:#f5f7f9;padding:6px 9px;cursor:pointer; } button:hover,button:focus-visible { outline:2px solid #006bb4;outline-offset:1px; }
     #stop { color:#a32b1c;border-color:#d77d72; } #advance { margin-left:auto; } .actions { display:flex; gap:7px; margin-top:12px; }
+    #hint-card { margin-top:14px;padding:13px 16px 14px;border:1px solid #b8dcea;border-left:4px solid #0874a8;border-radius:9px;background:#f0f8fc;box-shadow:0 4px 14px #0874a812; }
+    #hint-label { display:block;color:#08638d;font:700 11px/1.3 system-ui,sans-serif;letter-spacing:.09em;text-transform:uppercase; }
+    #hint-text { margin:6px 0 0;color:#173d53;font:500 15px/1.5 'Segoe UI',system-ui,sans-serif;letter-spacing:-.005em;white-space:pre-line; }
     .progress { height:4px;background:#dce4eb;margin:13px 0;border-radius:4px;overflow:hidden; }.progress span { display:block;height:100%;background:#006bb4;transition:width .3s; }
     label { display:block;font-weight:650;margin-top:10px; } input,select,textarea { display:block;width:100%;box-sizing:border-box;margin-top:3px;padding:7px;border:1px solid #9ba9b6;border-radius:4px;font:inherit; } textarea { min-height:58px; }
-    #diagnosis button { margin-top:12px;background:#006bb4;color:#fff;border:0; } #status { min-height:18px;color:#147d5c; }.error { color:#a32b1c!important; }
+    #diagnosis button { margin-top:12px;background:#006bb4;color:#fff;border:0; } #status { min-height:18px;color:#147d5c; } #status:empty { display:none; }.error { color:#a32b1c!important; }
     #stage.success { border-left-color:#12a56b;background:#ecf8f2;box-shadow:0 6px 22px #12a56b24; } #stage.success .eyebrow { display:flex;align-items:center;gap:8px;color:#0b7a4f; } #stage.success #phase-headline { color:#0c3d2b; }
     .stage-tick { flex:0 0 auto;display:inline-block;width:18px;height:18px;border-radius:50%;background:#12a56b;position:relative;transform:none;animation:tick-pop .4s .1s cubic-bezier(.22,1.4,.4,1) both; }
     .stage-tick::after { content:"";position:absolute;left:6px;top:3px;width:4px;height:8px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(42deg); }
