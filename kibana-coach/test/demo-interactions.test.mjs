@@ -67,6 +67,27 @@ test('stopping a note clears its Advance wait', async () => {
   assert.equal(panel.advanceInfo(), false);
 });
 
+test('an already selected time window uses a timed note and continues without Advance', async () => {
+  const Adapter = loadClass('../src/kibana-adapter.js', 'KibanaAdapter');
+  const adapter = new Adapter();
+  adapter.currentTimeRange = () => ({from: 'now-15m', to: 'now'});
+  const calls = [];
+  const panel = {
+    showInfo: (_target, text) => calls.push(`note:${text}`),
+    startCountdown: duration => calls.push(`countdown:${duration}`),
+    cursor: {reveal: async () => calls.push('reveal'), moveTo: async () => calls.push('move')},
+  };
+  adapter.readBeat = async text => {
+    panel.startCountdown(10);
+    await new Promise(resolve => setTimeout(resolve, 10));
+    calls.push(`read:${text}`);
+  };
+  const result = await adapter.setTimeRange(
+    {value: {from: 'now-15m', to: 'now'}}, {}, panel, 1, new AbortController().signal);
+  assert.equal(result.state_after.time_from, 'now-15m');
+  assert.deepEqual(calls.map(call => call.split(':')[0]), ['reveal', 'note', 'countdown', 'move', 'read']);
+});
+
 test('the shared cursor path reveals clipped controls before moving to them', async () => {
   const Cursor = loadClass('../src/ui/cursor.js', 'IncidentCursor',
     ['innerWidth', 'innerHeight', 'getComputedStyle', 'matchMedia'],

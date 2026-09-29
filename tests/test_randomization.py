@@ -97,6 +97,48 @@ class RandomizationTests(unittest.TestCase):
         self.assertIn(incident["finding"], targeted)
         self.assertEqual(isolate["accepts"][0]["validators"][0].get("fields"), [incident["signal_field"]])
 
+    def test_version_rollout_shows_mixed_http_outcomes_before_comparing_versions(self):
+        for seed in range(20):
+            manifest = self.materialize("deployment-version-regression", seed)
+            incident = manifest["parameters"]["incident"]
+            documents = self.controller.generate_seeded_events(manifest)
+            rows = sorted(
+                (document for document in documents
+                 if document["service"]["name"] == incident["service"]
+                 and document["service"]["version"] in {incident["bad_version"], incident["good_version"]}),
+                key=lambda document: document["@timestamp"], reverse=True,
+            )
+            with self.subTest(seed=seed):
+                service_rows = [document for document in documents if document["service"]["name"] == incident["service"]]
+                self.assertEqual({row["service"]["version"] for row in service_rows},
+                                 {incident["bad_version"], incident["good_version"]})
+                # The first visible Discover page must show both outcomes after the service/all-
+                # versions query. Otherwise the next comparison looks decided before it begins.
+                self.assertTrue({200, incident["status"]}.issubset(
+                    {row["http"]["response"]["status_code"] for row in rows[:10]}))
+                for row in rows:
+                    expected = incident["status"] if row["service"]["version"] == incident["bad_version"] else 200
+                    self.assertEqual(row["http"]["response"]["status_code"], expected)
+                    self.assertEqual(row["transaction"]["result"], "HTTP 5xx" if expected >= 500 else "HTTP 2xx")
+
+            session = self.server.create_session({"manifest": manifest}, "demonstration")
+            session["run_ready"] = True
+            goals = session["playbook"]["goals"]
+            for goal_id, expected_focus in (
+                ("isolate", ["http.response.status_code"]),
+                ("inspect", ["service.version", "http.response.status_code"]),
+            ):
+                session["completed_goals"] = {goal["id"] for goal in goals[:next(
+                    index for index, goal in enumerate(goals) if goal["id"] == goal_id)]}
+                session["pending_command"] = None
+                command = self.server.next_command(session)
+                explanation = " ".join(command[field] for field in ("reasoning", "evidence"))
+                with self.subTest(seed=seed, goal=goal_id):
+                    self.assertEqual(command["learning_focus"], expected_focus)
+                    self.assertIn("http.response.status_code", explanation)
+                    self.assertIn(str(incident["status"]), explanation)
+                    self.assertIn("200", explanation)
+
     def test_specifics_and_required_filters_vary_across_seeds(self):
         for pack in LOG_HUNT_PACKS:
             findings, queries = set(), set()

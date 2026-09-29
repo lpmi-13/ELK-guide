@@ -681,13 +681,15 @@ def generate_seeded_events(manifest):
     noise_count = int(profile.get("noise_count", 72))
     signal = _substitute(profile.get("signal", {}), manifest)
     distractors = [_substitute(item, manifest) for item in profile.get("distractors", [])]
+    excluded_services = set(_substitute(profile.get("noise_exclude_services", []), manifest))
+    noise_endpoints = [endpoint for endpoint in _NOISE_ENDPOINTS if endpoint["service"] not in excluded_services] or _NOISE_ENDPOINTS
     application = manifest["scenario"].get("starting_view", {}).get("app")
     documents = []
     for sequence in range(noise_count):
         timestamp = now - timedelta(seconds=generator.randint(90, 3600))
         trace_id = hashlib.md5(f"{manifest['run_id']}:noise:{sequence}".encode()).hexdigest()
         event = _event_template(manifest, timestamp, trace_id, sequence)
-        endpoint = generator.choice(_NOISE_ENDPOINTS)
+        endpoint = generator.choice(noise_endpoints)
         event = _deep_merge(event, {"service": {"name": endpoint["service"]}, "http": {"request": {"method": endpoint["method"]}}, "url": {"path": endpoint["path"]}, "message": generator.choice(["request completed", "cache refreshed", "token accepted", "background reconciliation completed"])})
         if distractors and sequence % 5 == 0:
             event = _deep_merge(event, distractors[sequence % len(distractors)])
@@ -708,7 +710,7 @@ def generate_seeded_events(manifest):
         repeats = int(companion.get("count", 1))
         template = _substitute(companion.get("event", {}), manifest)
         for sequence in range(repeats):
-            timestamp = now - timedelta(seconds=int(companion.get("offset_seconds", 120)) + sequence)
+            timestamp = now - timedelta(seconds=int(companion.get("offset_seconds", 120)) + sequence * int(companion.get("interval_seconds", 1)))
             event = _deep_merge(_event_template(manifest, timestamp, representative_trace, 1000 + companion_index * 100 + sequence), template)
             prepared = _prepare_application_event(event, application, template)
             _apply_realism(prepared, generator)

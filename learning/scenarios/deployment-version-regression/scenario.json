@@ -26,22 +26,37 @@
     "seeded_events": {
       "signal_count": 35,
       "noise_count": 100,
+      "noise_exclude_services": ["${param.incident.service}"],
       "signal": {
         "service": {"name": "${param.incident.service}", "version": "${param.incident.bad_version}"},
         "event": {"outcome": "failure"},
         "http": {"response": {"status_code": "${param.incident.status}"}},
+        "transaction": {"result": "HTTP 5xx"},
         "message": "request failed on newly deployed ${param.incident.service} ${param.incident.bad_version}"
       },
       "distractors": [
-        {"service": {"name": "${param.incident.service}", "version": "${param.incident.good_version}"}, "event": {"outcome": "success"}}
+        {"service": {"name": "${param.incident.service}", "version": "${param.incident.good_version}"}, "event": {"outcome": "success"}, "http": {"response": {"status_code": 200}}}
       ],
       "companions": [
         {
+          "count": 26,
+          "offset_seconds": 12,
+          "interval_seconds": 23,
+          "event": {
+            "service": {"name": "${param.incident.service}", "version": "${param.incident.good_version}"},
+            "event": {"outcome": "success"},
+            "http": {"response": {"status_code": 200}},
+            "message": "healthy request on previous version ${param.incident.good_version}"
+          }
+        },
+        {
           "count": 2,
-          "offset_seconds": 580,
+          "offset_seconds": 601,
           "event": {
             "service": {"name": "${param.incident.service}", "version": "${param.incident.bad_version}"},
             "event": {"outcome": "failure"},
+            "http": {"response": {"status_code": "${param.incident.status}"}},
+            "transaction": {"result": "HTTP 5xx"},
             "message": "first unhealthy request from version ${param.incident.bad_version}"
           }
         }
@@ -56,7 +71,7 @@
     "answers": {
       "finding": "${param.incident.bad_version}",
       "scope": "${param.incident.service}",
-      "conclusion": "${param.incident.service} version ${param.incident.bad_version} introduced the regression while ${param.incident.good_version} remained healthy."
+      "conclusion": "${param.incident.service} version ${param.incident.bad_version} returned HTTP ${param.incident.status} while ${param.incident.good_version} returned 200, identifying the new version as the regression."
     },
     "assertions": [
       {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "request failed on newly deployed ${param.incident.service} ${param.incident.bad_version}"}}},
@@ -70,7 +85,7 @@
       {"id": "scope", "label": "Service", "kind": "string", "weight": 1},
       {"id": "conclusion", "label": "Comparison conclusion", "kind": "string", "weight": 1},
       {"id": "evidence_refs", "label": "Evidence references", "kind": "string", "scored": false},
-      {"id": "evidence", "label": "First-occurrence evidence", "kind": "text", "scored": false}
+      {"id": "evidence", "label": "Version and HTTP status evidence", "kind": "text", "scored": false}
     ]
   },
   "playbook": "playbook.json",

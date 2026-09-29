@@ -468,6 +468,7 @@ def next_command(session):
         "narration": explanation_text("narration", step.get("title", "")) if session["policy"]["show_narration"] else session["manifest"]["scenario"]["brief"],
         "reasoning": explanation_text("reasoning") if session["mode"] == "demonstration" else "",
         "evidence": explanation_text("evidence") if session["mode"] == "demonstration" else "",
+        "learning_focus": substitute(explanation.get("learning_focus", []), session) if session["mode"] == "demonstration" else [],
         "concept": explanation_text("concept") if session["mode"] == "demonstration" else "",
         "answer_schema": session["manifest"]["scenario"].get("answer_schema", {}),
     }
@@ -477,7 +478,7 @@ def next_command(session):
         walkthrough = step.get("demonstration", {})
         command["walkthrough"] = {
             field: substitute(walkthrough.get(field, step.get(field, "")), session)
-            for field in ("narration", "reasoning", "evidence")
+            for field in ("narration", "reasoning", "evidence", "learning_focus")
         }
     session["pending_command"] = command
     return command

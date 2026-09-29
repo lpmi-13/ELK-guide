@@ -84,10 +84,11 @@ class KibanaAdapter {
     }
   }
 
-  async perform(command, coach, {timingScale = 1, signal} = {}) {
+  async perform(command, coach, {timingScale = 1, signal, readBeat} = {}) {
     if (command.type === 'orient') return null;
     if (command.type === 'request_diagnosis' || command.type === 'request_answer') return null;
     this.performing = true;
+    this.readBeat = readBeat;
     try {
       const applicationAdapter = (globalThis.KibanaApplicationAdapters || []).find(item => item.commands.has(command.type));
       if (applicationAdapter) return await applicationAdapter.perform(command, this, coach, {timingScale, signal});
@@ -101,6 +102,7 @@ class KibanaAdapter {
       throw new Error(`Unsupported semantic command: ${command.type}`);
     } finally {
       this.performing = false;
+      this.readBeat = null;
     }
   }
 
@@ -111,11 +113,12 @@ class KibanaAdapter {
     const informationOnly = !activate && !showClick;
     if (informationOnly) coach.showInfo(target, activity);
     else coach.showTarget(target, activity);
-    // A pointer with no click is an explanation, not an action. Keep its blue card visible until
-    // the learner advances, including when a recommended time range is already selected.
+    // A pointer with no click is an explanation, not an action. Use the same timed reading beat
+    // as the other cards so the note shows a countdown and advances automatically. Advance can
+    // still finish the beat early, and the cursor must land before the action can continue.
     if (informationOnly) {
-      // Start listening before the cursor finishes moving, so an early Advance still counts.
-      await Promise.all([coach.cursor.moveTo(target, {timingScale, signal}), coach.waitForAdvance(signal)]);
+      const read = this.readBeat ? this.readBeat(activity) : coach.waitForAdvance(signal);
+      await Promise.all([coach.cursor.moveTo(target, {timingScale, signal}), read]);
       return;
     }
     await coach.cursor.moveTo(target, {timingScale, signal});

@@ -107,7 +107,7 @@ function startIncidentCoach() {
         }
         coach.beginActionPhase(walkthrough);
       }
-      const action = await adapter.perform(command, coach, {timingScale, signal: controller.signal});
+      const action = await adapter.perform(command, coach, {timingScale, signal: controller.signal, readBeat});
       if (command.mode === 'demonstration' || walkthrough?.evidence) {
         // Beat 4 — learning: summarise what the result showed before moving on.
         coach.showLearning(walkthrough || command);

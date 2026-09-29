@@ -1,1 +1,54 @@
-{"schema_version":2,"id":"deployment-version-regression-playbook","extends":"discover.json","variables":{"title":"Deployment-version investigation","window":"${param.window}","field":"service.version","query":"service.name: ${param.incident.service} and service.version: *","finding_phrase":"${truth.finding}"},"goal_overrides":{"inspect":{"narration":"Add the version field as a column to compare it across the failing records.","demonstration":{"narration":"Add ${var.field} as a visible table column.\n\nThis lets us compare the release value across multiple failing records and check whether ${truth.finding} consistently appears in ${truth.scope}.","reasoning":"Expanding only one document could make a coincidental version look decisive.\n\nShowing ${var.field} for every filtered row makes the pattern repeatable and distinguishes a release regression from an isolated failure.","evidence":"The added column should show ${truth.finding} across the relevant failing records.\n\nThat repeated document-level pattern corroborates the query and supports the conclusion: ${truth.conclusion}"},"reference_action":{"command":"add_column","target":"kibana.field_list","arguments":{"field":"${var.field}"}},"hints":["Compare the decisive field across records rather than reading a single row.","Add ${var.field} as a column to customize the table, or open its field statistics.","Add the ${var.field} column; Show me can add the reference column."]}}}
+{
+  "schema_version": 2,
+  "id": "deployment-version-regression-playbook",
+  "extends": "discover.json",
+  "variables": {
+    "title": "Deployment-version investigation",
+    "window": "${param.window}",
+    "field": "service.version",
+    "query": "service.name: ${param.incident.service} and service.version: *",
+    "finding_phrase": "${truth.finding}"
+  },
+  "overrides": {
+    "demonstration_summary": {
+      "title": "${var.title} complete",
+      "checks": [
+        {"title": "Scope", "detail": "Set a time window that includes the reported incident."},
+        {"title": "Mixed outcomes", "detail": "Filtered ${param.incident.service} across versions and found HTTP ${param.incident.status} alongside 200 responses."},
+        {"title": "Version comparison", "detail": "Compared service.version with HTTP status: ${param.incident.bad_version} failed while ${param.incident.good_version} stayed healthy."}
+      ],
+      "answer": {
+        "finding": "${truth.finding}",
+        "scope": "${truth.scope}",
+        "conclusion": "${truth.conclusion}",
+        "evidence_refs": "signal,corroboration",
+        "evidence": "HTTP ${param.incident.status} on ${param.incident.bad_version} versus 200 on ${param.incident.good_version} corroborates the version regression."
+      }
+    }
+  },
+  "goal_overrides": {
+    "isolate": {
+      "demonstration": {
+        "narration": "Filter for ${param.incident.service} while keeping every service.version: ${var.query}.\n\nWe need both versions in the same result set before deciding whether the new release is unhealthy.",
+        "reasoning": "The service and version filter removes unrelated traffic, but it does not select errors.\n\nThe http.response.status_code field supplies the outcome evidence: HTTP ${param.incident.status} is a server error, while 200 is a successful response. We need to see both here before comparing versions.",
+        "evidence": "The filtered ${param.incident.service} results contain a mix of HTTP ${param.incident.status} and 200 in the highlighted http.response.status_code column.\n\nThe error codes show that some requests failed, but the mixed statuses mean we still need to check which service.version owns those failures before concluding that ${truth.finding} caused the regression.",
+        "learning_focus": ["http.response.status_code"]
+      }
+    },
+    "inspect": {
+      "narration": "Add the version field as a column and compare it with HTTP response status codes across requests.",
+      "demonstration": {
+        "narration": "Add service.version as a visible table column beside the existing http.response.status_code evidence.\n\nCompare the two columns across ${param.incident.service} requests: which version returns HTTP ${param.incident.status}, and which returns 200?",
+        "reasoning": "A version label by itself does not establish a failure. The HTTP status code tells us whether that request failed or succeeded.\n\nReading service.version and http.response.status_code on the same rows lets us attribute the errors to ${param.incident.bad_version} and the successful requests to ${param.incident.good_version}.",
+        "evidence": "The highlighted columns pair ${param.incident.bad_version} with HTTP ${param.incident.status} and ${param.incident.good_version} with HTTP 200.\n\nThose status codes are the corroborating evidence that the new version is bad, rather than the version number alone: ${truth.conclusion}",
+        "learning_focus": ["service.version", "http.response.status_code"]
+      },
+      "reference_action": {"command": "add_column", "target": "kibana.field_list", "arguments": {"field": "${var.field}"}},
+      "hints": [
+        "Compare HTTP response status codes with the version on the same requests.",
+        "Add service.version as a column and check which version has server errors versus 200 responses.",
+        "Add the ${var.field} column; Show me can add the reference column."
+      ]
+    }
+  }
+}

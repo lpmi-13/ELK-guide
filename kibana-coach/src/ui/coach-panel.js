@@ -32,6 +32,8 @@ class IncidentCoachPanel {
     this.paused = false;
     this.activeTarget = null;
     this.activeCommandId = null;
+    this.evidenceFields = [];
+    this.evidenceHighlights = [];
     // A guided step starts undimmed; the spotlight is only revealed on demonstration or a hint.
     this.spotlightRevealed = false;
     // A correct action is confirmed inside the panel; the next step is held until it finishes.
@@ -55,10 +57,11 @@ class IncidentCoachPanel {
         // Nothing to dodge — no highlighted control and no open doc-viewer flyout — so leave the
         // card where it rests rather than nudging it for every stray scroll or mutation.
         if (this.dragging) return;
-        if (!target && !this.findFlyout() && !this.evidenceField && event?.type !== 'resize') return;
+        if (!target && !this.findFlyout() && !this.evidenceField && !this.evidenceFields.length && event?.type !== 'resize') return;
         // Keep the panel clear of the control, but only re-dim/-highlight if the spotlight is
         // already revealed — a guided step starts with nothing dimmed until the learner asks.
         if (target && this.spotlightRevealed) this.spotlight.show(target);
+        this.refreshEvidenceHighlights();
         this.placeAwayFrom(target);
       });
     };
@@ -75,7 +78,7 @@ class IncidentCoachPanel {
       requestAnimationFrame(() => {
         this.flyoutCheckScheduled = false;
         const open = !!this.findFlyout();
-        if (open === this.flyoutOpen && !this.evidenceField) return;
+        if (open === this.flyoutOpen && !this.evidenceField && !this.evidenceFields.length) return;
         this.flyoutOpen = open;
         this.reposition();
       });
@@ -136,6 +139,7 @@ class IncidentCoachPanel {
     this.activeCommandId = command.command_id;
     this.activeTarget = target;
     this.evidenceField = null;
+    this.clearEvidenceHighlights();
     this.currentCommand = command;
     this.root.querySelector('#mode').textContent = `${command.mode} · step ${command.step_index + 1} of ${command.step_count}`;
     this.root.querySelector('#objective').textContent = command.step_id.replaceAll('-', ' ');
@@ -186,6 +190,7 @@ class IncidentCoachPanel {
   // The demonstration is revealed as one idea per card: what → why → action → learning.
   // "what" and "why" are separate full cards, each with its own countdown to read it.
   enterPhase(phase, command = this.currentCommand) {
+    if (phase !== 'learning') this.clearEvidenceHighlights();
     this.phase = phase;
     this.currentCommand = command;
     this.root.querySelector('#advance').title = 'Continue to the next part';
@@ -211,6 +216,7 @@ class IncidentCoachPanel {
       this.evidenceField = command?.type === 'add_column' ? command.value?.field : null;
       this.renderPhase({eyebrow: 'What we learned', headline: command?.evidence || 'Step complete.'});
       this.resetCountdown();
+      this.showEvidenceHighlights(command?.learning_focus || []);
       // The added column is the evidence to read next. Return the coach to the left before the
       // browser paints the refreshed table, then keep that column clear if the user moves the coach.
       if (this.evidenceField && !this.dragging) {
@@ -388,6 +394,42 @@ class IncidentCoachPanel {
     return {left: rect.left - 24, right: rect.right + 24, top: rect.top - 24, bottom: innerHeight};
   }
 
+  clearEvidenceHighlights() {
+    for (const highlight of this.evidenceHighlights || []) highlight.remove();
+    this.evidenceHighlights = [];
+    this.evidenceFields = [];
+  }
+
+  showEvidenceHighlights(fields) {
+    this.clearEvidenceHighlights();
+    this.evidenceFields = Array.isArray(fields) ? fields : [];
+    for (const field of this.evidenceFields) {
+      const highlight = document.createElement('div');
+      highlight.className = 'incident-evidence-highlight';
+      highlight.setAttribute('aria-hidden', 'true');
+      this.root.append(highlight);
+      this.evidenceHighlights.push(highlight);
+    }
+    this.refreshEvidenceHighlights();
+  }
+
+  refreshEvidenceHighlights() {
+    if (!this.evidenceFields?.length) return;
+    const headers = [...document.querySelectorAll("[role='columnheader'], th")];
+    for (const [index, field] of this.evidenceFields.entries()) {
+      const highlight = this.evidenceHighlights[index];
+      const header = headers.find(node => node.textContent?.trim().includes(field));
+      const rect = header?.getBoundingClientRect();
+      const left = Math.max(0, rect?.left ?? 0);
+      const right = Math.min(innerWidth, rect?.right ?? 0);
+      const top = Math.max(0, rect?.top ?? 0);
+      highlight.hidden = !rect || right <= left || top >= innerHeight - 48;
+      if (!highlight.hidden) {
+        highlight.style.cssText = `left:${left}px;top:${top}px;width:${right - left}px;height:${innerHeight - top - 48}px`;
+      }
+    }
+  }
+
   clampPosition(left, top) {
     const rect = this.panel.getBoundingClientRect();
     return {
@@ -545,6 +587,7 @@ class IncidentCoachPanel {
 
   finishCommand(command) {
     if (command?.command_id !== this.activeCommandId) return;
+    this.clearEvidenceHighlights();
     this.spotlight.hide();
     this.cursor.hide();
     this.panel.hidden = true;
@@ -602,6 +645,7 @@ class IncidentCoachPanel {
 
   stop() {
     this.briefing.close();
+    this.clearEvidenceHighlights();
     this.spotlight.hide();
     this.cursor.hide();
     this.panel.hidden = true;
@@ -637,6 +681,7 @@ class IncidentCoachPanel {
     @keyframes tick-pop { from{transform:scale(0)} to{transform:scale(1)} }
     #stage.celebrate-in { animation:celebrate-in .42s cubic-bezier(.22,1,.36,1); } @keyframes celebrate-in { from{opacity:0;transform:translateY(8px) scale(.99)} to{opacity:1;transform:none} }
     .incident-spotlight { position:fixed;z-index:1;display:none;box-sizing:border-box;border:3px solid #ffb000;border-radius:7px;box-shadow:0 0 0 9999px #10182070;pointer-events:none;transition:all .25s; }
+    .incident-evidence-highlight { position:fixed;z-index:1;box-sizing:border-box;border:3px solid #ffb000;border-radius:7px;background:#ffb00018;box-shadow:0 0 0 2px #fff8;pointer-events:none;transition:all .25s; }
     .incident-cursor { position:fixed;z-index:2;left:-12px;top:-12px;width:24px;height:24px;opacity:0;pointer-events:none;transition:transform var(--incident-cursor-duration, .65s) cubic-bezier(.4,.1,.6,.9),opacity .15s; }
     .incident-cursor.visible { opacity:1; }.incident-cursor:before { content:'➤';display:block;color:#ffb000;font-size:28px;filter:drop-shadow(0 2px 2px #0008);transform:rotate(-25deg); }
     .incident-cursor span { position:absolute;inset:0;border:2px solid #ffb000;border-radius:50%;opacity:0; }.incident-cursor.clicked span { animation:click-ring .5s; }

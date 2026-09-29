@@ -55,3 +55,25 @@ test('the coach can be dragged and stays clear of a newly added column', () => {
   assert.equal(panel.pos.left, 18);
   assert.ok(panel.pos.top >= 72 && panel.pos.top <= 672);
 });
+
+test('learning highlights the HTTP status and version columns in the visible table', () => {
+  const headers = [
+    {textContent: 'service.version', getBoundingClientRect: () => ({left: 1100, right: 1260, top: 420})},
+    {textContent: 'http.response.status_code', getBoundingClientRect: () => ({left: 1260, right: 1450, top: 420})},
+  ];
+  const document = {
+    querySelectorAll: () => headers,
+    createElement: () => ({style: {}, setAttribute() {}, remove() { this.removed = true; }}),
+  };
+  const Panel = loadClass('../src/ui/coach-panel.js', 'IncidentCoachPanel',
+    ['document', 'innerWidth', 'innerHeight'], [document, 1920, 1080]);
+  const panel = Object.create(Panel.prototype);
+  panel.root = {append() {}};
+  panel.showEvidenceHighlights(['service.version', 'http.response.status_code']);
+  assert.equal(panel.evidenceHighlights.length, 2);
+  assert.match(panel.evidenceHighlights[0].style.cssText, /left:1100px.*width:160px/);
+  assert.match(panel.evidenceHighlights[1].style.cssText, /left:1260px.*width:190px/);
+  const highlights = [...panel.evidenceHighlights];
+  panel.clearEvidenceHighlights();
+  assert.ok(highlights.every(highlight => highlight.removed));
+});
