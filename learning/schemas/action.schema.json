@@ -22,13 +22,18 @@
         "inventory_type_selected", "infrastructure_entity_selected", "infrastructure_entities_filtered", "infrastructure_entities_grouped",
         "metric_selected", "metric_period_compared", "metrics_logs_opened", "alert_opened", "alerts_filtered",
         "alert_reason_inspected", "alert_history_inspected", "alert_source_opened",
-        "hint_requested", "step_demonstrated", "answer_submitted", "command_acknowledged"
+        "hint_requested", "step_demonstrated", "answer_submitted", "command_acknowledged", "check_in_answered"
       ]
     },
     "actor": {"enum": ["learner", "tutorial"]},
     "observed_at": {"type": "string", "format": "date-time"},
     "state_before": {"type": "object"},
     "state_after": {"type": "object"},
-    "details": {"type": "object"}
+    "details": {"type": "object"},
+    "step_clock": {
+      "type": "object",
+      "description": "Guided only: the browser's active-time clock for the step the action was taken in.",
+      "properties": {"step_id": {"type": "string"}, "seconds_active": {"type": "number", "minimum": 0}}
+    }
   }
 }

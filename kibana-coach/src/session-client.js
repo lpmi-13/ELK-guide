@@ -44,6 +44,7 @@ class IncidentSessionClient {
     else if (message.message_type === 'command') this.onCommand?.(message);
     else if (message.message_type === 'hint') this.onHint?.(message);
     else if (message.message_type === 'action_result') this.onActionResult?.(message);
+    else if (message.message_type === 'check_in') this.onCheckIn?.(message);
     else if (message.message_type === 'complete') {
       this.onStatus?.('Investigation goals complete.');
       this.onComplete?.();
@@ -71,10 +72,15 @@ class IncidentSessionClient {
       state_before: partial.state_before || {},
       state_after: partial.state_after || {}
     };
+    // Guided: the active time spent on the current step so far, recorded for the debrief.
+    const clock = this.stepClock?.();
+    if (clock) action.step_clock = clock;
     this.send({message_type: 'action', action});
   }
 
   requestHint() { this.send({message_type: 'hint'}); }
+  requestCheckIn(stepId) { this.send({message_type: 'check_in', step_id: stepId}); }
+  reportRecovery(stepId, reasonCode, diagnosis) { this.send({message_type: 'recovery_shown', step_id: stepId, reason_code: reasonCode, diagnosis: diagnosis || null}); }
   acknowledgeBriefing(briefing) { this.send({message_type: 'briefing_ack', briefing_id: briefing.briefing_id}); }
   acknowledge(command, status, observedState = {}) { this.send({message_type: 'ack', command_id: command.command_id, status, observed_state: observedState}); }
 

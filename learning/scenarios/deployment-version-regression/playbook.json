@@ -33,7 +33,10 @@
         "reasoning": "The service and version filter removes unrelated traffic, but it does not select errors.\n\nThe http.response.status_code field supplies the outcome evidence: HTTP ${param.incident.status} is a server error, while 200 is a successful response. We need to see both here before comparing versions.",
         "evidence": "The filtered ${param.incident.service} results contain a mix of HTTP ${param.incident.status} and 200 in the highlighted http.response.status_code column.\n\nThe error codes show that some requests failed, but the mixed statuses mean we still need to check which service.version owns those failures before concluding that ${truth.finding} caused the regression.",
         "learning_focus": ["http.response.status_code"]
-      }
+      },
+      "drifts": [
+        {"action": ["filter_added", "filter_changed"], "validators": [{"kind": "filter_field", "field": "service.name"}, {"kind": "value_not", "value": "${param.incident.service}"}, {"kind": "detail_equals", "field": "negate", "value": false}], "note": "You filtered on the service ${action.value}; check that it's the service the incident report points at."}
+      ]
     },
     "inspect": {
       "narration": "Add the version field as a column and compare it with HTTP response status codes across requests.",

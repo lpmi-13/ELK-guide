@@ -9,6 +9,29 @@
     {"required": ["extends", "variables"]},
     {"required": ["id", "version", "starting_view", "demonstration_summary", "goals"]}
   ],
+  "$defs": {
+    "drifts": {
+      "type": "array",
+      "description": "Guided/challenge: plausible moves away from what this step needs. A matching learner action is recorded silently (never interrupts) and its note is only surfaced at a check-in or in the debrief. Same action/validator shape as accepts; ${action.<detail>} in the note is filled from the action's details.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action", "validators", "note"],
+        "properties": {
+          "action": {"oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}]},
+          "validators": {"type": "array", "items": {"type": "object", "required": ["kind"]}},
+          "note": {"type": "string"}
+        }
+      }
+    },
+    "pace": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Guided only: overrides the flat per-command step-clock budget. Never below 45 seconds.",
+      "required": ["expected_seconds"],
+      "properties": {"expected_seconds": {"type": "integer", "minimum": 45}}
+    }
+  },
   "properties": {
     "schema_version": {"const": 2},
     "extends": {"type": "string", "pattern": "^[^/]+\\.json$"},
@@ -36,7 +59,9 @@
             "required": ["command", "target"],
             "properties": {"command": {"type": "string"}, "target": {"type": "string"}, "arguments": {}}
           },
-          "hints": {"type": "array", "minItems": 3, "items": {"type": "string"}}
+          "hints": {"type": "array", "minItems": 3, "items": {"type": "string"}},
+          "drifts": {"$ref": "#/$defs/drifts"},
+          "pace": {"$ref": "#/$defs/pace"}
         }
       }
     },
@@ -113,7 +138,9 @@
             "properties": {"command": {"type": "string"}, "target": {"type": "string"}, "arguments": {}}
           },
           "hints": {"type": "array", "minItems": 3, "items": {"type": "string"}},
-          "scored": {"type": "boolean"}
+          "scored": {"type": "boolean"},
+          "drifts": {"$ref": "#/$defs/drifts"},
+          "pace": {"$ref": "#/$defs/pace"}
         }
       }
     }

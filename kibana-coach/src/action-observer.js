@@ -14,13 +14,43 @@ class KibanaActionObserver {
     // click — dragging a selection on the date histogram, or browser back/forward — which the
     // click handler alone would miss.
     this.lastTimeSignature = this.timeSignature();
-    this.timePoll = setInterval(() => { if (!this.adapter.performing) this.captureTimeRange(false); }, 700);
+    this.rebaselineFilters();
+    this.timePoll = setInterval(() => {
+      if (this.adapter.performing) return;
+      this.captureTimeRange(false);
+      this.captureFilterRemoval();
+    }, 700);
   }
 
   // Adopt the window currently applied as the new baseline, so a change the coach made itself (a
   // restored search) is not later reported by the poll as the learner's.
   rebaseline() {
     this.lastTimeSignature = this.timeSignature();
+    this.rebaselineFilters();
+  }
+
+  rebaselineFilters() {
+    this.lastFilters = this.readFilterPills();
+  }
+
+  // The search a report leaves behind — every pill and the query text — so the service can tell
+  // when a filter an earlier step earned is no longer in force.
+  searchState() {
+    return {filters: this.readFilterPills(), query: this.queryValue()};
+  }
+
+  // Report a pill the learner took away — deleted or disabled — however they did it (the pill's own
+  // popover, its clear button, "Clear all", browser back). Additions only move the baseline; the
+  // click that applied them reports filter_added.
+  captureFilterRemoval() {
+    const filters = this.readFilterPills();
+    const key = filter => `${filter.negate ? '-' : ''}${filter.field}=${filter.value}`;
+    const active = new Set(filters.filter(filter => !filter.disabled).map(key));
+    const lost = (this.lastFilters || []).filter(filter => !filter.disabled && !active.has(key(filter)));
+    this.lastFilters = filters;
+    if (!lost.length) return;
+    const disabled = lost.every(filter => filters.some(item => item.disabled && key(item) === key(filter)));
+    this.reportWithCount({type: disabled ? 'filter_disabled' : 'filter_removed', details: {...lost[0]}, state_after: {filters, query: this.queryValue()}});
   }
 
   stop() {
@@ -95,7 +125,8 @@ class KibanaActionObserver {
       const field = (keyToken ? keyToken[1] : withoutNot.split(':')[0].trim()).replace(/\.(keyword|text)$/, '');
       const value = (valueToken ? valueToken[1] : withoutNot.split(':').slice(1).join(':').trim()).replace(/^"|"$/g, '');
       const negate = /(^|\s)filter-negated(\s|$)/.test(subject) || /^NOT\s+/i.test(text);
-      return {field, value, negate};
+      const disabled = /(^|\s)filter-disabled(\s|$)/.test(subject);
+      return disabled ? {field, value, negate, disabled} : {field, value, negate};
     }).filter(filter => filter.field);
   }
 
@@ -217,7 +248,7 @@ class KibanaActionObserver {
     if (event.target === this.adapter.resolve('kibana.query_bar') || event.target === this.adapter.resolve('kibana.esql_editor')) {
       const esql = event.target === this.adapter.resolve('kibana.esql_editor');
       const query = event.target.value;
-      setTimeout(() => this.reportWithCount({type: esql ? 'esql_submitted' : 'query_submitted', details: {query, language: esql ? 'esql' : 'kql'}, state_after: {query, query_language: esql ? 'esql' : 'kql'}}), 50);
+      setTimeout(() => this.reportWithCount({type: esql ? 'esql_submitted' : 'query_submitted', details: {query, language: esql ? 'esql' : 'kql'}, state_after: esql ? {query, query_language: 'esql'} : {...this.searchState(), query, query_language: 'kql'}}), 50);
     }
   }
 
@@ -226,7 +257,7 @@ class KibanaActionObserver {
     const node = event.target.closest?.('[data-test-subj]');
     const subject = node?.getAttribute('data-test-subj') || '';
     if (subject === 'querySubmitButton') {
-      setTimeout(() => this.reportWithCount({type: 'query_submitted', details: {query: this.queryValue()}, state_after: {query: this.queryValue()}}), 50);
+      setTimeout(() => this.reportWithCount({type: 'query_submitted', details: {query: this.queryValue()}, state_after: this.searchState()}), 50);
     } else if (/esql.*(submit|run)/i.test(subject)) {
       const query = this.adapter.resolve('kibana.esql_editor')?.value || '';
       setTimeout(() => this.reportWithCount({type: 'esql_submitted', details: {query, language: 'esql'}, state_after: {query, query_language: 'esql'}}), 50);
@@ -253,7 +284,8 @@ class KibanaActionObserver {
       setTimeout(() => {
         const filters = this.readFilterPills();
         const latest = filters[filters.length - 1] || {};
-        this.reportWithCount({type: 'filter_added', details: {...latest}, state_after: {filters}});
+        this.lastFilters = filters;
+        this.reportWithCount({type: 'filter_added', details: {...latest}, state_after: {filters, query: this.queryValue()}});
       }, 250);
     } else if (/fieldToggle|fieldPopoverHeader_addField|FieldListPanel(Add|Remove)|dscFieldDetails(Add|Remove)|removeColumn|add.?column|remove.?column/i.test(subject)) {
       // Column add/remove. `fieldToggle-<field>` is the verified 9.5.2 field-list toggle; it
@@ -262,10 +294,9 @@ class KibanaActionObserver {
       const label = node?.getAttribute('aria-label') || '';
       const removing = /remove/i.test(label) || /remove|delete/i.test(subject);
       this.report({type: removing ? 'column_removed' : 'column_added', details: {field: this.fieldFromSubject(subject, event.target)}});
-    } else if (/filter.*(remove|delete)/i.test(subject)) {
-      this.report({type: 'filter_removed', details: {subject}});
-    } else if (/filter.*disable/i.test(subject)) {
-      this.report({type: 'filter_disabled', details: {subject}});
+    } else if (/filter.*(remove|delete|disable)|(remove|delete|disable).*filter/i.test(subject)) {
+      // Read which pill went, and what is left, once Kibana has applied the change.
+      setTimeout(() => this.captureFilterRemoval(), 300);
     } else if (/superDatePicker.*[Rr]efresh|refreshInterval|autoRefresh/i.test(subject)) {
       // Auto-refresh interval / pause toggle. Kibana 9.5.2 Discover ships the new
       // dateRangePicker with NO auto-refresh control (verified: no refresh-* subj on the

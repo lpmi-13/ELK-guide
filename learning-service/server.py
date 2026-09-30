@@ -18,7 +18,7 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qs, quote, urlparse
 from urllib.request import Request, urlopen
 
-from engine.evaluator import evaluate_action, guided_feedback, playbook_goals, score_session
+from engine.evaluator import current_goal, evaluate_action, guided_feedback, playbook_goals, score_session
 from engine.contracts import assert_catalog_valid, insert_goals
 
 PORT = int(os.getenv("PORT", "8091"))
@@ -37,6 +37,27 @@ MODE_POLICIES = {
     "guided": {"action_actor": "learner", "show_narration": True, "highlight_target": True, "validate_timing": "immediate", "allow_demonstrate_step": True},
     "challenge": {"action_actor": "learner", "show_narration": False, "highlight_target": False, "validate_timing": "debrief", "allow_demonstrate_step": False},
 }
+
+
+# Guided step clock: active seconds a step may take before the coach gently checks in. Flat per
+# reference command (never scaled by difficulty); a playbook step may override it with
+# ``pace.expected_seconds``, but no budget is ever below MINIMUM_PACE_SECONDS.
+MINIMUM_PACE_SECONDS = 45
+PACE_DEFAULTS = {
+    "set_time_range": 45,
+    "open_field_statistics": 45,
+    "inspect_field": 45,
+    "add_filter": 60,
+    "enter_kql": 60,
+    "expand_document": 45,
+}
+
+
+def pace_seconds(step):
+    override = (step.get("pace") or {}).get("expected_seconds")
+    command = step.get("reference_action", {}).get("command")
+    budget = override if isinstance(override, (int, float)) else PACE_DEFAULTS.get(command, MINIMUM_PACE_SECONDS)
+    return int(max(MINIMUM_PACE_SECONDS, budget))
 
 
 def now_iso():
@@ -213,6 +234,10 @@ def create_session(run_response, mode):
         "actions": [],
         "assistance": {"hints": 0, "demonstrated_steps": 0},
         "hint_level": {},
+        # Per-step drift notes still open (cleared when the step completes) and the permanent
+        # per-step record behind the debrief: active time, check-ins, dead ends and drift.
+        "drift": {},
+        "step_log": {},
         "answer": None,
         "feedback": None,
         "pending_command": None,
@@ -529,6 +554,8 @@ def next_command(session):
         }
     if session["mode"] == "guided":
         command["restore_state"] = restore_state(session)
+        if command_type not in {"request_diagnosis", "request_answer"}:
+            command["pace_seconds"] = pace_seconds(step)
     session["pending_command"] = command
     return command
 
@@ -596,6 +623,70 @@ def action_evidence(session, action):
     return evidence
 
 
+def step_log(session, step_id):
+    return session.setdefault("step_log", {}).setdefault(step_id, {"seconds_active": None, "check_ins": [], "dead_ends": [], "drift": []})
+
+
+def record_step_clock(session, clock):
+    """Keep the browser's active-time reading for a step (it only grows while the step is open)."""
+    if not isinstance(clock, dict) or not clock.get("step_id"):
+        return
+    try:
+        seconds = round(float(clock.get("seconds_active")), 1)
+    except (TypeError, ValueError):
+        return
+    log = step_log(session, clock["step_id"])
+    log["seconds_active"] = max(seconds, log["seconds_active"] or 0)
+
+
+def record_drift(session, step_id, note):
+    """Note a drift for the step, de-duplicated, in both the open log and the step's record."""
+    if not note:
+        return
+    for notes in (session.setdefault("drift", {}).setdefault(step_id, []), step_log(session, step_id)["drift"]):
+        if note in notes:
+            notes.remove(note)
+        notes.append(note)  # most recent last
+
+
+def record_check_in_answer(session, details):
+    check_ins = step_log(session, details.get("step_id", ""))["check_ins"]
+    if check_ins and check_ins[-1].get("choice") is None:
+        check_ins[-1]["choice"] = details.get("choice")
+
+
+def record_recovery(session, message):
+    """The coach showed a recovery card. Annotate the dead end the service already recorded with the
+    browser's diagnosis (e.g. missing_colon), or record one the browser found on its own."""
+    step_id = message.get("step_id")
+    if not step_id:
+        return
+    dead_ends = step_log(session, step_id)["dead_ends"]
+    reason_code = message.get("reason_code") or "empty_result"
+    diagnosis = message.get("diagnosis")
+    entry = next((item for item in reversed(dead_ends) if item["reason_code"] == reason_code and not item.get("shown")), None)
+    if entry is None:
+        entry = {"reason_code": reason_code, "at": now_iso()}
+        dead_ends.append(entry)
+    entry["shown"] = True
+    if diagnosis:
+        entry["diagnosis"] = diagnosis
+
+
+def check_in_reply(session, step_id):
+    """The gentle check-in for the learner's current step, or None if they have moved on."""
+    goal = current_goal(session)
+    if not goal or goal["id"] != step_id or session["mode"] != "guided":
+        return None
+    step_log(session, step_id)["check_ins"].append({"at": now_iso(), "choice": None})
+    return {
+        "message_type": "check_in",
+        "step_id": step_id,
+        "step_title": goal.get("title", step_id),
+        "drift": list(session.get("drift", {}).get(step_id, [])),
+    }
+
+
 def record_action(session, action):
     sequence = int(action.get("sequence", 0))
     if sequence <= session["last_action_sequence"]:
@@ -609,8 +700,18 @@ def record_action(session, action):
         session["assistance"]["hints"] += 1
     if action.get("type") == "step_demonstrated":
         session["assistance"]["demonstrated_steps"] += 1
+    record_step_clock(session, action.get("step_clock"))
+    if action.get("type") == "check_in_answered":
+        record_check_in_answer(session, action.get("details") or {})
     evidence = action_evidence(session, action)
-    evaluation = evaluate_action(session, action, evidence)
+    earned = restore_state(session) if session["mode"] in {"guided", "challenge"} else None
+    evaluation = evaluate_action(session, action, evidence, earned_state=earned)
+    if evaluation["outcome"] == "dead_end" and evaluation.get("step_id"):
+        step_log(session, evaluation["step_id"])["dead_ends"].append({"reason_code": evaluation["reason_code"], "at": now_iso()})
+    elif evaluation["outcome"] == "drift":
+        record_drift(session, evaluation["step_id"], evaluation["note"])
+    for goal_id in evaluation["goals_progressed"]:
+        session.setdefault("drift", {}).pop(goal_id, None)
     if evaluation["goals_progressed"]:
         session["pending_command"] = None
     session["actions"].append({"action": action, "evaluation": evaluation})
@@ -852,7 +953,8 @@ class Handler(BaseHTTPRequestHandler):
                 message_type = message.get("message_type")
                 if message_type == "action":
                     evaluation = record_action(session, message["action"])
-                    reply = {"message_type": "action_result", "evaluation": evaluation, "session": session_public(session)}
+                    reply = {"message_type": "action_result", "evaluation": evaluation, "session": session_public(session),
+                             "action": {"type": message["action"].get("type"), "sequence": message["action"].get("sequence")}}
                     send_frame(connection, json.dumps(reply))
                     if evaluation["goals_progressed"] and not session["paused"]:
                         command = next_command(session)
@@ -860,6 +962,12 @@ class Handler(BaseHTTPRequestHandler):
                             send_frame(connection, json.dumps(command))
                         elif session["mode"] == "guided" and session["feedback"]:
                             send_frame(connection, json.dumps({"message_type": "complete", "session_id": session_id}))
+                elif message_type == "check_in":
+                    reply = check_in_reply(session, message.get("step_id"))
+                    if reply:
+                        send_frame(connection, json.dumps(reply))
+                elif message_type == "recovery_shown":
+                    record_recovery(session, message)
                 elif message_type == "ack":
                     send_frame(connection, json.dumps({"message_type": "acknowledged", "command_id": message.get("command_id")}))
                 elif message_type == "briefing_ack":

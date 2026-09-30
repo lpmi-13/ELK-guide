@@ -11,7 +11,9 @@ import math
 import re
 
 
-IGNORED_ACTIONS = {"hint_requested", "command_acknowledged", "step_demonstrated"}
+# Coach bookkeeping, not investigation: never evidence, never scored for relevance or efficiency.
+# ``check_in_answered`` records how the learner replied to a guided check-in, which costs nothing.
+IGNORED_ACTIONS = {"hint_requested", "command_acknowledged", "step_demonstrated", "check_in_answered"}
 
 # Actions that reshape what the learner is looking at. When the browser reports that one left
 # zero matching documents (``state_after.result_count == 0``) it is a dead end, not evidence: a
@@ -101,6 +103,19 @@ def _number(value):
         return None
 
 
+def window_reaches_incident(details):
+    """Whether a window's look-back includes when the incident was noticed; None when unknown.
+
+    Either value missing (an unparseable or historical window) is unknown rather than a failure,
+    so detection never regresses to "the correct action does nothing".
+    """
+    look_back = _number(details.get("from_minutes"))
+    incident_offset = _number(details.get("incident_offset_minutes"))
+    if look_back is None or incident_offset is None:
+        return None
+    return look_back + TIME_WINDOW_TOLERANCE_MINUTES >= incident_offset
+
+
 def validate_time_range(session, action, _evidence, validator):
     details, after = _details(action), _after(action)
     time_from = str(details.get("from") or after.get("time_from") or "")
@@ -109,14 +124,8 @@ def validate_time_range(session, action, _evidence, validator):
         if not time_from:
             return False
         # When both the learner's window and the reported incident offset are known, require the
-        # window to reach back far enough to include when the incident was noticed. Either value
-        # missing (an unparseable or historical window) falls back to accepting any applied window,
-        # so detection never regresses to "the correct action does nothing".
-        look_back = _number(details.get("from_minutes"))
-        incident_offset = _number(details.get("incident_offset_minutes"))
-        if look_back is not None and incident_offset is not None:
-            return look_back + TIME_WINDOW_TOLERANCE_MINUTES >= incident_offset
-        return True
+        # window to reach back far enough to include when the incident was noticed.
+        return window_reaches_incident(details) is not False
     expected_from = str(validator.get("from") or _truth(session, validator.get("from_truth"), ""))
     expected_to = str(validator.get("to") or _truth(session, validator.get("to_truth"), ""))
     return (not expected_from or time_from == expected_from) and (not expected_to or time_to == expected_to)
@@ -193,6 +202,43 @@ def validate_inspected(session, action, _evidence, validator):
     return any(_same(actual, item, validator.get("case_sensitive", False)) for item in _expected_values(session, validator))
 
 
+def _base_field(field):
+    return re.sub(r"\.(keyword|text)$", "", str(field or ""))
+
+
+def _added_filter(action):
+    """The filter an action applied: its details when they name one, else the last pill after it."""
+    details = _details(action)
+    if details.get("field"):
+        return details
+    filters = _after(action).get("filters") or []
+    return filters[-1] if filters else {}
+
+
+def validate_filter_field(_session, action, _evidence, validator):
+    """The filter the action applied is on this field, whatever its value."""
+    item = _added_filter(action)
+    field = item.get("field") or _lookup(item, "meta.key")
+    return bool(field) and _same(_base_field(field), _base_field(validator.get("field")))
+
+
+def validate_value_not(session, action, _evidence, validator):
+    """The action's value (the filter it applied, or a detail) is known and is not the expected one."""
+    item = _added_filter(action)
+    actual = item.get("value", _lookup(item, "meta.params.query"))
+    if actual is None or actual == "":
+        return False
+    return not any(_same(actual, expected, validator.get("case_sensitive", False)) for expected in _expected_values(session, validator))
+
+
+def validate_detail_not(session, action, _evidence, validator):
+    """A detail is present and differs from the expected value (an unreported detail is not drift)."""
+    actual = _lookup(_details(action), validator.get("path") or validator.get("field"))
+    if actual is None or actual == "":
+        return False
+    return not any(_same(actual, item, validator.get("case_sensitive", False)) for item in _expected_values(session, validator))
+
+
 def validate_app(_session, action, _evidence, validator):
     app = _details(action).get("app") or _after(action).get("app")
     return _same(app, validator.get("app"))
@@ -214,6 +260,9 @@ VALIDATORS = {
     "result_count": validate_result_count,
     "evidence_minimum": validate_evidence_minimum,
     "detail_equals": validate_detail_equals,
+    "detail_not": validate_detail_not,
+    "filter_field": validate_filter_field,
+    "value_not": validate_value_not,
     "state_equals": validate_state_equals,
     "inspected": validate_inspected,
     "selected_entity": validate_inspected,
@@ -299,12 +348,97 @@ def returned_no_results(action):
     return count is not None and _number(count) == 0
 
 
-def evaluate_action(session, action, evidence=None):
-    """Progress every eligible goal satisfied by this normalized observation."""
-    evidence = evidence or {}
+def _holds_filter(filters, query, earned):
+    """An earned filter is still in force: as an enabled pill, or named with its value in the query."""
+    for item in filters:
+        field = item.get("field") or _lookup(item, "meta.key")
+        value = item.get("value", _lookup(item, "meta.params.query"))
+        negate = bool(item.get("negate", _lookup(item, "meta.negate", False)))
+        if item.get("disabled") or _lookup(item, "meta.disabled"):
+            continue
+        if _same(_base_field(field), _base_field(earned.get("field"))) and _same(value, earned.get("value")) and negate == bool(earned.get("negate")):
+            return True
+    compact = re.sub(r"\s+", "", str(query or "")).casefold()
+    return not earned.get("negate") and bool(compact) and str(earned.get("field", "")).casefold() in compact \
+        and str(earned.get("value", "")).casefold().replace(" ", "") in compact
+
+
+def lost_earned_filters(action, earned_state):
+    """Earned filters (restore_state) the search no longer holds. Only judged when the browser
+    reported the pills applied after the action; a report without them says nothing about pills."""
+    after = _after(action)
+    if not earned_state or "filters" not in after:
+        return []
+    filters, query = after.get("filters") or [], after.get("query", "")
+    return [earned for earned in earned_state.get("filters") or [] if not _holds_filter(filters, query, earned)]
+
+
+def _scope_complete(session):
+    return any(
+        goal["id"] in session.get("completed_goals", set()) and goal.get("reference_action", {}).get("command") == "set_time_range"
+        for goal in playbook_goals(session)
+    )
+
+
+def dead_end(session, action, earned_state=None):
+    """Why the view can no longer answer the current step, or None.
+
+    ``empty_result``: the search left nothing to read. ``lost_earned_state``: a filter a completed step
+    earned is gone. ``window_excludes_incident``: once the window was scoped, a new one no longer
+    reaches back to when the incident was noticed (before scoping, the scope step handles windows).
+    The last two judge the learner's own changes only; the coach's performed actions are trusted.
+    """
     if returned_no_results(action):
-        return {"outcome": "empty_result", "goals_progressed": [], "meaningful": False,
-                "reason": "That search returned no results, so it cannot establish a goal."}
+        return {"reason_code": "empty_result", "reason": "That search returned no results, so it cannot establish a goal."}
+    if action.get("actor") == "tutorial":
+        return None
+    lost = lost_earned_filters(action, earned_state)
+    if lost:
+        names = ", ".join(f"{item['field']}: {item['value']}" for item in lost)
+        return {"reason_code": "lost_earned_state", "lost": lost,
+                "reason": f"The search no longer holds {names}, which an earlier step established."}
+    if action.get("type") == "time_range_changed" and _scope_complete(session) and window_reaches_incident(_details(action)) is False:
+        details = _details(action)
+        return {"reason_code": "window_excludes_incident",
+                "from_minutes": _number(details.get("from_minutes")),
+                "incident_offset_minutes": _number(details.get("incident_offset_minutes")),
+                "reason": "The window no longer reaches back to when the incident was noticed."}
+    return None
+
+
+def current_goal(session):
+    """The step the learner is on: the first unfinished goal, as the coach presents them."""
+    completed = session.get("completed_goals", set())
+    return next((goal for goal in playbook_goals(session) if goal["id"] not in completed), None)
+
+
+ACTION_TOKEN = re.compile(r"\$\{action\.([A-Za-z0-9_.]+)\}")
+
+
+def drift_note(session, action):
+    """The note of the current step's first drift rule this action matches, or None."""
+    goal = current_goal(session)
+    if not goal:
+        return None
+    for route in goal.get("drifts", []):
+        if _route_matches(session, action, {}, route):
+            return goal["id"], ACTION_TOKEN.sub(lambda match: str(_lookup(_details(action), match.group(1), "") or match.group(0)), route.get("note", ""))
+    return None
+
+
+def evaluate_action(session, action, evidence=None, earned_state=None):
+    """Progress every eligible goal satisfied by this normalized observation.
+
+    ``earned_state`` is the search the completed steps established (the service's restore_state);
+    with it, losing an earned filter or narrowing the window off the incident is a dead end too.
+    """
+    evidence = evidence or {}
+    ignored = action.get("type") in IGNORED_ACTIONS
+    blocked = None if ignored else dead_end(session, action, earned_state)
+    if blocked:
+        goal = current_goal(session)
+        return {"outcome": "dead_end", "goals_progressed": [], "meaningful": False,
+                "step_id": goal["id"] if goal else None, **blocked}
     completed = session["completed_goals"]
     progressed, matching_titles = [], []
     # A single observation may establish multiple independent outcomes, but it
@@ -317,6 +451,11 @@ def evaluate_action(session, action, evidence=None):
         if any(_route_matches(session, action, evidence, route) for route in goal.get("accepts", [])):
             progressed.append(goal_id)
             matching_titles.append(goal.get("title", goal_id))
+    if not progressed and not ignored and session.get("mode") in {"guided", "challenge"}:
+        drift = drift_note(session, action)
+        if drift:
+            return {"outcome": "drift", "goals_progressed": [], "meaningful": False, "step_id": drift[0], "note": drift[1],
+                    "reason": "The observation was recorded; it moves away from what this step needs."}
     completed.update(progressed)
     meaningful = bool(progressed)
     reason = "Completed: " + ", ".join(matching_titles) if meaningful else "The observation was recorded but did not yet establish an unfinished goal."
@@ -416,6 +555,7 @@ def score_session(session, trace_is_valid=False, evidence=None):
         "assistance": {**assistance, "score_penalty": penalty},
         "decisive_route": route,
         "detours": detours,
+        "step_detours": step_detours(session),
         "reference_route": [goal.get("reference_action", {}).get("command") for goal in playbook_goals(session)],
         "summary": summary,
         "replay": {"same_seed": manifest["seed"], "new_seed": None, "modes": ["demonstration", "guided", "challenge"]},
@@ -425,6 +565,56 @@ def score_session(session, trace_is_valid=False, evidence=None):
     else:
         feedback["scored"] = True
     return feedback
+
+
+DEAD_END_LABELS = {
+    "missing_colon": "missing colon",
+    "unknown_field": "unknown field",
+    "value_absent": "value not in the data",
+    "empty_result": "search with no results",
+    "lost_earned_state": "removed an earned filter",
+    "window_excludes_incident": "window missed the incident",
+}
+
+
+def dead_end_labels(log):
+    labels = []
+    for entry in log.get("dead_ends") or []:
+        label = DEAD_END_LABELS.get(entry.get("diagnosis") or entry.get("reason_code"), "search with no results")
+        if label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _duration(seconds):
+    seconds = int(round(float(seconds)))
+    return f"{seconds // 60}m {seconds % 60:02d}s" if seconds >= 60 else f"{seconds}s"
+
+
+def step_detail(log):
+    """One short line such as "1m 05s · needed a check-in · recovered from a dead end: missing colon"."""
+    parts = []
+    if log.get("seconds_active") is not None:
+        parts.append(_duration(log["seconds_active"]))
+    check_ins = len(log.get("check_ins") or [])
+    if check_ins:
+        parts.append("needed a check-in" if check_ins == 1 else f"needed {check_ins} check-ins")
+    dead_ends = len(log.get("dead_ends") or [])
+    if dead_ends:
+        prefix = "recovered from a dead end" if dead_ends == 1 else f"recovered from {dead_ends} dead ends"
+        parts.append(f"{prefix}: {', '.join(dead_end_labels(log))}")
+    return " · ".join(parts)
+
+
+def step_detours(session):
+    """Per-step dead ends and drift, for a challenge debrief (no clock, no live feedback)."""
+    detours = []
+    for goal in playbook_goals(session):
+        log = (session.get("step_log") or {}).get(goal["id"]) or {}
+        dead_ends, drift = dead_end_labels(log), list(log.get("drift") or [])
+        if dead_ends or drift:
+            detours.append({"id": goal["id"], "title": goal.get("title", goal["id"]), "dead_ends": dead_ends, "drift": drift})
+    return detours
 
 
 def guided_feedback(session):
@@ -455,10 +645,19 @@ def guided_feedback(session):
             return "shown"
         return "hinted" if goal_id in hinted_ids else "independent"
 
-    steps = [
-        {"id": goal["id"], "title": goal.get("title", goal["id"]), "outcome": outcome(goal["id"])}
-        for goal in goals if goal["id"] in practice_ids
-    ]
+    steps = []
+    for goal in goals:
+        if goal["id"] not in practice_ids:
+            continue
+        log = (session.get("step_log") or {}).get(goal["id"]) or {}
+        step = {"id": goal["id"], "title": goal.get("title", goal["id"]), "outcome": outcome(goal["id"])}
+        # Unscored context for the step row: how long it took and what it took to get through it.
+        detail = step_detail(log)
+        if detail:
+            step["detail"] = detail
+        if log.get("seconds_active") is not None:
+            step["seconds_active"] = log["seconds_active"]
+        steps.append(step)
     return {
         "scored": True,
         "total": total,

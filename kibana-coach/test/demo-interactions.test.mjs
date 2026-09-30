@@ -26,7 +26,8 @@ test('an already selected time window stays in a blue note until Advance', async
   const eyebrow = {textContent: '', hidden: false};
   const advance = {title: ''};
   const detail = {textContent: '', hidden: true};
-  panel.root = {querySelector: selector => ({'#stage': stage, '#phase-headline': headline, '#phase-detail': detail, '#phase-eyebrow': eyebrow, '#advance': advance})[selector]};
+  const actions = {hidden: true, replaceChildren() {}};
+  panel.root = {querySelector: selector => ({'#stage': stage, '#phase-headline': headline, '#phase-detail': detail, '#phase-eyebrow': eyebrow, '#advance': advance, '#stage-actions': actions})[selector]};
   panel.resetCountdown = () => {};
   panel.showTarget = () => {};
   panel.refit = () => {};

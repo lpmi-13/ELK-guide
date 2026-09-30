@@ -1,3 +1,79 @@
+// Guided step clock. Counts only the time the learner is actually working on a step — it pauses
+// while the tab is hidden, the briefing is open, the coach is walking through or recovering, a
+// success is showing, or a check-in is already up — and only resets when the step changes. When the
+// step's budget (command.pace_seconds, never under 45s) runs out it waits for a quiet moment (5s
+// without pointer or key input, no Kibana popover open, the query bar not focused) and then asks for
+// a check-in. After "Keep going" the next one comes at 1.5× the budget; after two, none for the step.
+class GuidedStepClock {
+  constructor({isPaused = () => false, isQuiet = () => true, onDue = () => {}, now = () => performance.now(),
+    // Wrapped: a browser's setTimeout throws "Illegal invocation" when called as a method of this.
+    setTimer = (callback, delay) => setTimeout(callback, delay), clearTimer = id => clearTimeout(id),
+    tickMs = 500, idleMs = 5000} = {}) {
+    Object.assign(this, {isPaused, isQuiet, onDue, now, setTimer, clearTimer, tickMs, idleMs});
+    this.stepId = null;
+    this.timer = null;
+    this.active = 0;
+  }
+
+  start(stepId, budgetSeconds) {
+    this.stop();
+    this.stepId = stepId;
+    this.budget = Math.max(45, Number(budgetSeconds) || 45) * 1000;
+    this.active = 0;
+    this.dueAt = this.budget;
+    this.declines = 0;
+    this.awaiting = false;
+    this.lastTick = this.now();
+    this.lastInput = this.lastTick;
+    this.schedule();
+  }
+
+  // Seconds of active time on the current step (one decimal place).
+  get seconds() { return Math.round(this.active / 100) / 10; }
+
+  stop() {
+    this.clearTimer(this.timer);
+    this.timer = null;
+    this.stepId = null;
+  }
+
+  // Any pointer or key input: the learner is busy, so a due check-in waits.
+  input() { this.lastInput = this.now(); }
+
+  schedule() { this.timer = this.setTimer(() => this.tick(), this.tickMs); }
+
+  tick() {
+    const now = this.now();
+    // A throttled background tab can fire late; never count more than a couple of ticks at once.
+    if (!this.isPaused()) this.active += Math.min(now - this.lastTick, 2 * this.tickMs);
+    this.lastTick = now;
+    if (!this.awaiting && this.dueAt != null && this.active >= this.dueAt && now - this.lastInput >= this.idleMs &&
+        !this.isPaused() && this.isQuiet()) {
+      this.awaiting = true;
+      this.onDue(this.stepId);
+    }
+    if (this.stepId) this.schedule();
+  }
+
+  // "Keep going": back off to 1.5× the budget; after the second, no more check-ins on this step.
+  keepGoing() {
+    this.awaiting = false;
+    this.declines += 1;
+    this.dueAt = this.declines >= 2 ? null : this.active + 1.5 * this.budget;
+  }
+
+  // A hint or Show me was chosen: allow a fresh budget before checking in again.
+  helped() {
+    this.awaiting = false;
+    if (this.dueAt != null) this.dueAt = this.active + this.budget;
+  }
+
+  // The check-in could not be shown just now; try again at the next quiet moment.
+  retry() { this.awaiting = false; }
+}
+
+globalThis.GuidedStepClock = GuidedStepClock;
+
 function startIncidentCoach() {
   if (document.querySelector('#adaptive-incident-coach')) return;
   const host = document.createElement('div');
@@ -19,6 +95,21 @@ function startIncidentCoach() {
   let recoveryController = null;
   let deadEndSince = 0;
   let deadEndPoll = null;
+  // The check-in card on screen ({stepId}), and the learner's latest query with its result count so
+  // an accepted free-text search can carry a note on its success card.
+  let checkIn = null;
+  let lastSearch = null;
+  const stepClock = new GuidedStepClock({
+    isPaused: () => Boolean(document.hidden || coach.paused || coach.briefing?.active || coach.celebrating ||
+      walkthroughController || executionController || recoveryController || checkIn),
+    isQuiet: () => !coach.findPopovers().length && document.activeElement !== adapter.resolve('kibana.query_bar'),
+    onDue: stepId => {
+      try { client?.requestCheckIn(stepId); } catch (_error) { stepClock.retry(); }
+    },
+  });
+  for (const type of ['pointerdown', 'pointermove', 'keydown', 'wheel']) {
+    document.addEventListener(type, () => stepClock.input(), {capture: true, passive: true});
+  }
   const activeSessionKey = 'incident-coach:auto-connect';
   const demonstrationSlowdown = 3;
   const demonstrationTimingScale = 10 * demonstrationSlowdown;
@@ -128,27 +219,49 @@ function startIncidentCoach() {
     }
   }
 
+  function recoveryEligible(command = currentCommand) {
+    return client?.mode === 'guided' && !guidedFeedbackShown && !recoveryController &&
+      !executionController && !adapter.performing && command?.mode === 'guided' && Boolean(command.restore_state) &&
+      !coach.briefing.active;
+  }
+
   // A guided learner can type or filter their way into an empty view ("No results match your search
   // criteria") — e.g. `status_code is 503`, which KQL reads as free text. Nothing on screen can move
   // the investigation forward from there, so once that state persists the coach says what caused it,
   // undoes it, and re-applies the search the completed steps had established (restore_state). If the
   // learner fixes it themselves first, the coach steps aside.
   function checkDeadEnd() {
-    const command = currentCommand;
-    const eligible = client?.mode === 'guided' && !guidedFeedbackShown && !recoveryController &&
-      !executionController && !adapter.performing && command?.mode === 'guided' && command.restore_state &&
-      !coach.briefing.active;
-    if (!eligible || !KibanaActionObserver.noResultsShown()) {
+    if (!recoveryEligible() || !KibanaActionObserver.noResultsShown()) {
       deadEndSince = 0;
       return;
     }
     deadEndSince ||= Date.now();
     if (Date.now() - deadEndSince < 1500) return;
     deadEndSince = 0;
-    recoverFromDeadEnd(command);
+    recoverFromDeadEnd(currentCommand);
   }
 
-  function describeDeadEnd(state) {
+  function listText(items) {
+    return items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+  }
+
+  function minutesText(minutes) {
+    if (minutes == null) return 'a moment';
+    if (minutes < 1) return `${Math.round(minutes * 60)} seconds`;
+    const rounded = Math.round(minutes);
+    return `${rounded} minute${rounded === 1 ? '' : 's'}`;
+  }
+
+  // The earned filter is still in force: as an enabled pill, or named with its value in the query.
+  function holdsFilter(filter) {
+    const pill = observer.readFilterPills().some(item => !item.disabled && item.field === filter.field &&
+      String(item.value) === String(filter.value) && Boolean(item.negate) === Boolean(filter.negate));
+    const query = (adapter.resolve('kibana.query_bar')?.value || '').replace(/\s+/g, '').toLowerCase();
+    return pill || (!filter.negate && query.includes(String(filter.field).toLowerCase()) &&
+      query.includes(String(filter.value).replace(/\s+/g, '').toLowerCase()));
+  }
+
+  function describeEmptySearch(state) {
     const query = (adapter.resolve('kibana.query_bar')?.value || '').trim();
     const expected = state.filters || [];
     const stray = observer.readFilterPills().filter(pill => !expected.some(filter =>
@@ -156,16 +269,11 @@ function startIncidentCoach() {
     const causes = [];
     if (query && query !== (state.query || '').trim()) causes.push(`The query “${query}”`);
     for (const pill of stray) causes.push(`${causes.length ? 'the' : 'The'} filter ${pill.negate ? 'NOT ' : ''}${pill.field}: ${pill.value}`);
-    const cause = causes.length
-      ? causes.length === 1 ? causes[0] : `${causes.slice(0, -1).join(', ')} and ${causes[causes.length - 1]}`
-      : 'The current search';
-    const detail = [];
-    // KQL compares a field with a colon; "field is value" or "field = value" is read as free text.
-    if (query && !query.includes(':') && /\s(is|equals|==?)\s/i.test(query)) {
-      detail.push('Tip: KQL matches a field with a colon — field: value.');
-    }
-    detail.push('I’ll clear it and put the search back to where this step starts. Or fix it yourself — I’ll step aside as soon as results come back.');
-    return {headline: `${cause} left no matching results, so there’s nothing here to investigate.`, detail: detail.join('\n\n')};
+    const cause = causes.length ? listText(causes) : 'The current search';
+    return {
+      headline: `${cause} left no matching results, so there’s nothing here to investigate.`,
+      detail: 'I’ll clear it and put the search back to where this step starts. Or fix it yourself — I’ll step aside as soon as results come back.',
+    };
   }
 
   async function searchIsEmpty() {
@@ -175,36 +283,140 @@ function startIncidentCoach() {
     return count === 0 || (count == null && KibanaActionObserver.noResultsShown());
   }
 
-  async function recoverFromDeadEnd(command) {
+  // What went wrong, how to tell the learner has fixed it, and how the coach puts it right.
+  // `reason` is the service's dead_end evaluation, or null when the browser saw "No results" itself.
+  async function describeDeadEnd(state, reason) {
+    const code = reason?.reason_code || 'empty_result';
+    if (code === 'lost_earned_state') {
+      const lost = reason.lost || [];
+      const names = lost.map(filter => `${filter.negate ? 'NOT ' : ''}${filter.field}: ${filter.value}`);
+      return {
+        eyebrow: 'Earned filter removed — back on track',
+        headline: `Without ${listText(names) || 'that filter'}, the view no longer holds what an earlier step established, so this step can’t be answered from here.`,
+        detail: 'I’ll put it back and keep the rest of your search. Or add it again yourself — I’ll step aside.',
+        stillBroken: () => lost.some(filter => !holdsFilter(filter)),
+        restore: async () => adapter.restoreDiscoverState(state, {merge: true}),
+      };
+    }
+    if (code === 'window_excludes_incident') {
+      const offset = reason.incident_offset_minutes ?? coach.currentBriefing?.detected_offset_minutes;
+      return {
+        eyebrow: 'Incident outside the window — back on track',
+        headline: `The window now starts ${minutesText(reason.from_minutes)} ago, but the incident was noticed ${minutesText(offset)} ago, so it’s outside the view.`,
+        detail: 'I’ll put back the window you set earlier. Or widen it yourself — I’ll step aside.',
+        stillBroken: () => {
+          const range = observer.readTimeRange();
+          const minutes = observer.timeRangeMinutes(range.from, range.to);
+          return minutes != null && offset != null && minutes + 1 < offset;
+        },
+        restore: async () => adapter.restoreDiscoverState(state, {timeOnly: true}),
+      };
+    }
+    const problem = {
+      ...describeEmptySearch(state),
+      eyebrow: 'No results — back on track',
+      stillBroken: () => KibanaActionObserver.noResultsShown(),
+      restore: async () => {
+        if (!adapter.restoreDiscoverState(state)) throw new Error('The search could not be restored automatically. Clear the query and filters to continue.');
+        // Query and filters first; reset the window too only if that alone doesn't bring results back.
+        if (await searchIsEmpty()) {
+          adapter.restoreDiscoverState(state, {includeTime: true});
+          if (await searchIsEmpty()) throw new Error('The search is still empty after restoring it. Try widening the time range.');
+        }
+        return true;
+      },
+    };
+    const query = (adapter.resolve('kibana.query_bar')?.value || '').trim();
+    if (query && query !== (state.query || '').trim()) {
+      const diagnosis = QueryExplainer.explain(query, await adapter.loadFieldNames(), {resultCount: 0});
+      if (diagnosis && diagnosis.kind !== 'free_text_luck') {
+        problem.diagnosis = diagnosis;
+        problem.eyebrow = 'No results — here’s why';
+        problem.headline = diagnosis.message;
+        problem.detail = diagnosis.fix
+          ? 'Fix my query puts the corrected query in the search bar for you to run. Or reset the search to where this step starts.'
+          : diagnosis.kind === 'value_absent'
+            ? 'Show top values opens the field so you can pick a value that is really there. Or reset the search to where this step starts.'
+            : 'Correct the query, or reset the search to where this step starts.';
+      }
+    }
+    return problem;
+  }
+
+  // Put the corrected query in the search bar without running it: the learner presses Enter.
+  function fillQuery(text) {
+    const input = adapter.resolve('kibana.query_bar');
+    if (!input) return false;
+    adapter.setNativeValue(input, text, {commit: false});
+    input.focus();
+    input.setSelectionRange?.(text.length, text.length);
+    return true;
+  }
+
+  function openFieldValues(field) {
+    const escaped = String(field).replace(/['\\]/g, '\\$&');
+    const button = document.querySelector(`[data-test-subj='field-${escaped}-showDetails']`);
+    if (!button) {
+      coach.toast(`Open ${field} in the field list to see its top values.`);
+      return;
+    }
+    // The coach opening the popover is not the learner's action.
+    adapter.performing = true;
+    try { button.click(); } finally { adapter.performing = false; }
+  }
+
+  // A diagnosed query: wait for Fix my query / Show top values / Reset search. Resolves when the
+  // learner asks for the reset; rejects (AbortError) when they fix it themselves.
+  function awaitRecoveryChoice(problem, signal) {
+    return new Promise((resolve, reject) => {
+      const {diagnosis} = problem;
+      const reset = {id: 'reset', label: 'Reset search', onSelect: () => resolve()};
+      const render = (detail, choices) => coach.showRecovery({eyebrow: problem.eyebrow, headline: problem.headline, detail, choices});
+      const choices = [];
+      if (diagnosis.fix) {
+        choices.push({id: 'fix', label: 'Fix my query', primary: true, onSelect: () => {
+          if (fillQuery(diagnosis.fix)) render(`The corrected query is in the search bar: ${diagnosis.fix}\n\nPress Enter to run it.`, [reset]);
+        }});
+      }
+      if (diagnosis.kind === 'value_absent') {
+        choices.push({id: 'values', label: 'Show top values', primary: true, onSelect: () => openFieldValues(diagnosis.field)});
+      }
+      render(problem.detail, [...choices, reset]);
+      signal.addEventListener('abort', () => reject(new DOMException('Recovery stepped aside', 'AbortError')), {once: true});
+    });
+  }
+
+  async function recoverFromDeadEnd(command, reason = null) {
     const controller = new AbortController();
     recoveryController = controller;
+    checkIn = null;
     const state = command.restore_state;
-    // The learner fixing it themselves during the explanation cancels the restore.
-    const selfFixed = setInterval(() => {
-      if (!KibanaActionObserver.noResultsShown()) controller.abort();
-    }, 400);
+    let watch = null;
     let restored = false;
     try {
-      const problem = describeDeadEnd(state);
-      coach.showRecovery(problem);
-      const pause = readingPause(problem.headline, problem.detail);
-      coach.startCountdown(pause);
-      await readingBeatWait(pause, controller.signal);
-      clearInterval(selfFixed);
+      const problem = await describeDeadEnd(state, reason);
+      try { client.reportRecovery(command.step_id, reason?.reason_code || 'empty_result', problem.diagnosis?.kind); } catch (_error) { /* offline */ }
+      // The learner fixing it themselves during the explanation cancels the restore.
+      watch = setInterval(() => {
+        if (!problem.stillBroken()) controller.abort();
+      }, 400);
+      if (problem.diagnosis) {
+        await awaitRecoveryChoice(problem, controller.signal);
+      } else {
+        coach.showRecovery(problem);
+        const pause = readingPause(problem.headline, problem.detail);
+        coach.startCountdown(pause);
+        await readingBeatWait(pause, controller.signal);
+      }
+      clearInterval(watch);
       coach.showRecoveryWorking();
       // Mute the observer: the coach's own restore must not be reported as the learner's action.
       adapter.performing = true;
-      if (!adapter.restoreDiscoverState(state)) throw new Error('The search could not be restored automatically. Clear the query and filters to continue.');
-      // Query and filters first; reset the window too only if that alone doesn't bring results back.
-      if (await searchIsEmpty()) {
-        adapter.restoreDiscoverState(state, {includeTime: true});
-        if (await searchIsEmpty()) throw new Error('The search is still empty after restoring it. Try widening the time range.');
-      }
-      restored = true;
+      restored = await problem.restore();
     } catch (error) {
       if (error.name !== 'AbortError') coach.toast(error.message, true);
     } finally {
-      clearInterval(selfFixed);
+      clearInterval(watch);
       adapter.performing = false;
       observer?.rebaseline();
       if (recoveryController === controller) recoveryController = null;
@@ -213,6 +425,36 @@ function startIncidentCoach() {
         if (restored) coach.toast('Search restored — carry on with this step.');
       }
     }
+  }
+
+  // The step clock ran out: a soft card with the step, the latest drift the service noticed, and
+  // Keep going / Give me a hint / Show me. Answering it costs nothing.
+  function showCheckIn(message) {
+    if (!currentCommand || message.step_id !== currentCommand.step_id || message.step_id !== stepClock.stepId ||
+        recoveryController || executionController || coach.celebrating || guidedFeedbackShown) {
+      stepClock.retry();
+      return;
+    }
+    checkIn = {stepId: message.step_id};
+    const answer = choice => {
+      if (checkIn?.stepId !== message.step_id) return;
+      checkIn = null;
+      client.sendAction({type: 'check_in_answered', details: {step_id: message.step_id, choice}}, 'learner');
+      if (choice === 'keep_going') stepClock.keepGoing(); else stepClock.helped();
+      coach.showCommand(currentCommand, adapter.resolve(currentCommand.target));
+      if (choice === 'hint') coach.revealHint();
+      if (choice === 'show_me') coach.onDemonstrate?.();
+    };
+    const drift = message.drift || [];
+    coach.showCheckIn({
+      title: message.step_title || currentCommand.step_id.replaceAll('-', ' '),
+      drift: drift[drift.length - 1] || '',
+      choices: [
+        {id: 'keep_going', label: 'Keep going', primary: true, onSelect: () => answer('keep_going')},
+        {id: 'hint', label: 'Give me a hint', onSelect: () => answer('hint')},
+        {id: 'show_me', label: 'Show me', onSelect: () => answer('show_me')},
+      ],
+    });
   }
 
   async function finishDemonstration(command) {
@@ -234,11 +476,15 @@ function startIncidentCoach() {
     guidedFeedbackShown = false;
     await adapter.initialize();
     client = new IncidentSessionClient(config);
+    client.stepClock = () => stepClock.stepId ? {step_id: stepClock.stepId, seconds_active: stepClock.seconds} : null;
+    client.onCheckIn = showCheckIn;
     client.onStatus = message => coach.toast(message);
     client.onError = message => coach.toast(message, true);
     client.onComplete = async () => {
       if (client.mode !== 'guided' || guidedFeedbackShown) return;
       guidedFeedbackShown = true;
+      stepClock.stop();
+      checkIn = null;
       try {
         const feedback = await client.getFeedback();
         observer?.stop();
@@ -251,12 +497,23 @@ function startIncidentCoach() {
     };
     client.onHint = hint => coach.showHint(hint);
     client.onActionResult = result => {
-      // The service measured the learner's search as empty; start recovering without waiting out
-      // the usual grace period.
-      if (result.evaluation.outcome === 'empty_result') deadEndSince = 1;
-      if (result.evaluation.outcome === 'accepted') {
-        const reason = String(result.evaluation.reason || '').replace(/^Completed:\s*/i, '').trim();
-        coach.celebrate(reason || 'This step revealed useful evidence.');
+      const {evaluation} = result;
+      // The service found the learner's change left the step unanswerable. An empty search starts
+      // recovering without waiting out the usual grace period; a lost filter or a window that misses
+      // the incident still shows results, so recover from it directly.
+      if (client.mode === 'guided' && (evaluation.outcome === 'dead_end' || evaluation.outcome === 'empty_result')) {
+        if ((evaluation.reason_code || 'empty_result') === 'empty_result') deadEndSince = 1;
+        else if (recoveryEligible()) recoverFromDeadEnd(currentCommand, evaluation);
+      }
+      if (evaluation.outcome === 'accepted') {
+        const reason = String(evaluation.reason || '').replace(/^Completed:\s*/i, '').trim();
+        // A bare value that happened to find the right documents still earns the step, with a note.
+        let note = '';
+        if (lastSearch && result.action?.sequence === lastSearch.sequence && lastSearch.count > 0) {
+          const explained = QueryExplainer.explain(lastSearch.query, adapter.fieldNames(), {resultCount: lastSearch.count});
+          if (explained?.kind === 'free_text_luck') note = explained.message;
+        }
+        coach.celebrate(reason || 'This step revealed useful evidence.', note);
       }
     };
     client.onBriefing = async briefing => {
@@ -280,6 +537,13 @@ function startIncidentCoach() {
       // own action satisfied it), so stop explaining it rather than narrate over the next step.
       if (command.mode === 'guided') executionController?.abort();
       currentCommand = command;
+      // The clock times a step, so a re-sent command for the same step keeps counting.
+      checkIn = null;
+      if (command.mode === 'guided' && command.pace_seconds) {
+        if (stepClock.stepId !== command.step_id) stepClock.start(command.step_id, command.pace_seconds);
+      } else {
+        stepClock.stop();
+      }
       if (command.mode === 'demonstration' && command.type === 'show_debrief') {
         finishDemonstration(command);
         return;
@@ -311,6 +575,9 @@ function startIncidentCoach() {
         }
       }
       client.sendAction(action, 'learner');
+      if (action.type === 'query_submitted') {
+        lastSearch = {sequence: client.sequence, query: action.details?.query || '', count: action.state_after?.result_count};
+      }
     });
     observer.start();
     clearTimeout(deadEndPoll);
@@ -354,6 +621,8 @@ function startIncidentCoach() {
     coach.onStop = () => {
       executionController?.abort();
       currentCommand = null;
+      stepClock.stop();
+      checkIn = null;
       recoveryController?.abort();
       clearTimeout(deadEndPoll);
       observer.stop();

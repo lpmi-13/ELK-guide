@@ -30,7 +30,7 @@ function makeClock() {
 
 async function makeDemo() {
   const clock = makeClock();
-  const calls = {countdowns: [], resumes: [], commands: 0, actions: 0, messages: [], phases: [], learning: null, updatedTargets: []};
+  const calls = {countdowns: [], resumes: [], commands: 0, actions: 0, messages: [], phases: [], learning: null, updatedTargets: [], checkIns: [], hints: 0};
   let coach;
   let client;
   let adapter;
@@ -47,6 +47,9 @@ async function makeDemo() {
     finishCommand() {}
     updateCommandTarget(command, target) { calls.updatedTargets.push({command, target}); }
     toast() {}
+    findPopovers() { return []; }
+    showCheckIn(card) { calls.checkIns.push(card); }
+    revealHint() { calls.hints++; }
   }
   class Adapter {
     constructor() { adapter = this; }
@@ -59,7 +62,8 @@ async function makeDemo() {
     constructor() { client = this; }
     async connect() { return {session_id: 'test'}; }
     send(message) { calls.messages.push(message); }
-    sendAction(action) { calls.messages.push(action); }
+    sendAction(action) { calls.messages.push({...action, step_clock: this.stepClock?.()}); }
+    requestCheckIn(step_id) { calls.messages.push({message_type: 'check_in', step_id}); }
     acknowledge() {}
   }
   class Observer { start() {} stop() {} }
@@ -69,6 +73,7 @@ async function makeDemo() {
     querySelector: () => null,
     createElement: () => ({}),
     documentElement: {append() {}},
+    addEventListener() {},
   };
   const storage = {getItem: () => JSON.stringify({session: 'test'})};
   const window = {};
@@ -179,4 +184,47 @@ test('the countdown bar continues from its frozen width for the remaining durati
   panel.resumeCountdown(750);
   assert.equal(fill.style.transition, 'width 750ms linear');
   assert.equal(fill.style.width, '100%');
+});
+
+test('a guided step that runs over its budget gets a gentle check-in that costs nothing', async () => {
+  const demo = await makeDemo();
+  const command = {command_id: 'guided-isolate', step_id: 'isolate', mode: 'guided', type: 'add_filter',
+    target: 'kibana.filter_bar', narration: 'Filter the status code', pace_seconds: 60};
+  await demo.client.onCommand(command);
+  demo.clock.advance(59_500);
+  assert.deepEqual(demo.calls.messages, []);
+  demo.clock.advance(500); // no input all along, so the learner is already idle
+  assert.deepEqual(demo.calls.messages, [{message_type: 'check_in', step_id: 'isolate'}]);
+
+  demo.client.onCheckIn({message_type: 'check_in', step_id: 'isolate', step_title: 'Filter to the failing status code',
+    drift: ['You opened url.path; this step is about the status codes.', 'You filtered on a status code, but not the one that stood out in the top values.']});
+  const card = demo.calls.checkIns[0];
+  assert.equal(card.title, 'Filter to the failing status code');
+  assert.equal(card.drift, 'You filtered on a status code, but not the one that stood out in the top values.');
+  assert.deepEqual(card.choices.map(choice => choice.label), ['Keep going', 'Give me a hint', 'Show me']);
+
+  // The clock stands still while the card is up.
+  demo.clock.advance(30_000);
+  card.choices[0].onSelect();
+  const answered = demo.calls.messages[1];
+  assert.equal(answered.type, 'check_in_answered');
+  assert.deepEqual(answered.details, {step_id: 'isolate', choice: 'keep_going'});
+  assert.equal(answered.step_clock.step_id, 'isolate');
+  assert.equal(answered.step_clock.seconds_active, 60);
+  assert.equal(demo.calls.commands, 2); // back to the step's own card
+
+  // Keep going: nothing more before 1.5x the budget.
+  demo.clock.advance(89_000);
+  assert.equal(demo.calls.messages.length, 2);
+  demo.clock.advance(1_000);
+  assert.deepEqual(demo.calls.messages[2], {message_type: 'check_in', step_id: 'isolate'});
+
+  // A re-sent command for the same step keeps its clock; a stale check-in reply is ignored.
+  await demo.client.onCommand(command);
+  demo.client.onCheckIn({message_type: 'check_in', step_id: 'scope', step_title: 'Set the time window', drift: []});
+  assert.equal(demo.calls.checkIns.length, 1);
+  demo.client.onCheckIn({message_type: 'check_in', step_id: 'isolate', step_title: 'Filter', drift: []});
+  demo.calls.checkIns[1].choices[1].onSelect();
+  assert.equal(demo.calls.hints, 1);
+  assert.equal(demo.calls.checkIns[1].drift, '');
 });

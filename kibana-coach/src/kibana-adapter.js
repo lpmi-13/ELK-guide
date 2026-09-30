@@ -83,6 +83,124 @@ const KibanaRison = {
 
 globalThis.KibanaRison = KibanaRison;
 
+// Explains why a KQL query did not do what the learner meant, from nothing but the query text, the
+// data view's field names and (when known) the result count. Verified against Kibana 9.5.2 by
+// capturing the Elasticsearch request: `field is 503` / `field = 503` go out as one free-text
+// multi_match across every field (0 hits), and a bare `503` is free text that only finds the right
+// documents by luck. Returns null when there is nothing specific to say, so the caller keeps its
+// generic wording.
+const QueryExplainer = {
+  operator: /(^|[\s(])(?:not\s+)?([A-Za-z_@][\w.@-]*)\s*(?:==?|\s(?:is|equals)\s)\s*("[^"]*"|[^\s()]+)/gi,
+
+  // Clause text outside quoted strings, so a colon inside "/api/x:1" is not read as a field link.
+  unquoted(query) {
+    return query.replace(/"(?:[^"\\]|\\.)*"/g, match => ' '.repeat(match.length));
+  },
+
+  known(field, fields) {
+    const base = field.replace(/\.(keyword|text)$/, '');
+    return fields.has(field) || fields.has(base);
+  },
+
+  distance(left, right) {
+    const previous = Array.from({length: right.length + 1}, (_, index) => index);
+    for (let i = 1; i <= left.length; i += 1) {
+      let diagonal = previous[0];
+      previous[0] = i;
+      for (let j = 1; j <= right.length; j += 1) {
+        const above = previous[j];
+        previous[j] = Math.min(previous[j] + 1, previous[j - 1] + 1, diagonal + (left[i - 1] === right[j - 1] ? 0 : 1));
+        diagonal = above;
+      }
+    }
+    return previous[right.length];
+  },
+
+  closest(field, fields) {
+    let best = null;
+    for (const candidate of fields) {
+      const score = QueryExplainer.distance(field.toLowerCase(), candidate.toLowerCase());
+      if (!best || score < best.score || (score === best.score && candidate.length < best.field.length)) best = {field: candidate, score};
+    }
+    // Only a near miss is worth suggesting; a distant "closest" field would be a guess.
+    return best && best.score <= Math.max(2, Math.floor(field.length / 3)) ? best.field : null;
+  },
+
+  // {kind, message, fix?, field?, value?} for the first mistake found, or null.
+  explain(query, fieldNames = [], {resultCount = null} = {}) {
+    const text = String(query || '').trim();
+    if (!text) return null;
+    const fields = new Set(fieldNames);
+    const bare = QueryExplainer.unquoted(text);
+
+    // missing_colon: `field is value`, `field = value`, `field == value`, `field equals value`.
+    // Matched on the original text (the value may be quoted), ignoring anything inside quotes.
+    const wrong = [...text.matchAll(QueryExplainer.operator)]
+      .filter(match => bare[match.index + match[1].length] === text[match.index + match[1].length])
+      .filter(match => (fields.size ? QueryExplainer.known(match[2], fields) : match[2].includes('.')));
+    if (wrong.length) {
+      let fix = text;
+      // Rewrite from the end so earlier offsets stay valid.
+      for (const match of [...wrong].reverse()) {
+        const start = match.index + match[1].length;
+        const end = match.index + match[0].length;
+        const negated = /^not\s+/i.test(text.slice(start, end));
+        fix = `${fix.slice(0, start)}${negated ? 'not ' : ''}${match[2]}: ${match[3]}${fix.slice(end)}`;
+      }
+      return {
+        kind: 'missing_colon',
+        field: wrong[0][2],
+        message: `Kibana searched every field for the text ‘${text}’. KQL links a field to a value with a colon.`,
+        fix,
+      };
+    }
+
+    const links = [...bare.matchAll(/(?<![\w.@-])([A-Za-z_@][\w.@-]*)\s*:/g)].map(match => ({field: match[1], index: match.index, end: match.index + match[0].length}));
+
+    // unknown_field: the name before a colon is not a field in this data view.
+    if (fields.size) {
+      const unknown = links.find(link => !link.field.includes('*') && !QueryExplainer.known(link.field, fields));
+      if (unknown) {
+        const suggestion = QueryExplainer.closest(unknown.field, fields);
+        return {
+          kind: 'unknown_field',
+          field: unknown.field,
+          suggestion,
+          message: `No field named ${unknown.field} in this data view.${suggestion ? ` Did you mean ${suggestion}?` : ''}`,
+          fix: suggestion ? `${text.slice(0, unknown.index)}${suggestion}${text.slice(unknown.index + unknown.field.length)}` : undefined,
+        };
+      }
+    }
+
+    // value_absent: a valid `field: value`, but nothing in the window has that value.
+    if (resultCount === 0 && links.length) {
+      const link = links[links.length - 1];
+      const raw = /^\s*("[^"]*"|[^\s()]+)/.exec(text.slice(link.end));
+      const value = raw ? raw[1].replace(/^"|"$/g, '') : '';
+      if (value && !/[*<>]/.test(value)) {
+        return {
+          kind: 'value_absent',
+          field: link.field,
+          value,
+          message: `No ${link.field} values of ‘${value}’ in this window. Check the field's Top values.`,
+        };
+      }
+    }
+
+    // free_text_luck: a bare value with no field that happened to find documents.
+    if (resultCount > 0 && !links.length && !/[<>=]/.test(bare) && !/\b(and|or|not)\b/i.test(bare) && !bare.includes('*')) {
+      return {
+        kind: 'free_text_luck',
+        value: text,
+        message: `This worked, but it searches every field for ${text}. Naming the field says what you mean.`,
+      };
+    }
+    return null;
+  },
+};
+
+globalThis.QueryExplainer = QueryExplainer;
+
 class KibanaAdapter {
   constructor() {
     this.registry = null;
@@ -375,14 +493,12 @@ class KibanaAdapter {
     return {type: 'trace_opened', details: {trace_id: traceId}, state_after: {trace_id: traceId, query: traceQuery}};
   }
 
-  // Put Discover's search back to `state` (see the service's restore_state): drop whatever query and
-  // filter pills are applied now and apply the ones the completed steps established instead. The
-  // window is kept unless `includeTime` asks for it too (it is only reset when the query and filters
-  // alone don't bring results back). Returns false when the page has no Discover state to rewrite.
-  restoreDiscoverState(state = {}, {includeTime = false} = {}) {
+  // Discover's URL state: the parsed `_a` (app) and `_g` (global) rison plus what is needed to write
+  // it back. Null when this page has no Discover state to read.
+  readDiscoverUrlState() {
     const hash = location.hash || '';
     const split = hash.indexOf('?');
-    if (split < 0 || !/\/app\/discover/.test(location.pathname)) return false;
+    if (split < 0 || !/\/app\/discover/.test(location.pathname)) return null;
     const params = hash.slice(split + 1).split('&').map(part => {
       const at = part.indexOf('=');
       return at < 0 ? [part, null] : [part.slice(0, at), decodeURIComponent(part.slice(at + 1))];
@@ -394,19 +510,44 @@ class KibanaAdapter {
     };
     const app = read('_a');
     const global = read('_g');
-    if (!app || !global) return false;
+    if (!app || !global) return null;
+    return {hash, split, params, app, global};
+  }
+
+  // Put Discover's search back to `state` (see the service's restore_state): drop whatever query and
+  // filter pills are applied now and apply the ones the completed steps established instead. The
+  // window is kept unless `includeTime` asks for it too (it is only reset when the query and filters
+  // alone don't bring results back). `merge` keeps the learner's own query and pills and only re-adds
+  // earned filters that are missing; `timeOnly` touches nothing but the window. Returns false when the
+  // page has no Discover state to rewrite.
+  restoreDiscoverState(state = {}, {includeTime = false, merge = false, timeOnly = false} = {}) {
+    const current = this.readDiscoverUrlState();
+    if (!current) return false;
+    const {hash, split, params, app, global} = current;
     const dataViewId = app.dataSource?.dataViewId || app.index;
     const esql = typeof app.query?.esql === 'string';
-    if (!esql) app.query = {language: 'kuery', query: state.query || ''};
-    app.filters = (state.filters || []).map(filter => {
+    const pill = filter => {
       const value = filter.value == null ? '' : String(filter.value);
       return {
         '$state': {store: 'appState'},
         meta: {alias: null, disabled: false, index: dataViewId, key: filter.field, negate: Boolean(filter.negate), params: {query: value}, type: 'phrase'},
         query: {match_phrase: {[filter.field]: value}},
       };
-    });
-    global.filters = [];
+    };
+    if (timeOnly) {
+      includeTime = true;
+    } else if (merge) {
+      const existing = [...(app.filters || []), ...(global.filters || [])];
+      const holds = filter => existing.some(item => !item.meta?.disabled
+        && String(item.meta?.key || '').replace(/\.(keyword|text)$/, '') === filter.field
+        && String(item.meta?.params?.query ?? '') === String(filter.value ?? '')
+        && Boolean(item.meta?.negate) === Boolean(filter.negate));
+      app.filters = [...(app.filters || []), ...(state.filters || []).filter(filter => !holds(filter)).map(pill)];
+    } else {
+      if (!esql) app.query = {language: 'kuery', query: state.query || ''};
+      app.filters = (state.filters || []).map(pill);
+      global.filters = [];
+    }
     const time = state.time || state.baseline_time;
     if (includeTime && time?.from) global.time = {from: time.from, to: time.to || 'now'};
     const encode = value => encodeURIComponent(KibanaRison.encode(value)).replace(/%(21|27|28|29|2A|2C|3A|40|24)/gi, escaped => decodeURIComponent(escaped));
@@ -418,6 +559,34 @@ class KibanaAdapter {
     const next = `${hash.slice(0, split)}?${rebuilt.join('&')}`;
     if (next !== hash) location.hash = next;
     return true;
+  }
+
+  // Field names the query explainer can check a query against: the Discover sidebar's field rows
+  // plus, once loadFieldNames() has fetched them, every field of the current data view (the sidebar
+  // collapses its Empty/Meta groups, so it alone would call real fields unknown).
+  fieldNames() {
+    const names = new Set(this.dataViewFields?.names || []);
+    for (const node of document.querySelectorAll("[data-test-subj^='dscFieldListPanelField-']")) {
+      names.add(node.getAttribute('data-test-subj').replace(/^dscFieldListPanelField-/, ''));
+    }
+    return [...names];
+  }
+
+  async loadFieldNames() {
+    const dataViewId = (() => {
+      const app = this.readDiscoverUrlState()?.app;
+      return app?.dataSource?.dataViewId || app?.index;
+    })();
+    if (!dataViewId || this.dataViewFields?.id === dataViewId) return this.fieldNames();
+    const space = location.pathname.match(/^\/s\/([^/]+)/)?.[1];
+    try {
+      const response = await fetch(`${space ? `/s/${space}` : ''}/api/data_views/data_view/${encodeURIComponent(dataViewId)}`, {credentials: 'same-origin'});
+      if (response.ok) {
+        const body = await response.json();
+        this.dataViewFields = {id: dataViewId, names: Object.keys(body.data_view?.fields || {})};
+      }
+    } catch (_error) { /* the sidebar's fields are still usable */ }
+    return this.fieldNames();
   }
 
   // A brief pause that only lets Kibana's DOM catch up after a click — a popover opening, a filter

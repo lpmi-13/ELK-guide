@@ -24,6 +24,8 @@
     "mode": {"enum": ["demonstration", "guided", "challenge"]}, "narration": {"type": "string"},
     "reasoning": {"type": "string"}, "evidence": {"type": "string"}, "concept": {"type": "string"},
     "answer_schema": {"type": "object"}, "message_type": {"type": "string"}, "step_id": {"type": "string"},
-    "step_index": {"type": "integer"}, "step_count": {"type": "integer"}
+    "step_index": {"type": "integer"}, "step_count": {"type": "integer"},
+    "learning_focus": {"type": "array"}, "walkthrough": {"type": "object"}, "restore_state": {"type": "object"},
+    "pace_seconds": {"type": "integer", "minimum": 45, "description": "Guided only: active seconds the step clock allows before a gentle check-in."}
   }
 }

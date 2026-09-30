@@ -11,6 +11,7 @@ class IncidentCoachPanel {
           <p id="phase-eyebrow" class="eyebrow"></p>
           <p id="phase-headline"></p>
           <p id="phase-detail" hidden></p>
+          <div id="stage-actions" class="stage-actions" hidden></div>
           <div id="countdown" class="countdown" aria-hidden="true" hidden><span></span></div>
         </section>
         <div class="actions"><button id="pause">Pause</button><button id="advance" title="Complete this step now and continue">Advance</button><button id="incident-info" title="Review the initial incident briefing">Incident info</button><button id="hint">Hint</button><button id="demonstrate">Show me</button><button id="review-feedback" hidden>Review feedback</button></div>
@@ -147,7 +148,7 @@ class IncidentCoachPanel {
     this.clearHint();
     this.host.hidden = false;
     this.panel.hidden = false;
-    this.root.querySelector('#stage').classList.remove('success', 'celebrate-in', 'recovery');
+    this.root.querySelector('#stage').classList.remove('success', 'celebrate-in', 'recovery', 'checkin');
     this.activeCommandId = command.command_id;
     this.activeTarget = target;
     this.evidenceField = null;
@@ -200,9 +201,11 @@ class IncidentCoachPanel {
     }
   }
 
-  // The learner's own input left the view with no results. Explain what went wrong and that the
-  // coach is about to put the search back; Advance ("Restore now") skips the reading countdown.
-  showRecovery({headline, detail}) {
+  // The learner's own input left the view unable to answer the step (no results, an earned filter
+  // gone, a window that misses the incident). Explain what went wrong. With `choices` (a diagnosed
+  // query: Fix my query / Reset search) the learner picks; without, the coach is about to put the
+  // search back and Advance ("Restore now") skips the reading countdown.
+  showRecovery({eyebrow = 'No results — back on track', headline, detail, choices}) {
     clearTimeout(this.celebrateTimer);
     this.celebrating = false;
     this.advanceRequested = false;
@@ -214,14 +217,15 @@ class IncidentCoachPanel {
     this.phase = 'recovery';
     for (const id of ['#hint', '#demonstrate', '#incident-info', '#pause', '#review-feedback']) this.root.querySelector(id).hidden = true;
     const advance = this.root.querySelector('#advance');
-    advance.hidden = false;
+    advance.hidden = Boolean(choices?.length);
     advance.textContent = 'Restore now';
     advance.title = 'Put the search back now';
     const stage = this.root.querySelector('#stage');
     stage.hidden = false;
-    stage.classList.remove('success', 'celebrate-in', 'acting');
+    stage.classList.remove('success', 'celebrate-in', 'acting', 'checkin');
     stage.classList.add('recovery');
-    this.renderPhase({eyebrow: 'No results — back on track', headline, detail});
+    if (choices?.length) this.resetCountdown();
+    this.renderPhase({eyebrow, headline, detail, choices});
     requestAnimationFrame(() => this.placeAwayFrom(this.activeTarget?.isConnected ? this.activeTarget : null));
   }
 
@@ -229,6 +233,23 @@ class IncidentCoachPanel {
     this.root.querySelector('#advance').hidden = true;
     this.renderPhase({eyebrow: 'Restoring the search', headline: 'Clearing the dead end and re-applying what the investigation has established so far…'});
     this.startWorking();
+  }
+
+  // A soft, non-modal check-in when a guided step has taken a while: the step's title, the most
+  // recent drift the service noticed (if any), and Keep going / Give me a hint / Show me.
+  showCheckIn({title, drift, choices}) {
+    this.clearHint();
+    this.host.hidden = false;
+    this.panel.hidden = false;
+    this.phase = 'checkin';
+    for (const id of ['#hint', '#demonstrate', '#advance', '#pause', '#review-feedback']) this.root.querySelector(id).hidden = true;
+    const stage = this.root.querySelector('#stage');
+    stage.hidden = false;
+    stage.classList.remove('success', 'celebrate-in', 'acting', 'recovery');
+    stage.classList.add('checkin');
+    this.resetCountdown();
+    this.renderPhase({eyebrow: 'Checking in', headline: `Still working on “${title}”?`, detail: drift || '', choices});
+    requestAnimationFrame(() => this.placeAwayFrom(this.activeTarget?.isConnected ? this.activeTarget : null));
   }
 
   showGuidedCompletion() {
@@ -251,7 +272,7 @@ class IncidentCoachPanel {
     this.root.querySelector('#review-feedback').hidden = false;
     this.root.querySelector('#incident-info').hidden = !this.currentBriefing;
     this.root.querySelector('#diagnosis').hidden = true;
-    this.root.querySelector('#stage').classList.remove('success', 'celebrate-in', 'recovery');
+    this.root.querySelector('#stage').classList.remove('success', 'celebrate-in', 'recovery', 'checkin');
     this.root.querySelector('#stage').hidden = false;
     this.renderPhase({eyebrow: 'Finished', headline: 'Your guided investigation is complete.'});
     requestAnimationFrame(() => this.placeAwayFrom(null));
@@ -418,7 +439,7 @@ class IncidentCoachPanel {
     bar.hidden = true;
   }
 
-  renderPhase({eyebrow = '', headline = '', detail = ''}) {
+  renderPhase({eyebrow = '', headline = '', detail = '', choices = []}) {
     const stage = this.root.querySelector('#stage');
     const eyebrowEl = this.root.querySelector('#phase-eyebrow');
     eyebrowEl.textContent = eyebrow;
@@ -427,12 +448,29 @@ class IncidentCoachPanel {
     const detailEl = this.root.querySelector('#phase-detail');
     detailEl.textContent = detail;
     detailEl.hidden = !detail;
+    this.renderChoices(choices);
     if (this.phase !== 'recovery') stage.classList.remove('recovery');
+    if (this.phase !== 'checkin') stage.classList.remove('checkin');
     stage.classList.toggle('acting', this.phase === 'action');
     stage.classList.remove('phase-in');
     void stage.offsetWidth;
     stage.classList.add('phase-in');
     this.refit();
+  }
+
+  // Buttons inside the stage card for a decision the card asks for: [{label, primary, onSelect}].
+  renderChoices(choices = []) {
+    const container = this.root.querySelector('#stage-actions');
+    container.replaceChildren(...choices.map(choice => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = choice.label;
+      if (choice.id) button.dataset.choice = choice.id;
+      if (choice.primary) button.className = 'primary';
+      button.onclick = () => choice.onSelect?.();
+      return button;
+    }));
+    container.hidden = !choices.length;
   }
 
   showTarget(target, activity = '') {
@@ -727,7 +765,9 @@ class IncidentCoachPanel {
   // Confirm newly found evidence in the already-open panel: the current step's card turns
   // into a green "New evidence found" card that animates in, holds briefly, then flips to the next step. The
   // next command (showCommand) is deferred while this plays so the success is seen before advancing.
-  celebrate(message = '') {
+  // `note` is an extra line under the confirmation (e.g. "This worked, but it searches every field…"),
+  // which holds the card a little longer so it can be read.
+  celebrate(message = '', note = '') {
     // A demonstration narrates its own "What we learned" beat, so it needs no separate confirmation.
     if (this.currentCommand?.mode === 'demonstration') return;
     this.clearHint();
@@ -740,18 +780,22 @@ class IncidentCoachPanel {
     const stage = this.root.querySelector('#stage');
     const eyebrow = this.root.querySelector('#phase-eyebrow');
     stage.hidden = false;
-    stage.classList.remove('acting', 'recovery');
+    stage.classList.remove('acting', 'recovery', 'checkin');
     stage.classList.add('success');
     eyebrow.hidden = false;
     eyebrow.innerHTML = '<span class="stage-tick" aria-hidden="true"></span>New evidence found';
     this.root.querySelector('#phase-headline').textContent = message || 'That step is complete.';
+    const detail = this.root.querySelector('#phase-detail');
+    detail.textContent = note;
+    detail.hidden = !note;
+    this.renderChoices([]);
     // Replay the entrance animation from a clean state.
     stage.classList.remove('celebrate-in', 'phase-in');
     void stage.offsetWidth;
     stage.classList.add('celebrate-in');
     this.refit();
     clearTimeout(this.celebrateTimer);
-    this.celebrateTimer = setTimeout(() => this.finishCelebrate(), 1500);
+    this.celebrateTimer = setTimeout(() => this.finishCelebrate(), note ? 5000 : 1500);
   }
 
   // The hold is over: drop the confirmation and render the step that arrived while it was playing.
@@ -787,7 +831,7 @@ class IncidentCoachPanel {
     this.celebrating = false;
     this.advanceRequested = false;
     this.pendingCommand = null;
-    this.root.querySelector('#stage').classList.remove('success', 'celebrate-in', 'recovery');
+    this.root.querySelector('#stage').classList.remove('success', 'celebrate-in', 'recovery', 'checkin');
   }
 
   static styles = `
@@ -812,6 +856,9 @@ class IncidentCoachPanel {
     #diagnosis button { margin-top:12px;background:#006bb4;color:#fff;border:0; } #status { min-height:18px;color:#147d5c; } #status:empty { display:none; }.error { color:#a32b1c!important; }
     #stage.success { border-left-color:#12a56b;background:#ecf8f2;box-shadow:0 6px 22px #12a56b24; } #stage.success .eyebrow { display:flex;align-items:center;gap:8px;color:#0b7a4f; } #stage.success #phase-headline { color:#0c3d2b; }
     #phase-detail { margin:12px 0 0;color:#3a4d5c;font-size:14px;line-height:1.5;white-space:pre-line; }
+    .stage-actions { display:flex;flex-wrap:wrap;gap:8px;margin-top:16px; } .stage-actions button { padding:7px 12px;font-weight:600; } .stage-actions button.primary { background:#006bb4;border-color:#006bb4;color:#fff; }
+    #stage.checkin { border-left-color:#1a8a86;background:#eef8f7;box-shadow:0 6px 22px #1a8a8624; } #stage.checkin .eyebrow { color:#13706c; } #stage.checkin #phase-headline { color:#0d3533;font-size:18px; } #stage.checkin .stage-actions button.primary { background:#1a8a86;border-color:#1a8a86; }
+    #stage.recovery .stage-actions button.primary { background:#c25423;border-color:#c25423; }
     #stage.recovery { border-left-color:#d4602a;background:#fff4ec;box-shadow:0 6px 22px #d4602a24; } #stage.recovery .eyebrow { color:#a8431a; } #stage.recovery #phase-headline { color:#4a1d08;font-size:18px; } #stage.recovery .countdown { background:#f4d6c4; } #stage.recovery .countdown span { background:#d4602a; }
     .stage-tick { flex:0 0 auto;display:inline-block;width:18px;height:18px;border-radius:50%;background:#12a56b;position:relative;transform:none;animation:tick-pop .4s .1s cubic-bezier(.22,1.4,.4,1) both; }
     .stage-tick::after { content:"";position:absolute;left:6px;top:3px;width:4px;height:8px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(42deg); }

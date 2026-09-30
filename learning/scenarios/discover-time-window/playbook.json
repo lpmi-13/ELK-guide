@@ -33,6 +33,11 @@
         "Filter for the status code you just saw spike, not one you assumed.",
         "Click the + next to that value in the field's top values, or use Add filter (field, operator ‘is’, value).",
         "Filter http.response.status_code for ${param.incident.status}; Show me can add the reference filter."
+      ],
+      "drifts": [
+        {"action": ["filter_added", "filter_changed"], "validators": [{"kind": "filter_field", "field": "${var.status_field}"}, {"kind": "value_not", "value": "${param.incident.status}"}, {"kind": "detail_equals", "field": "negate", "value": false}], "note": "You filtered on a status code, but not the one that stood out in the top values."},
+        {"action": ["filter_added", "filter_changed"], "validators": [{"kind": "detail_not", "field": "field", "value": "${var.status_field}"}], "note": "You filtered on ${action.field}; this step narrows the view by status code."},
+        {"action": ["field_statistics_opened"], "validators": [{"kind": "detail_not", "field": "field", "value": "${var.status_field}"}], "note": "You opened ${action.field}; this step is about the status codes."}
       ]
     },
     "inspect": {
@@ -64,6 +69,10 @@
           "Let the data show you which status code is unusual, instead of assuming one.",
           "Open the http.response.status_code field in the sidebar and read its Top values (or add it as a column).",
           "Open http.response.status_code and read its top values; Show me can open the reference field."
+        ],
+        "drifts": [
+          {"action": ["field_statistics_opened", "field_inspected"], "validators": [{"kind": "detail_not", "field": "field", "value": "${var.status_field}"}], "note": "You opened ${action.field}; this step is about which status code stands out."},
+          {"action": ["filter_added", "query_submitted"], "validators": [], "note": "You filtered before reading the status codes' top values, so the filter rests on a guess."}
         ]
       }
     },
@@ -92,6 +101,10 @@
           "Look at which endpoint the failing requests actually hit.",
           "Open the url.path field's top values, or add it as a column, to see the main route.",
           "Open url.path and read its top values; Show me can open the reference field."
+        ],
+        "drifts": [
+          {"action": ["filter_added", "filter_changed"], "validators": [{"kind": "filter_field", "field": "${var.route_field}"}, {"kind": "value_not", "value": "${param.incident.route}"}, {"kind": "detail_equals", "field": "negate", "value": false}], "note": "You filtered on a url.path that isn't where most of the failures are."},
+          {"action": ["field_statistics_opened", "field_inspected"], "validators": [{"kind": "detail_not", "field": "field", "value": "${var.route_field}"}, {"kind": "detail_not", "field": "field", "value": "${var.status_field}"}], "note": "You opened ${action.field}; this step is about which endpoint the failures hit."}
         ]
       }
     }

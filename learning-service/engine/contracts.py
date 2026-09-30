@@ -145,6 +145,15 @@ def validate_catalog(learning_dir):
                         errors.append(f"{entry['id']}/{goal['id']}: unknown validator {kind}")
                     if kind in {"result_assertion", "resource_isolated"}:
                         referenced_assertions.add(validator.get("assertion"))
+            for drift in goal.get("drifts", []):
+                if not drift.get("note") or not drift.get("action"):
+                    errors.append(f"{entry['id']}/{goal['id']}: drift needs an action and a note")
+                for validator in drift.get("validators", []):
+                    if validator.get("kind") not in VALIDATORS:
+                        errors.append(f"{entry['id']}/{goal['id']}: unknown drift validator {validator.get('kind')}")
+            pace = goal.get("pace")
+            if pace is not None and not (isinstance(pace.get("expected_seconds"), int) and pace["expected_seconds"] >= 45):
+                errors.append(f"{entry['id']}/{goal['id']}: pace.expected_seconds must be an integer of at least 45")
         missing_validation = assertions - referenced_assertions
         # Resource-isolation assertions are controller invariants and do not need a learner goal.
         missing_validation -= {item["id"] for item in scenario["truth"]["assertions"] if item.get("kind") == "resource_isolated"}

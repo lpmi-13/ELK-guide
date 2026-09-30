@@ -85,8 +85,9 @@ test('hints stay with their step and Advance moves through a success card', () =
   const nodes = Object.fromEntries([
     '#hint-card', '#hint-label', '#hint-text', '#mode', '#objective', '#pause',
     '#demonstrate', '#incident-info', '#advance', '#hint', '#diagnosis', '#review-feedback',
-    '#phase-eyebrow', '#phase-headline',
+    '#phase-eyebrow', '#phase-headline', '#phase-detail',
   ].map(selector => [selector, {hidden: false, textContent: '', style: {}}]));
+  nodes['#stage-actions'] = {hidden: true, replaceChildren() {}};
   nodes['#stage'] = {hidden: false, offsetWidth: 300, classList: {add() {}, remove() {}}};
   nodes['.progress span'] = {style: {}};
   panel.root = {querySelector: selector => nodes[selector]};

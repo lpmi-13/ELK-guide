@@ -26,7 +26,7 @@ class EvaluatorTests(unittest.TestCase):
         session = new_session()
         action = {"type": "query_submitted", "details": {"query": 'service.name is payments and event.duration >= 2000000000'}, "state_after": {"result_count": 0}}
         result = evaluator.evaluate_action(session, action, {"slow_events": True, "service_events": True})
-        self.assertEqual(result["outcome"], "empty_result")
+        self.assertEqual((result["outcome"], result["reason_code"]), ("dead_end", "empty_result"))
         self.assertFalse(result["goals_progressed"])
         self.assertFalse(session["completed_goals"])
         # The same query with results (or with no measured count) still counts.

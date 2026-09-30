@@ -78,8 +78,11 @@ class IncidentDebrief {
         const item = document.createElement('li');
         item.className = `gd-step outcome-${step.outcome in IncidentDebrief.outcomes ? step.outcome : 'incomplete'}`;
         item.style.setProperty('--i', String(index));
-        item.innerHTML = '<span class="gd-step-marker" aria-hidden="true"></span><span class="gd-step-title"></span><span class="gd-step-chip"></span>';
+        item.innerHTML = '<span class="gd-step-marker" aria-hidden="true"></span><span class="gd-step-text"><span class="gd-step-title"></span><span class="gd-step-detail"></span></span><span class="gd-step-chip"></span>';
         item.querySelector('.gd-step-title').textContent = step.title || step.id;
+        // Unscored context: time spent, check-ins, and dead ends recovered from.
+        item.querySelector('.gd-step-detail').textContent = step.detail || '';
+        item.querySelector('.gd-step-detail').hidden = !step.detail;
         item.querySelector('.gd-step-chip').textContent = outcome.label;
         item.querySelector('.gd-step-chip').title = outcome.note;
         list.append(item);
@@ -91,13 +94,26 @@ class IncidentDebrief {
       return;
     }
     const components = Object.entries(feedback.components || {}).map(([name, score]) => `<li><span>${name.replaceAll('_', ' ')}</span><strong>${score}</strong></li>`).join('');
+    const detourSteps = feedback.step_detours || [];
     const result = feedback.scored === false
       ? `Completion: ${feedback.completion ?? 'unscored walkthrough'}${feedback.completion != null ? '%' : ''}`
       : `Score: ${feedback.total}/100`;
     dialog.innerHTML = `<form method="dialog"><button class="dialog-close" aria-label="Close debrief">×</button></form>
       <h2>Investigation debrief</h2><p>${feedback.summary}</p><p class="total">${result}</p>
       <ul>${components}</ul><p>Assistance: ${feedback.assistance.hints} hints; ${feedback.assistance.demonstrated_steps} demonstrated steps.</p>
-      <p><strong>Reference route:</strong> ${feedback.reference_route.join(' → ')}</p>`;
+      <p><strong>Reference route:</strong> ${feedback.reference_route.join(' → ')}</p>
+      <section class="debrief-detours" hidden><h3>Detours</h3><ul></ul></section>`;
+    // Challenge mode has no live feedback, so the dead ends and drift it recorded are shown here.
+    const detours = dialog.querySelector('.debrief-detours');
+    for (const step of detourSteps) {
+      const item = document.createElement('li');
+      const lines = [...(step.dead_ends || []).map(label => `Dead end: ${label}`), ...(step.drift || [])];
+      item.innerHTML = '<strong></strong><span></span>';
+      item.querySelector('strong').textContent = step.title || step.id;
+      item.querySelector('span').textContent = lines.join(' · ');
+      detours.querySelector('ul').append(item);
+    }
+    detours.hidden = !detourSteps.length;
     this.root.append(dialog);
     dialog.addEventListener('close', () => dialog.remove());
     dialog.showModal();
@@ -171,7 +187,12 @@ IncidentDebrief.styles = `
     .gd-step.outcome-hinted { --tone:#d98c00;--tone-soft:#d98c001f; }
     .gd-step.outcome-shown { --tone:#1f78c1;--tone-soft:#1f78c11c; }
     .gd-step-marker { flex:0 0 auto;width:10px;height:10px;border-radius:50%;background:var(--tone);box-shadow:0 0 0 4px var(--tone-soft); }
-    .gd-step-title { flex:1;min-width:0;color:#17304a;font-weight:600; }
+    .gd-step-text { flex:1;min-width:0;display:flex;flex-direction:column;gap:2px; }
+    .gd-step-title { color:#17304a;font-weight:600; }
+    .gd-step-detail { color:#5b6b78;font-size:12px;line-height:1.35; }
+    .debrief-detours h3 { margin:14px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#3f5060; }
+    .incident-debrief .debrief-detours li { display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:6px 0;border-top:1px solid #e1e7ec; }
+    .debrief-detours li span { color:#3f5060;font-size:13px; }
     .gd-step-chip { flex:0 0 auto;padding:3px 9px;border-radius:999px;background:var(--tone-soft);color:var(--tone);font-size:11px;font-weight:780;letter-spacing:.04em;text-transform:uppercase;filter:saturate(1.1) brightness(.85); }
     .guided-debrief .gd-stats { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0;padding:0;list-style:none; }
     .guided-debrief .gd-stat { --tone:#12a56b;display:flex;flex-direction:column-reverse;justify-content:flex-end;gap:6px;padding:14px 15px;border:1px solid #d8e2e9;border-top:4px solid var(--tone);border-radius:10px;background:linear-gradient(180deg,color-mix(in srgb,var(--tone) 7%,#fff),#fff 70%); }

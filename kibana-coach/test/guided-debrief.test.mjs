@@ -82,3 +82,32 @@ test('guided debrief lists each step with the help it took', () => {
   assert.equal(list.children[1].parts['.gd-step-title'].textContent, 'Filter to the failing status code');
   assert.equal(dialog.parts['.gd-steps-section'].hidden, false);
 });
+
+test('guided step rows carry an unscored detail line when there is one', () => {
+  const {dialog} = renderGuided({
+    total: 50,
+    summary: '',
+    assistance,
+    steps: [
+      {id: 'scope', title: 'Set the time window', outcome: 'independent', detail: '32s'},
+      {id: 'isolate', title: 'Filter to the failing status code', outcome: 'hinted',
+        detail: '1m 05s · needed a check-in · recovered from a dead end: missing colon'},
+      {id: 'inspect', title: 'Check the evidence in one event', outcome: 'shown'},
+    ],
+  });
+  const details = dialog.parts['.gd-steps'].children.map(item => item.parts['.gd-step-detail']);
+  assert.deepEqual(details.map(detail => detail.textContent), ['32s', '1m 05s · needed a check-in · recovered from a dead end: missing colon', '']);
+  assert.deepEqual(details.map(detail => detail.hidden), [false, false, true]);
+});
+
+test('a challenge debrief lists its detours', () => {
+  const {dialog, created} = renderGuided({
+    total: 72, summary: 'ok', components: {}, assistance: {hints: 0, demonstrated_steps: 0}, reference_route: [],
+    step_detours: [{id: 'isolate', title: 'Filter to the failing status code', dead_ends: ['search with no results'],
+      drift: ['You filtered on a status code, but not the one that stood out in the top values.']}],
+  });
+  assert.equal(dialog.parts['.debrief-detours'].hidden, false);
+  const item = created[1];
+  assert.equal(item.parts.strong.textContent, 'Filter to the failing status code');
+  assert.equal(item.parts.span.textContent, 'Dead end: search with no results · You filtered on a status code, but not the one that stood out in the top values.');
+});
