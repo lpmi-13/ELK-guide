@@ -45,9 +45,12 @@ services:
     volumes:
       - ./logstash/pipeline:/usr/share/logstash/pipeline:ro
       - service-logs:/var/log/microservices:ro
+      - logstash-state:/usr/share/logstash/data
     depends_on:
       elasticsearch:
         condition: service_healthy
+      log-seeder:
+        condition: service_completed_successfully
     ports:
       - "127.0.0.1:5044:5044"
       - "[::1]:5044:5044"
@@ -266,6 +269,7 @@ services:
 volumes:
   elasticsearch-data:
   service-logs:
+  logstash-state:
 
 networks:
   observability:

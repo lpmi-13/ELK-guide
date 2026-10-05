@@ -3,18 +3,29 @@
 import base64
 import hashlib
 import json
+import logging
 import os
 import struct
 import threading
 import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 PORT = int(os.getenv("PORT", "8090"))
 KIBANA_URL = os.getenv("KIBANA_URL", "http://localhost:5601")
 LEARNING_URL = os.getenv("LEARNING_URL", "http://localhost:8091")
 LOG_FILE = Path(os.getenv("LOG_DIR", "/tmp")) / "browser-telemetry.json"
+LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+_log_writer = logging.getLogger("browser-telemetry")
+_log_writer.setLevel(logging.INFO)
+_log_writer.propagate = False
+_log_handler = RotatingFileHandler(
+    LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=1, encoding="utf-8", delay=True
+)
+_log_handler.setFormatter(logging.Formatter("%(message)s"))
+_log_writer.addHandler(_log_handler)
 INDEX = Path(__file__).with_name("index.html")
 PREPARING = Path(__file__).with_name("preparing.html")
 lock = threading.Lock()
@@ -35,8 +46,8 @@ def emit(payload, client):
         "url.path": str(payload.get("path", ""))[:512],
     }
     line = json.dumps(event, separators=(",", ":"))
-    with lock, LOG_FILE.open("a", encoding="utf-8") as stream:
-        stream.write(line + "\n")
+    with lock:
+        _log_writer.info(line)
     print(line, flush=True)
 
 

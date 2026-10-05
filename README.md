@@ -148,7 +148,9 @@ docker compose logs -f scenario-controller learning-service logstash
 curl -sS 'http://localhost:9200/microservices-*/_count?pretty'
 ```
 
-Stop the lab with `docker compose down`. Add `--volumes` only when you intentionally want to delete Elasticsearch data and generated service logs.
+Stop the lab with `docker compose down`. Logstash keeps service-log read positions in the `logstash-state` named volume, so the next start skips logs it has already ingested. The seeder replaces its previous batch in `seed.json`; Logstash reads that small file from the beginning on each container start. Add `--volumes` only when you intentionally want to delete Elasticsearch data, generated service logs, and Logstash's read positions together.
+
+The five application logs each keep a 100 MiB active file and one backup. Browser telemetry, the scenario controller, and the learning service each keep a 10 MiB active file and one backup. With the default 500-event seed batch, these files use roughly 1.1 GB at most, apart from unusually large single events. Rotated backups are outside Logstash's input pattern, so events can be lost if Logstash stays behind through a rollover. The `logstash-state` volume is expected to stay small, but it has no fixed byte quota.
 
 This stack disables authentication and uses development-sized JVM heaps. It is designed for a local, single-learner lab—not for production or untrusted networks.
 

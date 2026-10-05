@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import os
 import random
 import re
@@ -15,6 +16,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlparse
@@ -38,6 +40,15 @@ LAB_ILM_POLICY = "lab-retention"
 LAB_INDEX_TEMPLATE = "lab-lifecycle"
 LAB_INDEX_PATTERNS = ["microservices-*", "tutorial-*", "scenario-*", "lab-*"]
 LOG_FILE = Path(os.getenv("LOG_DIR", "/tmp")) / "scenario-controller.json"
+LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+_log_writer = logging.getLogger("scenario-controller")
+_log_writer.setLevel(logging.INFO)
+_log_writer.propagate = False
+_log_handler = RotatingFileHandler(
+    LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=1, encoding="utf-8", delay=True
+)
+_log_handler.setFormatter(logging.Formatter("%(message)s"))
+_log_writer.addHandler(_log_handler)
 SERVICE_URLS = {
     "api-gateway": os.getenv("API_GATEWAY_URL", "http://api-gateway:8080").rstrip("/"),
     "auth": os.getenv("AUTH_URL", "http://auth:8081").rstrip("/"),
@@ -81,9 +92,8 @@ def emit(message, level="INFO", run_id=None, **fields):
     if run_id:
         event["scenario"] = {"id": run_id, "phase": fields.get("state", "active")}
     line = json.dumps(event, separators=(",", ":"))
-    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with write_lock, LOG_FILE.open("a", encoding="utf-8") as stream:
-        stream.write(line + "\n")
+    with write_lock:
+        _log_writer.info(line)
     print(line, flush=True)
 
 

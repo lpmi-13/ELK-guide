@@ -13,8 +13,10 @@ levels = ["INFO"] * 17 + ["WARN"] * 2 + ["ERROR"]
 count = int(os.getenv("SEED_COUNT", "500"))
 destination = Path(os.getenv("LOG_DIR", "/tmp")) / "seed.json"
 destination.parent.mkdir(parents=True, exist_ok=True)
+staging = destination.with_name("seed.json.tmp")
 
-with destination.open("w", encoding="utf-8") as output:
+# Replace the previous batch after the new one is complete, keeping disk use flat.
+with staging.open("w", encoding="utf-8") as output:
     for index in range(count):
         status = random.choice([200] * 14 + [201, 400, 404, 500])
         event = {
@@ -29,4 +31,5 @@ with destination.open("w", encoding="utf-8") as output:
             "trace.id": uuid.uuid4().hex,
         }
         output.write(json.dumps(event, separators=(",", ":")) + "\n")
+os.replace(staging, destination)
 print(f"wrote {count} seed events to {destination}")

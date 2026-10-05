@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import logging
 import math
 import os
 import re
@@ -13,6 +14,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, quote, urlparse
@@ -26,6 +28,15 @@ CONTROLLER_URL = os.getenv("SCENARIO_CONTROLLER_URL", "http://scenario-controlle
 ELASTICSEARCH_URL = os.getenv("ELASTICSEARCH_URL", "http://elasticsearch:9200").rstrip("/")
 LEARNING_DIR = Path(os.getenv("LEARNING_DIR", "/app/learning"))
 LOG_FILE = Path(os.getenv("LOG_DIR", "/tmp")) / "learning-service.json"
+LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+_log_writer = logging.getLogger("learning-service")
+_log_writer.setLevel(logging.INFO)
+_log_writer.propagate = False
+_log_handler = RotatingFileHandler(
+    LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=1, encoding="utf-8", delay=True
+)
+_log_handler.setFormatter(logging.Formatter("%(message)s"))
+_log_writer.addHandler(_log_handler)
 ALLOWED_ORIGINS = {value.rstrip("/") for value in os.getenv("ALLOWED_ORIGINS", "http://localhost:5601,http://127.0.0.1:5601,http://localhost:8090").split(",")}
 
 sessions = {}
@@ -204,9 +215,8 @@ def emit(session, action, evaluation=None):
         "validation": evaluation or {},
     }
     line = json.dumps(event, separators=(",", ":"))
-    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with write_lock, LOG_FILE.open("a", encoding="utf-8") as stream:
-        stream.write(line + "\n")
+    with write_lock:
+        _log_writer.info(line)
     print(line, flush=True)
 
 
