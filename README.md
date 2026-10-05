@@ -48,9 +48,10 @@ Docker Engine with Compose v2 and roughly 3 GB of available memory are required.
 
 ```sh
 cp .env.example .env
-docker compose up --build -d
-docker compose ps
+./build-all.sh
 ```
+
+The script builds and starts the stack in the background, waits for it to be ready, then prints `Lab ready. Open http://localhost:8090/ in your browser.` If you prefer attached logs, `docker compose up --build` prints the same URL when the browser service starts.
 
 Open <http://localhost:8090>, select a scenario, choose an assistance mode, accept or change the suggested scenario key, and start the run. A preparation tab opens immediately and moves into the connected Kibana investigation only after the run reaches `READY`; if the tab cannot be opened, the launcher reveals a manual fallback link. No manual Kibana content creation is required.
 

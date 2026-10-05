@@ -240,12 +240,19 @@ services:
       - "127.0.0.1:8090:8090"
       - "[::1]:8090:8090"
     depends_on:
+      kibana-gateway:
+        condition: service_healthy
       kibana-setup:
         condition: service_completed_successfully
       learning-service:
         condition: service_healthy
       log-seeder:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request; urllib.request.urlopen('http://localhost:'+os.environ['PORT']+'/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     networks: [observability]
 
   scenario-recorder:

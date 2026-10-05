@@ -145,4 +145,6 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    print(f"\nLab ready. Open http://localhost:{PORT}/ in your browser.\n", flush=True)
+    server.serve_forever()
