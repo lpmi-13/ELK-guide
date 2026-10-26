@@ -140,6 +140,42 @@ test('pause freezes a reading beat; resume continues its remaining time without 
   assert.equal(demo.calls.actions, 1);
 });
 
+test('a completed demonstration action stays on screen for one second, including paused time', async () => {
+  const demo = await makeDemo();
+  demo.adapter.perform = async (_command, _coach, {holdAction}) => {
+    demo.calls.actions++;
+    await holdAction();
+    return null;
+  };
+  await demo.client.onCommand({
+    command_id: 'step-hold', mode: 'demonstration', type: 'enter_query', target: 'query',
+    narration: 'Read this step', reasoning: '', evidence: 'Result explained',
+  });
+  await Promise.resolve();
+  demo.coach.advanceCelebration = () => false;
+  demo.coach.advanceInfo = () => false;
+  demo.adapter.advanceTyping = () => false;
+  demo.coach.onAdvance(); // Finish the opening explanation.
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(demo.calls.actions, 1);
+  assert.deepEqual(demo.calls.countdowns.slice(0, 2), [16500, 1000]);
+  assert.deepEqual(demo.calls.phases, []);
+
+  demo.clock.advance(500);
+  demo.coach.setPaused(true);
+  demo.clock.advance(2000);
+  assert.deepEqual(demo.calls.phases, []);
+  demo.coach.setPaused(false);
+  assert.deepEqual(demo.calls.resumes, [500]);
+  demo.clock.advance(499);
+  await Promise.resolve();
+  assert.deepEqual(demo.calls.phases, []);
+  demo.clock.advance(1);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(demo.calls.phases, ['learning']);
+});
+
 test('guided Show me starts the action on the click and explains the result afterward', async () => {
   const demo = await makeDemo();
   const command = {

@@ -489,6 +489,13 @@ class IncidentCoachPanel {
     }
   }
 
+  clearActionTarget() {
+    this.spotlightRevealed = false;
+    this.spotlight.hide();
+    this.cursor.hide();
+    this.activeTarget = null;
+  }
+
   showInfo(target, activity) {
     this.phase = 'info';
     this.resetCountdown();

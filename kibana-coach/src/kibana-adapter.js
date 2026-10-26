@@ -230,7 +230,7 @@ class KibanaAdapter {
     if (commit) element.dispatchEvent(new Event('change', {bubbles: true}));
   }
 
-  async typeValue(element, value, signal) {
+  async typeValue(element, value, signal, coach) {
     element.focus();
     this.setNativeValue(element, '', {data: null, inputType: 'deleteContentBackward', commit: false});
     let typed = '';
@@ -251,6 +251,8 @@ class KibanaAdapter {
         if (index < characters.length - 1) await this.wait(this.typingIntervalMs, signal);
       }
       element.dispatchEvent(new Event('change', {bubbles: true}));
+      coach?.clearActionTarget?.();
+      await this.holdAction?.();
     } finally {
       if (this.activeTyping === typing) this.activeTyping = null;
     }
@@ -287,11 +289,12 @@ class KibanaAdapter {
     }
   }
 
-  async perform(command, coach, {timingScale = 1, signal, readBeat} = {}) {
+  async perform(command, coach, {timingScale = 1, signal, readBeat, holdAction} = {}) {
     if (command.type === 'orient') return null;
     if (command.type === 'request_diagnosis' || command.type === 'request_answer') return null;
     this.performing = true;
     this.readBeat = readBeat;
+    this.holdAction = holdAction;
     try {
       const applicationAdapter = (globalThis.KibanaApplicationAdapters || []).find(item => item.commands.has(command.type));
       if (applicationAdapter) return await applicationAdapter.perform(command, this, coach, {timingScale, signal});
@@ -306,10 +309,11 @@ class KibanaAdapter {
     } finally {
       this.performing = false;
       this.readBeat = null;
+      this.holdAction = null;
     }
   }
 
-  async pointAt(target, coach, timingScale, signal, activity, {activate = false, showClick = true} = {}) {
+  async pointAt(target, coach, timingScale, signal, activity, {activate = false, showClick = true, hold = true} = {}) {
     // Every application adapter uses this path. Reveal controls inside scrollable panels before
     // placing the spotlight or cursor, so the visible pointer lands on the control we act on.
     await coach.cursor.reveal(target, {timingScale, signal});
@@ -322,11 +326,16 @@ class KibanaAdapter {
     if (informationOnly) {
       const read = this.readBeat ? this.readBeat(activity) : coach.waitForAdvance(signal);
       await Promise.all([coach.cursor.moveTo(target, {timingScale, signal}), read]);
+      coach.clearActionTarget?.();
       return;
     }
     await coach.cursor.moveTo(target, {timingScale, signal});
     if (showClick) coach.cursor.click();
     if (activate) target.click();
+    if (activate && hold) {
+      coach.clearActionTarget?.();
+      await this.holdAction?.();
+    }
   }
 
   relativeTimeRange(value = {}) {
@@ -389,32 +398,37 @@ class KibanaAdapter {
       }
     }
     if (number && unit && apply) {
-      await this.pointAt(number, coach, timingScale, signal, `Click the Time value box, clear its old value, and type ${range.amount}.`, {activate: true});
-      await this.typeValue(number, range.amount, signal);
-      await this.pointAt(unit, coach, timingScale, signal, `Choose ${range.unitLabel} as the unit.`, {activate: true});
+      await this.pointAt(number, coach, timingScale, signal, `Click the Time value box, clear its old value, and type ${range.amount}.`, {activate: true, hold: false});
+      await this.typeValue(number, range.amount, signal, coach);
+      await this.pointAt(unit, coach, timingScale, signal, `Choose ${range.unitLabel} as the unit.`, {activate: true, hold: false});
       const unitPattern = new RegExp(`^${range.unitName}s?(?: ago)?$`, 'i');
       const matchingOption = Array.from(unit.options).find(option => unitPattern.test(option.textContent.trim()));
       unit.value = matchingOption?.value || range.unitCode;
       unit.dispatchEvent(new Event('input', {bubbles: true}));
       unit.dispatchEvent(new Event('change', {bubbles: true}));
+      coach.clearActionTarget?.();
+      await this.holdAction?.();
       await this.pointAt(apply, coach, timingScale, signal, `Apply the Last ${range.amount} ${range.unitLabel} range.`, {activate: true});
     } else {
       const hash = location.hash;
       const globalState = `_g=(time:(from:'${command.value.from}',to:'${command.value.to}'))`;
       location.hash = hash.includes('_g=') ? hash.replace(/_g=\([^&]*\)/, globalState) : `${hash}${hash.includes('?') ? '&' : '?'}${globalState}`;
+      coach.clearActionTarget?.();
+      await this.holdAction?.();
     }
     return {type: 'time_range_changed', details: command.value, state_after: {time_from: command.value.from, time_to: command.value.to}};
   }
 
   async enterQuery(query, coach, timingScale, signal, existingInput = null, activity = 'Click the query bar, clear the old search, and type the new query.') {
     const input = existingInput || await this.waitFor('kibana.query_bar', 20000, signal);
-    await this.pointAt(input, coach, timingScale, signal, activity, {activate: true});
-    await this.typeValue(input, query, signal);
+    await this.pointAt(input, coach, timingScale, signal, activity, {activate: true, hold: false});
+    await this.typeValue(input, query, signal, coach);
     const submit = this.resolve('kibana.query_submit');
     if (submit) {
       await this.pointAt(submit, coach, timingScale, signal, 'Run the query and refresh the results.', {activate: true});
     } else {
       input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', bubbles: true}));
+      await this.holdAction?.();
     }
     return {type: 'query_submitted', details: {query}, state_after: {query}};
   }
@@ -440,17 +454,17 @@ class KibanaAdapter {
     const addButton = await this.waitFor('kibana.add_filter', 20000, signal);
     await this.pointAt(addButton, coach, timingScale, signal, 'Open Add filter.', {activate: true});
     const fieldInput = await this.waitFor('kibana.filter_field', 8000, signal);
-    await this.pointAt(fieldInput, coach, timingScale, signal, `Choose the ${filter.field} field.`, {activate: true});
-    await this.typeValue(fieldInput, filter.field, signal);
+    await this.pointAt(fieldInput, coach, timingScale, signal, `Choose the ${filter.field} field.`, {activate: true, hold: false});
+    await this.typeValue(fieldInput, filter.field, signal, coach);
     await this.pickComboOption(filter.field, signal);
     const operatorLabel = negate ? 'is not' : 'is';
     const operatorInput = await this.waitFor('kibana.filter_operator', 8000, signal);
-    await this.pointAt(operatorInput, coach, timingScale, signal, `Set the operator to "${operatorLabel}".`, {activate: true});
-    await this.typeValue(operatorInput, operatorLabel, signal);
+    await this.pointAt(operatorInput, coach, timingScale, signal, `Set the operator to "${operatorLabel}".`, {activate: true, hold: false});
+    await this.typeValue(operatorInput, operatorLabel, signal, coach);
     await this.pickComboOption(operatorLabel, signal, true);
     const valueInput = await this.waitFor('kibana.filter_params', 8000, signal);
-    await this.pointAt(valueInput, coach, timingScale, signal, `Enter the value ${filter.value}.`, {activate: true});
-    await this.typeValue(valueInput, String(filter.value), signal);
+    await this.pointAt(valueInput, coach, timingScale, signal, `Enter the value ${filter.value}.`, {activate: true, hold: false});
+    await this.typeValue(valueInput, String(filter.value), signal, coach);
     const save = await this.waitFor('kibana.filter_save', 8000, signal);
     await this.pointAt(save, coach, timingScale, signal, `Apply the ${negate ? 'is not' : 'is'} filter.`, {activate: true});
     await this.settle(400, timingScale, signal);
@@ -464,6 +478,7 @@ class KibanaAdapter {
     const match = options.find(option => exact ? norm(option.textContent) === norm(text) : norm(option.textContent).includes(norm(text))) || options[0];
     if (!match) throw new Error(`No combo option matched "${text}"`);
     match.click();
+    await this.holdAction?.();
   }
 
   async openTrace(command, toggle, coach, timingScale, signal) {

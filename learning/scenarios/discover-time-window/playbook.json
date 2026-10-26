@@ -55,9 +55,9 @@
         "reasoning": "The report never named a status code, so reading the top values keeps us honest instead of guessing.",
         "evidence": "The field's top values show the unusual status code standing out from the healthy 200s.",
         "demonstration": {
-          "narration": "Open the http.response.status_code field in the field list and read its Top values.\n\nThe report only said checkout felt slow and was noticed ${detected_offset_minutes} minutes ago — it never named a status code — so we let the data show us that ${param.incident.status_family} responses are spiking above the healthy 200s.",
+          "narration": "Open the http.response.status_code field in the field list and read its Top values.\n\nThe report only said checkout felt slow and was noticed ${detected_offset_minutes} minutes ago; it didn't identify a status code. Let's inspect the codes for a relevant pattern before deciding which requests to filter.",
           "reasoning": "If we filtered for a status code we'd guessed, we'd just be assuming the answer.\n\nReading the field's top values first is how we find the unusual code for ourselves, so the evidence for ${truth.scope} comes from the data, not from whatever the report happened to say.",
-          "evidence": "The Top values panel should show ${param.incident.status} rising above the normal 200s across ${var.finding_phrase}.\n\nThat's the first sign that something is failing in ${truth.scope} — but we haven't confirmed it yet, and it doesn't tell us which endpoint. We check that next."
+          "evidence": "In ${var.finding_phrase}, the Top values now show ${param.incident.status} alongside the usual 200s. That 500-series code is worth investigating, so we'll filter for the value we just observed and then find where those requests failed."
         },
         "requires": ["scope"],
         "accepts": [

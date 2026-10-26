@@ -113,6 +113,7 @@ function startIncidentCoach() {
   const activeSessionKey = 'incident-coach:auto-connect';
   const demonstrationSlowdown = 3;
   const demonstrationTimingScale = 10 * demonstrationSlowdown;
+  const completedActionHoldMs = 1000;
 
   function readingPause(...texts) {
     const words = texts.filter(Boolean).join(' ').trim().split(/\s+/).filter(Boolean).length;
@@ -173,6 +174,12 @@ function startIncidentCoach() {
         coach.startCountdown(pause);
         await readingBeatWait(pause, controller.signal);
       };
+      const holdAction = command.mode === 'demonstration' ? async () => {
+        // Keep the instruction visible after its completed control is no longer highlighted.
+        // Use a reading beat so Pause freezes this hold and Advance can finish it early.
+        coach.startCountdown(completedActionHoldMs);
+        await readingBeatWait(completedActionHoldMs, controller.signal);
+      } : null;
       if (command.mode === 'demonstration') {
         // Start with the next move; show a separate why card only when it adds new guidance.
         // The anchor is only the control the opening cards point at; perform() resolves the controls
@@ -196,7 +203,7 @@ function startIncidentCoach() {
         walkthroughController = controller;
         coach.beginWalkthrough(walkthrough);
       }
-      const action = await adapter.perform(command, coach, {timingScale, signal: controller.signal, readBeat});
+      const action = await adapter.perform(command, coach, {timingScale, signal: controller.signal, readBeat, holdAction});
       const learning = walkthrough
         ? {...walkthrough, evidence: [walkthrough.reasoning, walkthrough.evidence].filter(Boolean).join('\n\n')}
         : command;

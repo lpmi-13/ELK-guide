@@ -31,12 +31,14 @@ test('an already selected time window stays in a blue note until Advance', async
   panel.resetCountdown = () => {};
   panel.showTarget = () => {};
   panel.refit = () => {};
+  panel.spotlight = {hide() {}};
   const calls = [];
   let finishMove;
   panel.cursor = {
     reveal: async () => calls.push('reveal'),
     moveTo: () => { calls.push('move'); return new Promise(resolve => { finishMove = resolve; }); },
     click: () => calls.push('click'),
+    hide() {},
   };
   const toggle = {click: () => calls.push('activate')};
   const command = {value: {from: 'now-15m', to: 'now'}};
@@ -88,6 +90,71 @@ test('an already selected time window uses a timed note and continues without Ad
     {value: {from: 'now-15m', to: 'now'}}, {}, panel, 1, new AbortController().signal);
   assert.equal(result.state_after.time_from, 'now-15m');
   assert.deepEqual(calls.map(call => call.split(':')[0]), ['reveal', 'note', 'countdown', 'move', 'read']);
+});
+
+test('the shared cursor path clears the completed target before the timed hold', async () => {
+  const Adapter = loadClass('../src/kibana-adapter.js', 'KibanaAdapter');
+  const adapter = new Adapter();
+  const calls = [];
+  let releaseHold;
+  adapter.holdAction = () => {
+    calls.push('hold');
+    return new Promise(resolve => { releaseHold = resolve; });
+  };
+  const coach = {
+    showTarget: () => calls.push('card'),
+    clearActionTarget: () => calls.push('clear highlight'),
+    cursor: {
+      reveal: async () => calls.push('reveal'),
+      moveTo: async () => calls.push('move'),
+      click: () => calls.push('cursor click'),
+    },
+  };
+  const target = {click: () => calls.push('control click')};
+  let finished = false;
+  const action = adapter.pointAt(target, coach, 30, new AbortController().signal, 'Open the picker.', {activate: true})
+    .then(() => { finished = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, ['reveal', 'card', 'move', 'cursor click', 'control click', 'clear highlight', 'hold']);
+  assert.equal(finished, false);
+  releaseHold();
+  await action;
+  assert.equal(finished, true);
+});
+
+test('typing clears its target after the value is committed and before the hold', async () => {
+  const EventClass = class { constructor(type) { this.type = type; } };
+  const Adapter = loadClass('../src/kibana-adapter.js', 'KibanaAdapter',
+    ['KeyboardEvent', 'Event'], [EventClass, EventClass]);
+  const adapter = new Adapter();
+  const calls = [];
+  adapter.setNativeValue = (input, value) => { input.value = value; };
+  adapter.holdAction = async () => { calls.push('hold'); };
+  const input = {value: '', focus() {}, dispatchEvent: event => calls.push(event.type)};
+  await adapter.typeValue(input, '5', new AbortController().signal,
+    {clearActionTarget: () => calls.push('clear highlight')});
+  assert.equal(input.value, '5');
+  assert.deepEqual(calls, ['keydown', 'keyup', 'change', 'clear highlight', 'hold']);
+});
+
+test('clearing an action target prevents the old highlight from reappearing', () => {
+  const Panel = loadClass('../src/ui/coach-panel.js', 'IncidentCoachPanel');
+  const panel = Object.create(Panel.prototype);
+  const calls = [];
+  const oldTarget = {id: 'old'};
+  const nextTarget = {id: 'next'};
+  panel.activeTarget = oldTarget;
+  panel.spotlightRevealed = true;
+  panel.spotlight = {hide: () => calls.push('hide spotlight'), show: target => calls.push(`show ${target.id}`)};
+  panel.cursor = {hide: () => calls.push('hide cursor')};
+  panel.placeAwayFrom = () => {};
+  panel.clearActionTarget();
+  assert.equal(panel.activeTarget, null);
+  assert.equal(panel.spotlightRevealed, false);
+  panel.showTarget(nextTarget);
+  assert.equal(panel.activeTarget, nextTarget);
+  assert.equal(panel.spotlightRevealed, true);
+  assert.deepEqual(calls, ['hide spotlight', 'hide cursor', 'show next']);
 });
 
 test('the shared cursor path reveals clipped controls before moving to them', async () => {
