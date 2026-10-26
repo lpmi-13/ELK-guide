@@ -30,8 +30,8 @@
     "isolate": {
       "demonstration": {
         "narration": "Filter for ${param.incident.service} while keeping every service.version: ${var.query}.\n\nWe need both versions in the same result set before deciding whether the new release is unhealthy.",
-        "reasoning": "The service and version filter removes unrelated traffic, but it does not select errors.\n\nThe http.response.status_code field supplies the outcome evidence: HTTP ${param.incident.status} is a server error, while 200 is a successful response. We need to see both here before comparing versions.",
-        "evidence": "The filtered ${param.incident.service} results contain a mix of HTTP ${param.incident.status} and 200 in the highlighted http.response.status_code column.\n\nThe error codes show that some requests failed, but the mixed statuses mean we still need to check which service.version owns those failures before concluding that ${truth.finding} caused the regression.",
+        "reasoning": "The service and version filter removes unrelated traffic, but it does not select errors.\n\nRead http.response.status_code in the filtered results to see whether requests succeeded or failed before comparing versions.",
+        "evidence": "The filtered ${param.incident.service} results show HTTP ${param.incident.status} alongside 200 in http.response.status_code.\n\nWe still need to compare those outcomes with service.version before attributing the failures.",
         "learning_focus": ["http.response.status_code"]
       },
       "drifts": [
@@ -42,7 +42,7 @@
       "narration": "Add the version field as a column and compare it with HTTP response status codes across requests.",
       "demonstration": {
         "narration": "Add service.version as a visible table column beside the existing http.response.status_code evidence.\n\nCompare the two columns across ${param.incident.service} requests: which version returns HTTP ${param.incident.status}, and which returns 200?",
-        "reasoning": "A version label by itself does not establish a failure. The HTTP status code tells us whether that request failed or succeeded.\n\nReading service.version and http.response.status_code on the same rows lets us attribute the errors to ${param.incident.bad_version} and the successful requests to ${param.incident.good_version}.",
+        "reasoning": "A version label by itself does not establish a failure. The HTTP status code tells us whether each request failed or succeeded.\n\nReading service.version and http.response.status_code on the same rows lets us determine which version owns each outcome.",
         "evidence": "The highlighted columns pair ${param.incident.bad_version} with HTTP ${param.incident.status} and ${param.incident.good_version} with HTTP 200.\n\nThose status codes are the corroborating evidence that the new version is bad, rather than the version number alone: ${truth.conclusion}",
         "learning_focus": ["service.version", "http.response.status_code"]
       },

@@ -132,12 +132,16 @@ class RandomizationTests(unittest.TestCase):
                     index for index, goal in enumerate(goals) if goal["id"] == goal_id)]}
                 session["pending_command"] = None
                 command = self.server.next_command(session)
-                explanation = " ".join(command[field] for field in ("reasoning", "evidence"))
                 with self.subTest(seed=seed, goal=goal_id):
                     self.assertEqual(command["learning_focus"], expected_focus)
-                    self.assertIn("http.response.status_code", explanation)
-                    self.assertIn(str(incident["status"]), explanation)
-                    self.assertIn("200", explanation)
+                    self.assertIn("http.response.status_code", command["reasoning"] + command["evidence"])
+                    self.assertIn(str(incident["status"]), command["evidence"])
+                    self.assertIn("200", command["evidence"])
+                    if goal_id == "inspect":
+                        self.assertNotIn(incident["bad_version"], command["reasoning"])
+                        self.assertNotIn(incident["good_version"], command["reasoning"])
+                        self.assertIn(incident["bad_version"], command["evidence"])
+                        self.assertIn(incident["good_version"], command["evidence"])
 
     def test_specifics_and_required_filters_vary_across_seeds(self):
         for pack in LOG_HUNT_PACKS:
@@ -178,7 +182,7 @@ class RandomizationTests(unittest.TestCase):
                     self.assertTrue(feedback["task_correct"])
                     self.assertEqual(feedback["total"], 100)
 
-    def test_demonstration_copy_is_scenario_specific_and_fully_resolved(self):
+    def test_demonstration_copy_is_resolved_and_staged(self):
         catalog = json.loads((ROOT / "learning/catalog.json").read_text())
         for offset, entry in enumerate(catalog["scenarios"]):
             manifest = self.materialize(entry["id"], 135 + offset)
@@ -186,6 +190,10 @@ class RandomizationTests(unittest.TestCase):
             session["run_ready"] = True
             goals = session["playbook"]["goals"]
             finding = manifest["scenario"]["truth"]["answers"]["finding"]
+            demonstrated = [
+                item for item in goals
+                if item["reference_action"]["command"] not in {"request_answer", "request_diagnosis"}
+            ]
 
             for index, goal in enumerate(goals):
                 session["completed_goals"] = {item["id"] for item in goals[:index]}
@@ -195,10 +203,6 @@ class RandomizationTests(unittest.TestCase):
                     self.assertNotIn("${", json.dumps(command))
                     if command["type"] == "show_debrief":
                         summary = command["value"]
-                        demonstrated = [
-                            item for item in goals
-                            if item["reference_action"]["command"] not in {"request_answer", "request_diagnosis"}
-                        ]
                         answer = summary.get("answer", {})
                         # The debrief is a compact recap: one terse line per step plus the graded
                         # answer (shown as "Problem found"). There is no intro sentence and no
@@ -226,17 +230,14 @@ class RandomizationTests(unittest.TestCase):
                             self.assertIn("endpoint", endpoint_check["detail"].lower())
                             self.assertIn(f"spiked during the {finding}", summary["answer"]["conclusion"])
                     else:
-                        explanation = " ".join(command[key] for key in ("narration", "reasoning", "evidence"))
-                        if command["type"] != "set_time_range":
-                            self.assertIn(finding, explanation)
-                        self.assertGreater(len(command["narration"].split()), 20)
+                        self.assertGreaterEqual(len(command["narration"].split()), 12)
                         if command["type"] == "set_time_range":
                             # Its opening card already explains the chosen range, so there is no
                             # second reading card before the picker action.
                             self.assertEqual(command["reasoning"], "")
                         else:
-                            self.assertGreater(len(command["reasoning"].split()), 20)
-                        self.assertGreater(len(command["evidence"].split()), 20)
+                            self.assertGreaterEqual(len(command["reasoning"].split()), 12)
+                        self.assertGreaterEqual(len(command["evidence"].split()), 12)
 
             guided = self.server.create_session({"manifest": manifest}, "guided")
             guided["run_ready"] = True
@@ -324,14 +325,16 @@ class RandomizationTests(unittest.TestCase):
                     self.assertIn(phrase, value)
                     self.assertNotIn(finding, value.replace(phrase, ""))
 
-            # The isolate step now filters on the OBSERVED status code and cites the graded
-            # conclusion, which spells the window as "the <finding>".
+            # The isolate step filters on the observed status code. The full conclusion is
+            # reserved for the event-inspection evidence card.
             isolate = next(goal for goal in rendered["goals"] if goal["id"] == "isolate")
-            self.assertIn(f"spiked during the {finding}", isolate["demonstration"]["evidence"])
+            inspect = next(goal for goal in rendered["goals"] if goal["id"] == "inspect")
+            self.assertNotIn(f"spiked during the {finding}", isolate["demonstration"]["evidence"])
+            self.assertIn(f"spiked during the {finding}", inspect["demonstration"]["evidence"])
             # The finding is still woven through the copy (goal steps + the graded answer), and every
             # occurrence stays grammar-aware ("the <finding>"); the concise debrief no longer repeats
             # it at essay length, so this is a breadth floor, not a verbosity one.
-            self.assertGreaterEqual(len(matching_copy), 6)
+            self.assertGreaterEqual(len(matching_copy), 3)
 
     def test_every_mode_receives_the_same_seeded_incident_briefing(self):
         manifest = self.materialize("slow-payments", 424242)

@@ -54,13 +54,48 @@ class ScenarioV2Tests(unittest.TestCase):
                 self.assertTrue(all(goal["accepts"] and goal["reference_action"] for goal in playbook["goals"]))
                 demonstrated = [goal for goal in playbook["goals"] if goal["reference_action"]["command"] not in {"request_answer", "request_diagnosis"}]
                 self.assertTrue(all(set(goal.get("demonstration", {})) >= {"narration", "reasoning", "evidence"} for goal in demonstrated))
-                self.assertTrue(all("${truth." in json.dumps(goal["demonstration"]) for goal in demonstrated))
+                # The answer belongs in evidence shown after the corresponding action, not in
+                # the opening narration or reasoning card.
+                self.assertIn("${truth.", json.dumps(demonstrated[-1]["demonstration"]["evidence"]))
                 summary = playbook["demonstration_summary"]
                 self.assertEqual(len(summary["checks"]), len(demonstrated))
                 # Each check is a concise recap of one step — a real sentence, not a stub — but the
                 # debrief is a summary, so it is no longer required to restate the step's reasoning at
                 # essay length. Evidence/conclusion prose is likewise optional (the steps carried it).
                 self.assertTrue(all(len(check["detail"].split()) >= 4 for check in summary["checks"]))
+
+    def test_demonstration_opening_cards_do_not_reveal_answers(self):
+        answer_tokens = (
+            "${truth.",
+            "${param.incident.bad_version}",
+            "${param.incident.good_version}",
+            "${param.incident.route}",
+            "${param.incident.finding}",
+        )
+        for entry in self.catalog["scenarios"]:
+            pack = ROOT / "learning" / entry["pack"]
+            playbook = expand_descriptor(ROOT / "learning", "playbook", json.loads((pack / "playbook.json").read_text()))
+            for goal in playbook["goals"]:
+                for phase in ("narration", "reasoning"):
+                    opening = goal.get("demonstration", {}).get(phase, "")
+                    with self.subTest(scenario=entry["id"], goal=goal["id"], phase=phase):
+                        self.assertFalse(any(token in opening for token in answer_tokens), opening)
+            demonstrated = [goal for goal in playbook["goals"] if "demonstration" in goal]
+            self.assertNotIn("${truth.", demonstrated[0]["demonstration"]["evidence"])
+            for goal in demonstrated[:-1]:
+                with self.subTest(scenario=entry["id"], goal=goal["id"], phase="evidence"):
+                    self.assertNotIn("${truth.conclusion}", goal["demonstration"]["evidence"])
+
+    def test_deployment_version_pairing_is_revealed_after_column_addition(self):
+        pack = ROOT / "learning/scenarios/deployment-version-regression"
+        playbook = expand_descriptor(ROOT / "learning", "playbook", json.loads((pack / "playbook.json").read_text()))
+        inspect = next(goal for goal in playbook["goals"] if goal["id"] == "inspect")
+        self.assertEqual(inspect["reference_action"]["command"], "add_column")
+        for phase in ("narration", "reasoning"):
+            self.assertNotIn("${param.incident.bad_version}", inspect["demonstration"][phase])
+            self.assertNotIn("${param.incident.good_version}", inspect["demonstration"][phase])
+        self.assertIn("${param.incident.bad_version}", inspect["demonstration"]["evidence"])
+        self.assertIn("${param.incident.good_version}", inspect["demonstration"]["evidence"])
 
     def test_goal_inserts_splice_new_goals_relative_to_the_template(self):
         from contracts import expand_descriptor as expand

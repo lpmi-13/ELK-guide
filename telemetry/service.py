@@ -28,6 +28,12 @@ _log_handler.setFormatter(logging.Formatter("%(message)s"))
 _log_writer.addHandler(_log_handler)
 INDEX = Path(__file__).with_name("index.html")
 PREPARING = Path(__file__).with_name("preparing.html")
+FAVICONS = {
+    "/favicon.svg": (Path(__file__).with_name("favicon.svg"), "image/svg+xml"),
+    "/favicon.png": (Path(__file__).with_name("favicon.png"), "image/png"),
+    "/favicon.ico": (Path(__file__).with_name("favicon.ico"), "image/x-icon"),
+    "/apple-touch-icon.png": (Path(__file__).with_name("apple-touch-icon.png"), "image/png"),
+}
 lock = threading.Lock()
 
 
@@ -100,6 +106,9 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(page.encode(), "text/html; charset=utf-8")
         elif self.path == "/preparing":
             self.respond(PREPARING.read_bytes(), "text/html; charset=utf-8")
+        elif self.path in FAVICONS:
+            path, content_type = FAVICONS[self.path]
+            self.respond(path.read_bytes(), content_type)
         else:
             self.send_error(404)
 

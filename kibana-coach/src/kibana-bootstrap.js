@@ -1,3 +1,34 @@
+// Kibana's versioned favicon URLs can retain an older icon in the browser's
+// favicon cache after the preparation tab navigates here. Give the existing
+// links a distinct lab URL as soon as the head loads, and keep it if Kibana
+// updates those links later.
+(function useLabFavicon() {
+  const svgUrl = '/incident-coach/assets/favicon.svg?lab-mech-helmet=1';
+  const pngUrl = '/incident-coach/assets/favicon.png?lab-mech-helmet=1';
+  const apply = () => {
+    const links = document.head.querySelectorAll('link[rel~="icon"]');
+    if (!links.length) {
+      const icon = document.createElement('link');
+      icon.rel = 'icon';
+      icon.type = 'image/svg+xml';
+      icon.href = svgUrl;
+      document.head.append(icon);
+      return;
+    }
+    for (const link of links) {
+      const target = link.type === 'image/png' ? pngUrl : svgUrl;
+      if (link.getAttribute('href') !== target) link.setAttribute('href', target);
+    }
+  };
+  apply();
+  new MutationObserver(apply).observe(document.head, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['href', 'rel', 'type'],
+  });
+})();
+
 // Seed the same local preferences as each Discover callout's Dismiss action
 // before the Kibana application starts, so the prompts never flash into view.
 for (const key of [
