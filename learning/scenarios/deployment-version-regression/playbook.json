@@ -29,7 +29,7 @@
   "goal_overrides": {
     "isolate": {
       "demonstration": {
-        "narration": "Filter for ${param.incident.service} while keeping every service.version: ${var.query}.\n\nWe need both versions in the same result set before deciding whether the new release is unhealthy.",
+        "narration": "Only part of the fleet looks unhealthy. I'll keep all versions of ${param.incident.service} together and compare HTTP statuses to see whether failures line up with a release.",
         "reasoning": "The service and version filter removes unrelated traffic, but it does not select errors.\n\nRead http.response.status_code in the filtered results to see whether requests succeeded or failed before comparing versions.",
         "evidence": "The filtered ${param.incident.service} results show HTTP ${param.incident.status} alongside 200 in http.response.status_code.\n\nWe still need to compare those outcomes with service.version before attributing the failures.",
         "learning_focus": ["http.response.status_code"]
@@ -41,7 +41,7 @@
     "inspect": {
       "narration": "Add the version field as a column and compare it with HTTP response status codes across requests.",
       "demonstration": {
-        "narration": "Add service.version as a visible table column beside the existing http.response.status_code evidence.\n\nCompare the two columns across ${param.incident.service} requests: which version returns HTTP ${param.incident.status}, and which returns 200?",
+        "narration": "I'll add service.version beside HTTP status to see which version returns ${param.incident.status} and which returns 200.",
         "reasoning": "A version label by itself does not establish a failure. The HTTP status code tells us whether each request failed or succeeded.\n\nReading service.version and http.response.status_code on the same rows lets us determine which version owns each outcome.",
         "evidence": "The highlighted columns pair ${param.incident.bad_version} with HTTP ${param.incident.status} and ${param.incident.good_version} with HTTP 200.\n\nThose status codes are the corroborating evidence that the new version is bad, rather than the version number alone: ${truth.conclusion}",
         "learning_focus": ["service.version", "http.response.status_code"]

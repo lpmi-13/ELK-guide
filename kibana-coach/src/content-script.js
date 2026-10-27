@@ -88,7 +88,7 @@ function startIncidentCoach() {
   let executionController = null;
   // Set while a guided "Show me" walkthrough plays. The coach reports its own action once the
   // walkthrough ends, so the observer must not report the coach's changes as the learner's —
-  // that would complete the step early and cut off the "What we learned" beat.
+  // that would complete the step early and cut off its explanation.
   let walkthroughController = null;
   let guidedFeedbackShown = false;
   // Guided dead-end recovery: set while the coach explains and undoes a search that left no results.
@@ -126,8 +126,9 @@ function startIncidentCoach() {
   // reading beat runs at a time, so a single resolver is enough.
   let completeReadingBeat = null;
   let activeReadingBeat = null;
-  // An Advance pressed while the coach is acting belongs to the learning beat after that action.
-  // Keep its signal so an aborted step cannot skip a later command's explanation.
+  // An Advance pressed while the coach is acting waits for the action to finish. In a guided
+  // walkthrough it also completes the explanation that follows. Keep its signal scoped to the
+  // current action so it cannot affect a later command.
   let advanceAfterAction = null;
 
   function readingBeatWait(milliseconds, signal) {
@@ -189,7 +190,7 @@ function startIncidentCoach() {
         await readingBeatWait(completedActionHoldMs, controller.signal);
       } : null;
       if (command.mode === 'demonstration') {
-        // Start with the next move; show a separate why card only when it adds new guidance.
+        // Give the purpose and next move on one card before touching Kibana.
         // The anchor is only the control the opening cards point at; perform() resolves the controls
         // the step actually drives. Some steps (e.g. add_filter) deliberately point at an anchor the
         // registry does not hold, like the filter bar, so a missing anchor must never abort the run —
@@ -197,11 +198,7 @@ function startIncidentCoach() {
         const target = await adapter.resolveAnchor(command.target, controller.signal);
         coach.showCommand(command, target);
         await readBeat(command.narration);
-        if (command.reasoning) {
-          coach.showWhy(command);
-          await readBeat(command.reasoning);
-        }
-        // Beat 3 — action: hand the card over to the live step's narration.
+        // Hand the card over to the live step's action narration.
         coach.beginActionPhase(command);
       }
       // "Show me" starts the guided action immediately. Its explanation follows the action.
@@ -215,8 +212,8 @@ function startIncidentCoach() {
       const learning = walkthrough
         ? {...walkthrough, evidence: [walkthrough.reasoning, walkthrough.evidence].filter(Boolean).join('\n\n')}
         : command;
-      if (command.mode === 'demonstration' || learning.evidence) {
-        // Beat 4 — learning: summarise what the result showed before moving on.
+      if (walkthrough && learning.evidence) {
+        // Guided "Show me" still explains the result, since its action starts immediately.
         coach.showLearning(learning);
         await readBeat(learning.evidence);
       }

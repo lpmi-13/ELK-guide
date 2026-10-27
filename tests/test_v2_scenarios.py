@@ -54,8 +54,8 @@ class ScenarioV2Tests(unittest.TestCase):
                 self.assertTrue(all(goal["accepts"] and goal["reference_action"] for goal in playbook["goals"]))
                 demonstrated = [goal for goal in playbook["goals"] if goal["reference_action"]["command"] not in {"request_answer", "request_diagnosis"}]
                 self.assertTrue(all(set(goal.get("demonstration", {})) >= {"narration", "reasoning", "evidence"} for goal in demonstrated))
-                # The answer belongs in evidence shown after the corresponding action, not in
-                # the opening narration or reasoning card.
+                # The answer belongs in the final debrief (and guided Show me evidence), not in
+                # a demonstration card shown before the corresponding action.
                 self.assertIn("${truth.", json.dumps(demonstrated[-1]["demonstration"]["evidence"]))
                 summary = playbook["demonstration_summary"]
                 self.assertEqual(len(summary["checks"]), len(demonstrated))
@@ -86,6 +86,19 @@ class ScenarioV2Tests(unittest.TestCase):
                 with self.subTest(scenario=entry["id"], goal=goal["id"], phase="evidence"):
                     self.assertNotIn("${truth.conclusion}", goal["demonstration"]["evidence"])
 
+    def test_every_scenario_has_short_action_and_purpose_on_its_opening_cards(self):
+        for entry in self.catalog["scenarios"]:
+            pack = ROOT / "learning" / entry["pack"]
+            playbook = expand_descriptor(ROOT / "learning", "playbook", json.loads((pack / "playbook.json").read_text()))
+            for goal in playbook["goals"]:
+                if "demonstration" not in goal:
+                    continue
+                narration = goal["demonstration"]["narration"]
+                with self.subTest(scenario=entry["id"], goal=goal["id"]):
+                    self.assertIn("I'll", narration)
+                    self.assertNotIn("\n", narration)
+                    self.assertLessEqual(len(narration.split()), 40)
+
     def test_deployment_version_pairing_is_revealed_after_column_addition(self):
         pack = ROOT / "learning/scenarios/deployment-version-regression"
         playbook = expand_descriptor(ROOT / "learning", "playbook", json.loads((pack / "playbook.json").read_text()))
@@ -96,6 +109,31 @@ class ScenarioV2Tests(unittest.TestCase):
             self.assertNotIn("${param.incident.good_version}", inspect["demonstration"][phase])
         self.assertIn("${param.incident.bad_version}", inspect["demonstration"]["evidence"])
         self.assertIn("${param.incident.good_version}", inspect["demonstration"]["evidence"])
+
+    def test_schema_drift_query_looks_for_missing_routes_before_identifying_producer(self):
+        pack = ROOT / "learning/scenarios/schema-drift-data-quality"
+        scenario = json.loads((pack / "scenario.json").read_text())
+        briefings = json.loads((ROOT / "learning/incident-briefings.json").read_text())
+        briefing = briefings["scenarios"]["schema-drift-data-quality"]
+        playbook = expand_descriptor(ROOT / "learning", "playbook", json.loads((pack / "playbook.json").read_text()))
+        isolate = next(goal for goal in playbook["goals"] if goal["id"] == "isolate")
+        inspect = next(goal for goal in playbook["goals"] if goal["id"] == "inspect")
+        self.assertIn("http.route", scenario["brief"])
+        self.assertIn("only when http.route is populated", briefing["summary"])
+        self.assertEqual(isolate["reference_action"]["arguments"], "schema.route_present: false")
+        self.assertIn("only counts requests with http.route", isolate["demonstration"]["narration"])
+        self.assertIn("their producer and version", isolate["demonstration"]["narration"])
+        self.assertIn("producer and version together", inspect["demonstration"]["narration"])
+        self.assertEqual(isolate["demonstration"]["reasoning"], "")
+        self.assertEqual(inspect["demonstration"]["reasoning"], "")
+
+    def test_esql_deployment_comparison_calculates_errors_and_latency(self):
+        pack = ROOT / "learning/scenarios/esql-before-after-deploy"
+        playbook = expand_descriptor(ROOT / "learning", "playbook", json.loads((pack / "playbook.json").read_text()))
+        isolate = next(goal for goal in playbook["goals"] if goal["id"] == "isolate")
+        query = isolate["reference_action"]["arguments"]
+        self.assertIn('failures = COUNT(*) WHERE event.outcome == "failure"', query)
+        self.assertIn('p95 = PERCENTILE(event.duration, 95)', query)
 
     def test_goal_inserts_splice_new_goals_relative_to_the_template(self):
         from contracts import expand_descriptor as expand

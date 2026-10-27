@@ -115,12 +115,12 @@
       "observed_minutes_ago": [12, 17, 21],
       "channels": ["monitoring", "support", "release"],
       "headline": "Business-event dashboard count dropped unexpectedly",
-      "summary": "A key dashboard count fell while ingress traffic stayed flat, suggesting a telemetry contract problem rather than a real traffic loss.",
+      "summary": "The affected dashboard counts requests only when http.route is populated. That count fell while ingress traffic, which counts all requests, stayed flat.",
       "impact": "Operational reporting and downstream analytics may be incomplete. Teams need to know which producer stopped populating the expected field before trusting the dashboard again.",
       "signals": [
-        {"label": "Dashboard", "value": "Tracked event count materially below baseline"},
-        {"label": "Ingress", "value": "Request volume remains within normal range"},
-        {"label": "Triage request", "value": "Identify the producer and version with missing fields"}
+        {"label": "Dashboard", "value": "Requests with http.route materially below baseline"},
+        {"label": "Ingress", "value": "All-request volume remains within normal range"},
+        {"label": "Triage request", "value": "Identify the producer and version missing http.route"}
       ]
     },
     "log-pattern-noise-reduction": {

@@ -7,7 +7,7 @@
   "classification": "core",
   "difficulty": 2,
   "estimated_minutes": 15,
-  "brief": "A dashboard count dropped even though traffic did not. Prove which producer and version stopped populating the expected route field.",
+  "brief": "A dashboard counts requests only when http.route is populated. Its count dropped while all-request ingress traffic stayed steady. Prove which producer and version stopped populating the route field.",
   "skills": ["missing-fields", "field-statistics", "producer-comparison"],
   "required_capabilities": ["discover", "spaces", "saved_objects"],
   "parameters": {

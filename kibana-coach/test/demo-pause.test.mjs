@@ -141,8 +141,28 @@ test('pause freezes a reading beat; resume continues its remaining time without 
   assert.equal(demo.calls.actions, 1);
 });
 
-test('a completed demonstration action stays on screen for one second, including paused time', async () => {
+test('the demonstration moves from a motivated opening card straight to the action', async () => {
   const demo = await makeDemo();
+  await demo.client.onCommand({
+    command_id: 'step-with-reason', mode: 'demonstration', type: 'enter_query', target: 'query',
+    narration: "I'll filter the failures to find the request pattern behind the spike.",
+    reasoning: 'The old separate why card would repeat this motivation.',
+    evidence: 'A post-action recap is unnecessary here.',
+  });
+  demo.coach.advanceCelebration = () => false;
+  demo.coach.advanceInfo = () => false;
+  demo.adapter.advanceTyping = () => false;
+  demo.coach.onAdvance();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(demo.calls.actions, 1);
+  assert.deepEqual(demo.calls.countdowns, [16500]);
+  assert.deepEqual(demo.calls.phases, []);
+});
+
+test('a completed demonstration action keeps its one-second hold, then advances without a recap', async () => {
+  const demo = await makeDemo();
+  let finished = 0;
+  demo.coach.finishCommand = () => { finished++; };
   demo.adapter.perform = async (_command, _coach, {holdAction}) => {
     demo.calls.actions++;
     await holdAction();
@@ -174,7 +194,9 @@ test('a completed demonstration action stays on screen for one second, including
   assert.deepEqual(demo.calls.phases, []);
   demo.clock.advance(1);
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(demo.calls.phases, ['learning']);
+  assert.deepEqual(demo.calls.phases, []);
+  assert.equal(finished, 1);
+  assert.deepEqual(demo.calls.countdowns, [16500, 1000]);
 });
 
 test('Advance during a moving demonstration action continues after the action finishes', async () => {
@@ -210,8 +232,8 @@ test('Advance during a moving demonstration action continues after the action fi
 
   demo.clock.advance(1000); // The control's own hold finishes before the queued Advance applies.
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(demo.calls.phases, ['learning']);
-  assert.deepEqual(demo.calls.countdowns.slice(0, 3), [16500, 1000, 16500]);
+  assert.deepEqual(demo.calls.phases, []);
+  assert.deepEqual(demo.calls.countdowns, [16500, 1000]);
   assert.equal(finished, 1);
   assert.equal(demo.coach.advancePending, false);
 });
@@ -246,7 +268,7 @@ test('repeated Advance clicks during an action hold wait for that hold to finish
   assert.deepEqual(demo.calls.phases, []);
   demo.clock.advance(1);
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(demo.calls.phases, ['learning']);
+  assert.deepEqual(demo.calls.phases, []);
   assert.equal(finished, 1);
   assert.equal(demo.coach.advancePending, false);
 });

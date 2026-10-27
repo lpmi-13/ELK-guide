@@ -2,7 +2,8 @@
 
 These checks exercise the real materialize -> playbook-resolution path (not just the
 static matrix) so that a seeded run's brief, seeded signal, truth, and demonstrated KQL
-all agree, two seeds require different filters, and the same seed is reproducible.
+all agree, and the same seed is reproducible. A fixed symptom can use the same first
+filter across seeds while the producer and version found in its results vary.
 """
 
 import importlib.util
@@ -155,7 +156,10 @@ class RandomizationTests(unittest.TestCase):
                 queries.add(signature)
             with self.subTest(pack=pack):
                 self.assertGreater(len(findings), 1, "findings should differ across seeds")
-                self.assertGreater(len(queries), 1, "the demonstrated narrowing should differ across seeds")
+                if pack == "schema-drift-data-quality":
+                    self.assertEqual(queries, {"schema.route_present: false"})
+                else:
+                    self.assertGreater(len(queries), 1, "the demonstrated narrowing should differ across seeds")
 
     def test_a_randomized_run_is_internally_consistent_and_solvable(self):
         # Drive the resolved playbook against the materialized (concrete) truth the way the
@@ -231,9 +235,10 @@ class RandomizationTests(unittest.TestCase):
                             self.assertIn(f"spiked during the {finding}", summary["answer"]["conclusion"])
                     else:
                         self.assertGreaterEqual(len(command["narration"].split()), 12)
-                        if command["type"] == "set_time_range":
-                            # Its opening card already explains the chosen range, so there is no
-                            # second reading card before the picker action.
+                        if command["type"] == "set_time_range" or (
+                            entry["id"] == "schema-drift-data-quality" and goal["id"] in {"isolate", "inspect"}
+                        ):
+                            # These opening cards include the motivation directly before the action.
                             self.assertEqual(command["reasoning"], "")
                         else:
                             self.assertGreaterEqual(len(command["reasoning"].split()), 12)

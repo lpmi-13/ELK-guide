@@ -45,7 +45,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('const demonstrationSlowdown = 3', content)
         self.assertIn('const demonstrationTimingScale = 10 * demonstrationSlowdown', content)
         self.assertIn('readingPause(text) * demonstrationSlowdown', content)
-        self.assertIn("readBeat(command.reasoning)", content)
+        self.assertNotIn("readBeat(command.reasoning)", content)
         self.assertIn('placeAwayFrom(target)', coach)
         self.assertIn("max-height:calc(100vh - 48px);overflow:auto", coach)
         self.assertIn("<strong>Problem found</strong>", debrief)
@@ -151,9 +151,13 @@ class ContractTests(unittest.TestCase):
         self.assertIn("trace.id", trace_step["narration"])
         self.assertIn('const traceQuery = `scenario.id:', adapter)
         self.assertIn("replace the service filter with this trace ID", adapter)
-        # The refactored demonstration pages distinct explain -> act -> learn beats.
-        for beat in ("showWhy", "beginActionPhase", "showLearning", "Doing it now", "What we learned"):
+        # The demonstration explains its motive before acting; guided Show me can still
+        # use the learning card when the learner starts its action immediately.
+        for beat in ("beginActionPhase", "showLearning", "Doing it now", "What we learned"):
             self.assertIn(beat, coach)
+        content = (ROOT / "kibana-coach/src/content-script.js").read_text(encoding="utf-8")
+        self.assertNotIn("coach.showWhy(command)", content)
+        self.assertIn("if (walkthrough && learning.evidence)", content)
 
     def test_saved_objects_are_ndjson_with_stable_ids(self):
         objects = [json.loads(line) for line in (ROOT / "kibana/saved-objects.ndjson").read_text().splitlines() if line]

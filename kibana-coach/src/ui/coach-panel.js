@@ -169,8 +169,8 @@ class IncidentCoachPanel {
     this.root.querySelector('#hint').hidden = command.mode === 'demonstration';
     if (command.type === 'request_diagnosis' || command.type === 'request_answer') this.renderAnswerSchema(command.answer_schema);
     this.root.querySelector('#diagnosis').hidden = !['request_diagnosis', 'request_answer'].includes(command.type) || command.mode === 'demonstration';
-    // Reveal one beat at a time. A demonstration opens on its intent and is walked
-    // through action then learning by the orchestrator; other modes show a single card.
+    // Reveal one beat at a time. A demonstration opens on its intent, then performs
+    // the action; other modes show a single card.
     if (command.mode === 'demonstration') {
       this.enterPhase('what');
     } else if (command.mode === 'challenge') {
@@ -308,8 +308,8 @@ class IncidentCoachPanel {
     this.root.querySelector('#hint-text').textContent = '';
   }
 
-  // The demonstration is revealed as one idea per card: what → optional why → action → learning.
-  // When supplied, "what" and "why" are separate full cards with their own reading countdowns.
+  // The demonstration shows its purpose before the action. Guided "Show me" also has a
+  // learning card afterward, since the learner starts that action immediately.
   enterPhase(phase, command = this.currentCommand) {
     this.clearHint();
     if (phase !== 'learning') this.clearEvidenceHighlights();
@@ -320,9 +320,6 @@ class IncidentCoachPanel {
     stage.hidden = false;
     if (phase === 'what') {
       this.renderPhase({eyebrow: 'What I’ll do next', headline: command?.narration || ''});
-      this.resetCountdown();
-    } else if (phase === 'why') {
-      this.renderPhase({eyebrow: 'Why I’m doing it', headline: command?.reasoning || ''});
       this.resetCountdown();
     } else if (phase === 'action') {
       this.renderPhase({eyebrow: 'Doing it now', headline: 'Watch the highlighted control and the cursor.'});
@@ -363,8 +360,6 @@ class IncidentCoachPanel {
     this.enterPhase('action', command);
     requestAnimationFrame(() => this.placeAwayFrom(this.activeTarget));
   }
-
-  showWhy(command = this.currentCommand) { this.enterPhase('why', command); }
 
   beginActionPhase(command = this.currentCommand) { this.enterPhase('action', command); }
 
