@@ -32,6 +32,19 @@ test('Advance completes the current typed value and lets the action continue', a
   assert.equal(adapter.advanceTyping(), false);
 });
 
+test('queued Advance is visibly disabled until the action finishes', () => {
+  const Panel = loadClass('../src/ui/coach-panel.js', 'IncidentCoachPanel');
+  const panel = Object.create(Panel.prototype);
+  const advance = {disabled: false, textContent: 'Advance', title: ''};
+  panel.root = {querySelector: () => advance};
+  panel.setAdvancePending(true);
+  assert.equal(advance.disabled, true);
+  assert.match(advance.textContent, /when ready/);
+  panel.setAdvancePending(false);
+  assert.equal(advance.disabled, false);
+  assert.equal(advance.textContent, 'Advance');
+});
+
 test('the coach can be dragged and stays clear of a newly added column', () => {
   const header = {
     classList: {add() {}, remove() {}},

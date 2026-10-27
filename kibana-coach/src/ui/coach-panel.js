@@ -163,6 +163,7 @@ class IncidentCoachPanel {
     this.root.querySelector('#incident-info').hidden = command.mode !== 'guided' || !this.currentBriefing;
     const advance = this.root.querySelector('#advance');
     advance.hidden = command.mode !== 'demonstration';
+    advance.disabled = false;
     advance.textContent = 'Advance';
     advance.title = 'Continue to the next part';
     this.root.querySelector('#hint').hidden = command.mode === 'demonstration';
@@ -524,6 +525,13 @@ class IncidentCoachPanel {
     return true;
   }
 
+  setAdvancePending(pending) {
+    const advance = this.root.querySelector('#advance');
+    advance.disabled = pending;
+    advance.textContent = pending ? 'Advancing when ready…' : 'Advance';
+    advance.title = pending ? 'The coach will continue when this action finishes' : 'Continue to the next part';
+  }
+
   // Kibana's expanded-document viewer opens as a flyout docked on the right. Return its on-screen
   // rectangle while it's open (and big enough to matter), so placement can treat it as a keep-out
   // region just like a highlighted control; null when there's no flyout to dodge.
@@ -854,7 +862,7 @@ class IncidentCoachPanel {
     .countdown.working span { width:34%!important;animation:cd-sweep 1.25s cubic-bezier(.55,0,.45,1) infinite; } @keyframes cd-sweep { 0%{transform:translateX(-115%)} 100%{transform:translateX(310%)} }
     @media (prefers-reduced-motion: reduce) { .countdown.working span { transform:none!important;width:100%!important;opacity:.55; } .countdown span { width:100%!important; } }
     button { border:1px solid #8293a3;border-radius:5px;background:#f5f7f9;padding:6px 9px;cursor:pointer; } button:hover,button:focus-visible { outline:2px solid #006bb4;outline-offset:1px; }
-    #stop { color:#a32b1c;border-color:#d77d72; } #advance { margin-left:auto; } .actions { display:flex; gap:7px; margin-top:12px; }
+    #stop { color:#a32b1c;border-color:#d77d72; } #advance { margin-left:auto; } #advance:disabled { opacity:.7;cursor:wait; } .actions { display:flex; gap:7px; margin-top:12px; }
     #hint-card { margin-top:14px;padding:13px 16px 14px;border:1px solid #b8dcea;border-left:4px solid #0874a8;border-radius:9px;background:#f0f8fc;box-shadow:0 4px 14px #0874a812; }
     #hint-label { display:block;color:#08638d;font:700 11px/1.3 system-ui,sans-serif;letter-spacing:.09em;text-transform:uppercase; }
     #hint-text { margin:6px 0 0;color:#173d53;font:500 15px/1.5 'Segoe UI',system-ui,sans-serif;letter-spacing:-.005em;white-space:pre-line; }

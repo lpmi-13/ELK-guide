@@ -122,6 +122,74 @@ test('the shared cursor path clears the completed target before the timed hold',
   assert.equal(finished, true);
 });
 
+test('the cursor reacquires a time control replaced while it was moving', async () => {
+  const Adapter = loadClass('../src/kibana-adapter.js', 'KibanaAdapter');
+  const adapter = new Adapter();
+  const calls = [];
+  const oldTarget = {isConnected: true, click: () => calls.push('stale click')};
+  const replacement = {isConnected: true, click: () => calls.push('live click')};
+  adapter.waitFor = async name => {
+    assert.equal(name, 'kibana.time_picker');
+    return replacement;
+  };
+  const coach = {
+    showTarget: target => calls.push(target === oldTarget ? 'show stale' : 'show live'),
+    clearActionTarget() {},
+    cursor: {
+      reveal: async () => {},
+      moveTo: async target => {
+        calls.push(target === oldTarget ? 'move stale' : 'move live');
+        if (target === oldTarget) oldTarget.isConnected = false;
+      },
+      click: () => calls.push('cursor click'),
+    },
+  };
+  await adapter.pointAt(oldTarget, coach, 1, new AbortController().signal, 'Open the time picker.',
+    {activate: true, targetName: 'kibana.time_picker'});
+  assert.deepEqual(calls, ['show stale', 'move stale', 'show live', 'move live', 'cursor click', 'live click']);
+});
+
+test('a picker redrawn after its first click is reopened and set through every visible control', async () => {
+  const Adapter = loadClass('../src/kibana-adapter.js', 'KibanaAdapter', ['Event'],
+    [class { constructor(type) { this.type = type; } }]);
+  const adapter = new Adapter();
+  adapter.currentTimeRange = () => ({from: 'now-15m', to: 'now'});
+  const toggle = {};
+  const custom = {};
+  const number = {};
+  const unit = {options: [{textContent: 'minutes ago', value: 'm_past'}], dispatchEvent() {}};
+  const apply = {};
+  const calls = [];
+  let openings = 0;
+  let customOpen = false;
+  adapter.resolve = name => customOpen ? ({'kibana.time_value': number, 'kibana.time_unit': unit,
+    'kibana.time_apply': apply})[name] || null : null;
+  adapter.waitFor = async name => {
+    if (name === 'kibana.time_picker') return toggle;
+    if (name === 'kibana.time_custom_range') {
+      if (openings < 2) throw new Error('Picker was replaced during loading');
+      return custom;
+    }
+    return ({'kibana.time_value': number, 'kibana.time_unit': unit})[name];
+  };
+  adapter.pointAt = async (_target, _coach, _scale, _signal, activity) => {
+    calls.push(activity);
+    if (activity === 'Open the time picker.') openings++;
+    if (activity === 'Choose Custom range.') customOpen = true;
+  };
+  adapter.typeValue = async (_input, value) => { calls.push(`Type ${value}`); };
+  adapter.holdAction = async () => { calls.push('hold'); };
+
+  const result = await adapter.setTimeRange({value: {from: 'now-10m', to: 'now'}}, toggle, {}, 1,
+    new AbortController().signal);
+  assert.equal(result.state_after.time_from, 'now-10m');
+  assert.deepEqual(calls, [
+    'Open the time picker.', 'Open the time picker.', 'Choose Custom range.',
+    'Click the Time value box, clear its old value, and type 10.', 'Type 10',
+    'Choose minutes as the unit.', 'hold', 'Apply the Last 10 minutes range.',
+  ]);
+});
+
 test('typing clears its target after the value is committed and before the hold', async () => {
   const EventClass = class { constructor(type) { this.type = type; } };
   const Adapter = loadClass('../src/kibana-adapter.js', 'KibanaAdapter',

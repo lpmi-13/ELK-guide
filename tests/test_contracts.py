@@ -88,8 +88,8 @@ class ContractTests(unittest.TestCase):
         self.assertIn('<button id="advance"', coach)
         self.assertIn("advance.hidden = command.mode !== 'demonstration'", coach)
         self.assertIn("coach.onAdvance = () =>", content)
-        # Advance just completes the reading pause on screen (as if its countdown filled) and lets
-        # the demonstration continue at its normal pace — it does not fast-forward the whole step.
+        # Advance completes a reading pause on screen. During an action it waits for the action to
+        # finish, then continues past the learning card; it never skips the Kibana action itself.
         self.assertIn("completeReadingBeat", content)
         self.assertIn("await readingBeatWait(pause, controller.signal)", content)
         # The un-performed skip pathway is gone from both the client and the service.

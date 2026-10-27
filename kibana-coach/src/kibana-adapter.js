@@ -313,7 +313,7 @@ class KibanaAdapter {
     }
   }
 
-  async pointAt(target, coach, timingScale, signal, activity, {activate = false, showClick = true, hold = true} = {}) {
+  async pointAt(target, coach, timingScale, signal, activity, {activate = false, showClick = true, hold = true, targetName = null} = {}) {
     // Every application adapter uses this path. Reveal controls inside scrollable panels before
     // placing the spotlight or cursor, so the visible pointer lands on the control we act on.
     await coach.cursor.reveal(target, {timingScale, signal});
@@ -330,6 +330,15 @@ class KibanaAdapter {
       return;
     }
     await coach.cursor.moveTo(target, {timingScale, signal});
+    // Discover can replace a control while the cursor travels to it. Clicking the detached node
+    // looks convincing but does nothing, so reacquire the live control and move the cursor there.
+    for (let attempts = 0; activate && target.isConnected === false; attempts += 1) {
+      if (!targetName || attempts >= 3) throw new Error(`Kibana target disappeared before click: ${targetName || activity}`);
+      target = await this.waitFor(targetName, 3000, signal);
+      await coach.cursor.reveal(target, {timingScale, signal});
+      coach.showTarget(target, activity);
+      await coach.cursor.moveTo(target, {timingScale, signal});
+    }
     if (showClick) coach.cursor.click();
     if (activate) target.click();
     if (activate && hold) {
@@ -383,39 +392,48 @@ class KibanaAdapter {
       await this.pointAt(toggle, coach, timingScale, signal, `The window is already the last ${range.amount} ${range.unitLabel}, so there's nothing to change here.`, {showClick: false});
       return {type: 'time_range_changed', details: command.value, state_after: {time_from: command.value.from, time_to: command.value.to}};
     }
-    await this.pointAt(toggle, coach, timingScale, signal, 'Open the time picker.', {activate: true});
-    await this.settle(250, timingScale, signal);
-    let number = this.resolve('kibana.time_value');
-    let unit = this.resolve('kibana.time_unit');
-    let apply = this.resolve('kibana.time_apply');
-    if (!number || !unit || !apply) {
-      const customRange = await this.waitFor('kibana.time_custom_range', 5000, signal).catch(() => null);
-      if (customRange) {
-        await this.pointAt(customRange, coach, timingScale, signal, 'Choose Custom range.', {activate: true});
-        number = await this.waitFor('kibana.time_value', 5000, signal).catch(() => null);
-        unit = await this.waitFor('kibana.time_unit', 5000, signal).catch(() => null);
-        apply = await this.waitFor('kibana.time_apply', 5000, signal).catch(() => null);
+    let number = null;
+    let unit = null;
+    let apply = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      // Discover may redraw the picker while the first histogram loads. Re-open it and retry the
+      // visible controls rather than silently changing the URL and skipping the demonstration.
+      const liveToggle = attempt ? await this.waitFor('kibana.time_picker', 5000, signal) : toggle;
+      await this.pointAt(liveToggle, coach, timingScale, signal, 'Open the time picker.', {activate: true, targetName: 'kibana.time_picker'});
+      number = this.resolve('kibana.time_value');
+      unit = this.resolve('kibana.time_unit');
+      apply = this.resolve('kibana.time_apply');
+      if (number && unit && apply) break;
+      const customRange = await this.waitFor('kibana.time_custom_range', 1200, signal).catch(error => {
+        if (error.name === 'AbortError') throw error;
+        return null;
+      });
+      if (!customRange) continue;
+      try {
+        await this.pointAt(customRange, coach, timingScale, signal, 'Choose Custom range.', {activate: true, targetName: 'kibana.time_custom_range'});
+      } catch (error) {
+        if (error.name === 'AbortError' || attempt === 2) throw error;
+        continue;
       }
+      number = this.resolve('kibana.time_value');
+      unit = this.resolve('kibana.time_unit');
+      apply = this.resolve('kibana.time_apply');
+      if (number && unit && apply) break;
     }
-    if (number && unit && apply) {
-      await this.pointAt(number, coach, timingScale, signal, `Click the Time value box, clear its old value, and type ${range.amount}.`, {activate: true, hold: false});
-      await this.typeValue(number, range.amount, signal, coach);
-      await this.pointAt(unit, coach, timingScale, signal, `Choose ${range.unitLabel} as the unit.`, {activate: true, hold: false});
-      const unitPattern = new RegExp(`^${range.unitName}s?(?: ago)?$`, 'i');
-      const matchingOption = Array.from(unit.options).find(option => unitPattern.test(option.textContent.trim()));
-      unit.value = matchingOption?.value || range.unitCode;
-      unit.dispatchEvent(new Event('input', {bubbles: true}));
-      unit.dispatchEvent(new Event('change', {bubbles: true}));
-      coach.clearActionTarget?.();
-      await this.holdAction?.();
-      await this.pointAt(apply, coach, timingScale, signal, `Apply the Last ${range.amount} ${range.unitLabel} range.`, {activate: true});
-    } else {
-      const hash = location.hash;
-      const globalState = `_g=(time:(from:'${command.value.from}',to:'${command.value.to}'))`;
-      location.hash = hash.includes('_g=') ? hash.replace(/_g=\([^&]*\)/, globalState) : `${hash}${hash.includes('?') ? '&' : '?'}${globalState}`;
-      coach.clearActionTarget?.();
-      await this.holdAction?.();
-    }
+    if (!number || !unit || !apply) throw new Error('Kibana time picker controls did not remain available. Try this step again.');
+    await this.pointAt(number, coach, timingScale, signal, `Click the Time value box, clear its old value, and type ${range.amount}.`, {activate: true, hold: false, targetName: 'kibana.time_value'});
+    number = await this.waitFor('kibana.time_value', 3000, signal);
+    await this.typeValue(number, range.amount, signal, coach);
+    await this.pointAt(unit, coach, timingScale, signal, `Choose ${range.unitLabel} as the unit.`, {activate: true, hold: false, targetName: 'kibana.time_unit'});
+    unit = await this.waitFor('kibana.time_unit', 3000, signal);
+    const unitPattern = new RegExp(`^${range.unitName}s?(?: ago)?$`, 'i');
+    const matchingOption = Array.from(unit.options).find(option => unitPattern.test(option.textContent.trim()));
+    unit.value = matchingOption?.value || range.unitCode;
+    unit.dispatchEvent(new Event('input', {bubbles: true}));
+    unit.dispatchEvent(new Event('change', {bubbles: true}));
+    coach.clearActionTarget?.();
+    await this.holdAction?.();
+    await this.pointAt(apply, coach, timingScale, signal, `Apply the Last ${range.amount} ${range.unitLabel} range.`, {activate: true, targetName: 'kibana.time_apply'});
     return {type: 'time_range_changed', details: command.value, state_after: {time_from: command.value.from, time_to: command.value.to}};
   }
 

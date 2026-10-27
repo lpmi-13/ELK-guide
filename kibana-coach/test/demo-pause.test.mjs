@@ -30,7 +30,7 @@ function makeClock() {
 
 async function makeDemo() {
   const clock = makeClock();
-  const calls = {countdowns: [], resumes: [], commands: 0, actions: 0, messages: [], phases: [], learning: null, updatedTargets: [], checkIns: [], hints: 0};
+  const calls = {countdowns: [], resumes: [], commands: 0, actions: 0, messages: [], phases: [], learning: null, pending: [], updatedTargets: [], checkIns: [], hints: 0};
   let coach;
   let client;
   let adapter;
@@ -41,9 +41,10 @@ async function makeDemo() {
     startCountdown(duration) { calls.countdowns.push(duration); }
     stopCountdown() {}
     resumeCountdown(remaining) { calls.resumes.push(remaining); }
-    showLearning(command) { calls.phases.push('learning'); calls.learning = command; }
-    beginWalkthrough() { calls.phases.push('action'); }
-    beginActionPhase() {}
+    showLearning(command) { this.phase = 'learning'; calls.phases.push('learning'); calls.learning = command; }
+    setAdvancePending(pending) { this.advancePending = pending; calls.pending.push(pending); }
+    beginWalkthrough() { this.phase = 'action'; calls.phases.push('action'); }
+    beginActionPhase() { this.phase = 'action'; }
     finishCommand() {}
     updateCommandTarget(command, target) { calls.updatedTargets.push({command, target}); }
     toast() {}
@@ -176,6 +177,101 @@ test('a completed demonstration action stays on screen for one second, including
   assert.deepEqual(demo.calls.phases, ['learning']);
 });
 
+test('Advance during a moving demonstration action continues after the action finishes', async () => {
+  const demo = await makeDemo();
+  let finishControl;
+  let finished = 0;
+  demo.coach.finishCommand = () => { finished++; };
+  demo.adapter.perform = async (_command, _coach, {holdAction}) => {
+    demo.calls.actions++;
+    await new Promise(resolve => { finishControl = resolve; });
+    await holdAction();
+    return null;
+  };
+  await demo.client.onCommand({
+    command_id: 'step-early-advance', mode: 'demonstration', type: 'set_time_range', target: 'time',
+    narration: 'Set the time picker', reasoning: '', evidence: 'The wider window now includes the incident.',
+  });
+  demo.coach.advanceCelebration = () => false;
+  demo.coach.advanceInfo = () => false;
+  demo.adapter.advanceTyping = () => false;
+  demo.coach.onAdvance(); // Opening explanation.
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(demo.calls.actions, 1);
+
+  demo.coach.onAdvance(); // The control has not finished yet.
+  demo.coach.onAdvance(); // Repeated clicks must not affect the action again.
+  assert.deepEqual(demo.calls.pending, [true]);
+  finishControl();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(finished, 0);
+  assert.deepEqual(demo.calls.countdowns.slice(0, 2), [16500, 1000]);
+
+  demo.clock.advance(1000); // The control's own hold finishes before the queued Advance applies.
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(demo.calls.phases, ['learning']);
+  assert.deepEqual(demo.calls.countdowns.slice(0, 3), [16500, 1000, 16500]);
+  assert.equal(finished, 1);
+  assert.equal(demo.coach.advancePending, false);
+});
+
+test('repeated Advance clicks during an action hold wait for that hold to finish', async () => {
+  const demo = await makeDemo();
+  let finished = 0;
+  demo.coach.finishCommand = () => { finished++; };
+  demo.adapter.perform = async (_command, _coach, {holdAction}) => {
+    await holdAction();
+    return null;
+  };
+  await demo.client.onCommand({
+    command_id: 'step-holding', mode: 'demonstration', type: 'set_time_range', target: 'time',
+    narration: 'Set the time picker', reasoning: '', evidence: 'The wider window now includes the incident.',
+  });
+  demo.coach.advanceCelebration = () => false;
+  demo.coach.advanceInfo = () => false;
+  demo.adapter.advanceTyping = () => false;
+  demo.coach.onAdvance();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(demo.calls.countdowns.slice(0, 2), [16500, 1000]);
+
+  demo.coach.onAdvance();
+  demo.coach.onAdvance();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(demo.calls.phases, []);
+  assert.deepEqual(demo.calls.pending, [true]);
+  demo.clock.advance(999);
+  await Promise.resolve();
+  assert.deepEqual(demo.calls.phases, []);
+  demo.clock.advance(1);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(demo.calls.phases, ['learning']);
+  assert.equal(finished, 1);
+  assert.equal(demo.coach.advancePending, false);
+});
+
+test('a failed action releases its queued Advance button', async () => {
+  const demo = await makeDemo();
+  let failControl;
+  demo.adapter.perform = async () => new Promise((_resolve, reject) => { failControl = reject; });
+  await demo.client.onCommand({
+    command_id: 'step-failed', mode: 'demonstration', type: 'set_time_range', target: 'time',
+    narration: 'Set the time picker', reasoning: '', evidence: 'The window includes the incident.',
+  });
+  demo.coach.advanceCelebration = () => false;
+  demo.coach.advanceInfo = () => false;
+  demo.adapter.advanceTyping = () => false;
+  demo.coach.onAdvance();
+  await Promise.resolve();
+  await Promise.resolve();
+  demo.coach.onAdvance();
+  assert.equal(demo.coach.advancePending, true);
+  failControl(new Error('Picker failed'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(demo.coach.advancePending, false);
+});
+
 test('guided Show me starts the action on the click and explains the result afterward', async () => {
   const demo = await makeDemo();
   const command = {
@@ -200,6 +296,31 @@ test('guided Show me starts the action on the click and explains the result afte
   demo.clock.advance(demo.calls.countdowns[0]);
   await showing;
   assert.deepEqual(demo.calls.messages.map(message => message.type), ['step_demonstrated']);
+});
+
+test('Advance during guided Show me continues when its action finishes', async () => {
+  const demo = await makeDemo();
+  let finishControl;
+  demo.adapter.perform = async () => new Promise(resolve => { finishControl = resolve; });
+  await demo.client.onCommand({
+    command_id: 'guided-early-advance', step_id: 'inspect', mode: 'guided', type: 'expand_document', target: 'result',
+    narration: 'Inspect the event', walkthrough: {evidence: 'The event confirms the finding.'},
+  });
+  demo.coach.advanceCelebration = () => false;
+  demo.coach.advanceInfo = () => false;
+  demo.adapter.advanceTyping = () => false;
+  const showing = demo.coach.onDemonstrate();
+  assert.deepEqual(demo.calls.phases, ['action']);
+
+  demo.coach.onAdvance();
+  demo.coach.onAdvance();
+  assert.deepEqual(demo.calls.pending, [true]);
+  finishControl(null);
+  await showing;
+  assert.deepEqual(demo.calls.phases, ['action', 'learning']);
+  assert.equal(demo.calls.countdowns.length, 1);
+  assert.deepEqual(demo.calls.messages.map(message => message.type), ['step_demonstrated']);
+  assert.equal(demo.coach.advancePending, false);
 });
 
 test('the countdown bar continues from its frozen width for the remaining duration', () => {

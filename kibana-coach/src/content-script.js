@@ -126,9 +126,17 @@ function startIncidentCoach() {
   // reading beat runs at a time, so a single resolver is enough.
   let completeReadingBeat = null;
   let activeReadingBeat = null;
+  // An Advance pressed while the coach is acting belongs to the learning beat after that action.
+  // Keep its signal so an aborted step cannot skip a later command's explanation.
+  let advanceAfterAction = null;
 
   function readingBeatWait(milliseconds, signal) {
     if (signal?.aborted) return Promise.reject(new DOMException('Demonstration stopped', 'AbortError'));
+    if (advanceAfterAction === signal && coach.phase === 'learning') {
+      advanceAfterAction = null;
+      coach.setAdvancePending(false);
+      return Promise.resolve();
+    }
     return new Promise((resolve, reject) => {
       let remaining = milliseconds;
       let startedAt = 0;
@@ -221,7 +229,11 @@ function startIncidentCoach() {
       coach.toast(error.message, true);
       client.acknowledge(command, 'failed', {error: error.message});
     } finally {
-      if (executionController === controller) executionController = null;
+      if (advanceAfterAction === controller.signal) advanceAfterAction = null;
+      if (executionController === controller) {
+        coach.setAdvancePending(false);
+        executionController = null;
+      }
       if (walkthroughController === controller) walkthroughController = null;
     }
   }
@@ -616,6 +628,15 @@ function startIncidentCoach() {
       if (currentCommand.mode === 'demonstration' && coach.paused) {
         // Nothing is counting down while paused — resume so the demonstration plays on.
         coach.setPaused(false);
+        return;
+      }
+      // A queued click owns this action until it finishes. Further clicks must not shorten each
+      // internal hold and outrun the Kibana controls that are still updating.
+      if (advanceAfterAction === executionController?.signal) return;
+      if (coach.phase === 'action' && executionController && !executionController.signal.aborted) {
+        advanceAfterAction = executionController.signal;
+        coach.setAdvancePending(true);
+        adapter.advanceTyping();
         return;
       }
       if (coach.advanceInfo()) return;
