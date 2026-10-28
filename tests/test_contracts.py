@@ -228,12 +228,29 @@ class ContractTests(unittest.TestCase):
         self.assertIn(("index-pattern", "microservices"), identities)
         self.assertIn(("search", "incident-investigation"), identities)
         self.assertIn(("dashboard", "incident-overview"), identities)
-        visualization_ids = {identifier for object_type, identifier in identities if object_type == "visualization"}
-        self.assertEqual(visualization_ids, {"request-duration-percentiles", "error-rate-over-time", "events-by-service", "slowest-endpoints", "common-error-types", "active-scenario-events"})
-        dashboard = next(item for item in objects if item["type"] == "dashboard")
-        panels = json.loads(dashboard["attributes"]["panelsJSON"])
-        self.assertEqual(len(panels), 6)
-        self.assertEqual({panel["version"] for panel in panels}, {"9.5.2"})
+        # Legacy aggregation-based XY visualizations throw in Kibana 9.5.2 and offer neither Inspect nor
+        # Explore in Discover, so every panel is a Lens visualization reading the run's data view.
+        self.assertNotIn("visualization", {object_type for object_type, _identifier in identities})
+        lenses = {item["id"]: item for item in objects if item["type"] == "lens"}
+        for item in lenses.values():
+            self.assertEqual([(ref["type"], ref["id"]) for ref in item["references"]], [("index-pattern", "microservices")])
+        dashboards = {item["id"]: item for item in objects if item["type"] == "dashboard"}
+        panel_titles = {}
+        for identifier, dashboard in dashboards.items():
+            panels = json.loads(dashboard["attributes"]["panelsJSON"])
+            self.assertEqual({panel["version"] for panel in panels}, {"9.5.2"})
+            self.assertEqual({panel["type"] for panel in panels}, {"lens"})
+            self.assertLessEqual({ref["id"] for ref in dashboard["references"]}, set(lenses))
+            panel_titles[identifier] = {lenses[ref["id"]]["attributes"]["title"] for ref in dashboard["references"]}
+        # Every dashboard pack opens a shipped dashboard, and the panel its playbook acts on is on it.
+        for scenario_path in sorted((ROOT / "learning/scenarios").glob("*/scenario.json")):
+            scenario = json.loads(scenario_path.read_text())
+            if scenario["starting_view"]["app"] != "dashboards":
+                continue
+            dashboard_id = scenario["starting_view"]["saved_object"]
+            self.assertIn(dashboard_id, dashboards, scenario["id"])
+            playbook = json.loads((scenario_path.parent / "playbook.json").read_text())
+            self.assertIn(playbook["variables"]["panel"], panel_titles[dashboard_id], scenario["id"])
 
     def test_stack_is_pinned_to_elastic_9_5_2(self):
         compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")

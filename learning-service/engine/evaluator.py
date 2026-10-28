@@ -68,7 +68,11 @@ def _expected_values(session, validator):
         value = _lookup(session.get("manifest", {}).get("expected", {}), validator["value_from_expected"], [])
     else:
         value = _truth(session, validator.get("values_from_truth") or validator.get("value_from_truth"), [])
-    return value if isinstance(value, list) else [value]
+    values = value if isinstance(value, list) else [value]
+    # A playbook variable can name the run's answer (``"value": "${truth.finding}"``); the playbook is
+    # stored unsubstituted, so resolve it here or the validator would compare against the placeholder.
+    return [re.sub(r"\$\{truth\.answers\.([\w.]+)\}|\$\{truth\.([\w.]+)\}", lambda match: str(_truth(session, f"answers.{match.group(1) or match.group(2)}", match.group(0))), item)
+            if isinstance(item, str) else item for item in values]
 
 
 def action_text(action):

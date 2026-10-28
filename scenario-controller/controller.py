@@ -36,6 +36,10 @@ SAVED_OBJECTS_FILE = Path(os.getenv("KIBANA_SAVED_OBJECTS", "/app/kibana/saved-o
 # Retention window for lab data. Sized to the ephemeral VM lifetime so daily
 # accumulation cannot fill the disk; ILM expires whole hourly indices at this age.
 LAB_RETENTION = os.getenv("LAB_RETENTION", "8h")
+# A completed run stays browsable this long before its space and data are reclaimed, so the learner
+# can read the debrief beside the evidence — and a final step that opens another page (Explore in
+# Discover, a trace's logs) still finds it. DELETE /api/runs/<id> reclaims a run at once.
+COMPLETED_RETENTION_SECONDS = float(os.getenv("COMPLETED_RETENTION_SECONDS", "600"))
 LAB_ILM_POLICY = "lab-retention"
 LAB_INDEX_TEMPLATE = "lab-lifecycle"
 LAB_INDEX_PATTERNS = ["microservices-*", "tutorial-*", "scenario-*", "lab-*"]
@@ -579,6 +583,10 @@ def _apply_realism(prepared, generator):
     if isinstance(txn, dict) and txn.get("name") == _TEMPLATE_TRANSACTION_NAME and path:
         method = _lookup_nested(prepared, "http.request.method") or "GET"
         txn["name"] = f"{method} {path}"
+    # The template's result is "HTTP 2xx"; a row that answered with an error says so, as APM shows it.
+    status = _lookup_nested(prepared, "http.response.status_code")
+    if isinstance(txn, dict) and txn.get("result") == "HTTP 2xx" and isinstance(status, int) and status >= 300:
+        txn["result"] = f"HTTP {status // 100}xx"
     if _lookup_nested(prepared, "event.duration") == _TEMPLATE_DURATION_NS:
         duration_ns = generator.randint(35, 260) * 1_000_000
         prepared.setdefault("event", {})["duration"] = duration_ns
@@ -604,11 +612,36 @@ def _prepare_application_event(event, application, template=None):
     """Normalize generated documents for the application that will read them."""
     template = template or {}
     prepared = copy.deepcopy(event)
-    if application == "metrics":
-        metric_name = _lookup_nested(prepared, "metricset.name") or "cpu"
+    if application == "metrics" and (_lookup_nested(template, "log") or _lookup_nested(template, "processor.event") == "log"):
+        # A pack's log line beside its metrics (a queueing warning, a restart) stays a log, so the host's
+        # or pod's Logs tab finds it.
+        service = (_lookup_nested(prepared, "service.name") or "app").replace("-", "_")
+        prepared["processor"] = {"event": "log"}
+        prepared["event"]["dataset"] = f"{service}.log"
+        prepared.pop("transaction", None)
+    elif application == "metrics":
+        # The Infrastructure inventory only lists hosts the system module reports, and pods the
+        # kubernetes module's pod metricset reports (verified 9.5.2: without `event.module` it shows
+        # "There is no data to display"). A row naming a pod is that pod's metrics.
+        pod = _lookup_nested(prepared, "kubernetes.pod.name")
+        if pod:
+            module, metric_name = "kubernetes", "pod"
+            usage = prepared["kubernetes"]["pod"]
+            usage.setdefault("uid", pod)
+            memory = _lookup_nested(prepared, "system.memory.actual.used.pct")
+            cpu = _lookup_nested(prepared, "system.cpu.total.norm.pct")
+            # The pods view reads usage against the pod's limit, and only once usage against its node
+            # is reported too (verified 9.5.2: without `node.pct` the memory metric comes back empty).
+            if memory is not None:
+                usage.setdefault("memory", _pod_usage(memory))
+            if cpu is not None:
+                usage.setdefault("cpu", _pod_usage(cpu))
+        else:
+            module, metric_name = "system", _lookup_nested(prepared, "metricset.name") or "cpu"
         prepared["processor"] = {"event": "metric"}
-        prepared["event"]["dataset"] = f"system.{metric_name}"
-        prepared["metricset"] = {**prepared.get("metricset", {}), "period": 10_000}
+        prepared["event"]["module"] = module
+        prepared["event"]["dataset"] = f"{module}.{metric_name}"
+        prepared["metricset"] = {**prepared.get("metricset", {}), "name": metric_name, "module": module, "period": 10_000}
         prepared["agent"] = {"name": "metricbeat", "type": "metricbeat", "version": "9.5.2"}
         prepared.pop("transaction", None)
     elif application == "apm" and _lookup_nested(template, "processor.event") == "log":
@@ -648,6 +681,13 @@ def _derived_apm_documents(event):
         error_document = copy.deepcopy(event)
         error_document["processor"] = {"event": "error"}
         error_document["error"].setdefault("id", uuid.uuid5(uuid.NAMESPACE_URL, f"{event['trace']['id']}:{event['@timestamp']}:error").hex[:16])
+        # APM's trace API rejects a trace holding an error without a grouping key (verified 9.5.2:
+        # "Missing required fields (error.grouping_key)"), which leaves the waterfall loading forever.
+        error_type = error_document["error"].get("type") or "Error"
+        service = error_document.get("service", {}).get("name", "")
+        error_document["error"].setdefault("grouping_key", hashlib.md5(f"{service}:{error_type}".encode()).hexdigest())
+        error_document["error"].setdefault("grouping_name", error_type)
+        error_document["error"].setdefault("exception", [{"type": error_type, "message": event.get("message", error_type), "handled": False}])
         error_document["parent"] = {"id": event.get("span", {}).get("id") or event.get("transaction", {}).get("id")}
         derived.append(error_document)
     return derived
@@ -674,13 +714,70 @@ def _application_document(document, application, manifest):
             prepared.setdefault("event", {}).update({"dataset": dataset, "category": "error", "type": "error", "outcome": "failure"})
         else:
             stream_type, dataset = "traces", "apm"
+            if processor_event == "transaction":
+                # A pack's signal embeds its dependency call as `span` (split into its own span
+                # document by _derived_apm_documents). Left on the transaction, APM labels and types
+                # the transaction as that span, so the waterfall shows the dependency at its root.
+                prepared.pop("span", None)
     elif application == "metrics":
-        stream_type = "metrics"
+        stream_type = "logs" if processor_event == "log" else "metrics"
         dataset = prepared.get("event", {}).get("dataset", "system.cpu")
     else:
         return None, prepared
     prepared["data_stream"] = {"type": stream_type, "dataset": dataset, "namespace": namespace}
     return f"{stream_type}-{dataset}-{namespace}", prepared
+
+
+def _span_or_transaction_id(document):
+    """The id a downstream call's parent.id names: the caller's exit span, else its transaction."""
+    span = document.get("span")
+    if isinstance(span, dict) and span.get("name"):
+        return span.setdefault("id", uuid.uuid5(uuid.NAMESPACE_URL, f"{document['trace']['id']}:{document['@timestamp']}:span").hex[:16])
+    return document.get("transaction", {}).get("id")
+
+
+def _pod_usage(share_of_limit):
+    """A pod's usage reading: its share of the pod's limit, and of its node (a pod gets a quarter)."""
+    return {"usage": {"limit": {"pct": share_of_limit}, "node": {"pct": round(share_of_limit / 4, 4)}}}
+
+
+def _healthy_baseline(document, generator):
+    """Give a background host or pod ordinary CPU and memory readings (a pack's own values win), so the
+    inventory shows healthy peers for the outlier to stand apart from."""
+    cpu = round(generator.uniform(0.12, 0.42), 2)
+    memory = round(generator.uniform(0.32, 0.58), 2)
+    system = document.setdefault("system", {})
+    system.setdefault("cpu", {}).setdefault("total", {}).setdefault("norm", {}).setdefault("pct", cpu)
+    system.setdefault("memory", {}).setdefault("actual", {}).setdefault("used", {}).setdefault("pct", memory)
+    pod = _lookup_nested(document, "kubernetes.pod")
+    if isinstance(pod, dict):
+        pod.setdefault("cpu", _pod_usage(system["cpu"]["total"]["norm"]["pct"]))
+        pod.setdefault("memory", _pod_usage(system["memory"]["actual"]["used"]["pct"]))
+
+
+def _companions_per_signal(manifest, application, generator, companion_index, companion, template, signal_documents, callers):
+    """One copy of a companion inside each signal request's trace, a few milliseconds after it starts.
+
+    ``"parent": "previous"`` makes it a call from the companion emitted just before it in the same
+    request (otherwise from the signal request itself), so a pack can seed a whole call chain — say
+    api-gateway → orders → inventory — into every failing trace, which APM draws as one waterfall.
+    """
+    documents = []
+    for position, signal_document in enumerate(signal_documents):
+        caller = callers[id(signal_document)] if companion.get("parent") == "previous" else signal_document
+        started = datetime.fromisoformat(signal_document["@timestamp"]) + timedelta(milliseconds=5 * (companion_index + 1))
+        sequence = 2000 + companion_index * 1000 + position
+        event = _deep_merge(_event_template(manifest, started, signal_document["trace"]["id"], sequence), template)
+        if template.get("processor", {}).get("event") != "log":
+            event["parent"] = {"id": _span_or_transaction_id(caller)}
+        prepared = _prepare_application_event(event, application, template)
+        _apply_realism(prepared, generator)
+        _span_or_transaction_id(prepared)
+        documents.append(prepared)
+        callers[id(signal_document)] = prepared
+        if application == "apm":
+            documents.extend(_derived_apm_documents(prepared))
+    return documents
 
 
 def generate_seeded_events(manifest):
@@ -695,8 +792,11 @@ def generate_seeded_events(manifest):
     noise_endpoints = [endpoint for endpoint in _NOISE_ENDPOINTS if endpoint["service"] not in excluded_services] or _NOISE_ENDPOINTS
     application = manifest["scenario"].get("starting_view", {}).get("app")
     documents = []
+    # Metrics are sampled continuously, so every host must have recent readings for the inventory's
+    # "now" view; request noise spreads over the last hour.
+    noise_newest, noise_oldest = (5, 900) if application == "metrics" else (90, 3600)
     for sequence in range(noise_count):
-        timestamp = now - timedelta(seconds=generator.randint(90, 3600))
+        timestamp = now - timedelta(seconds=generator.randint(noise_newest, noise_oldest))
         trace_id = hashlib.md5(f"{manifest['run_id']}:noise:{sequence}".encode()).hexdigest()
         event = _event_template(manifest, timestamp, trace_id, sequence)
         endpoint = generator.choice(noise_endpoints)
@@ -705,11 +805,14 @@ def generate_seeded_events(manifest):
             event = _deep_merge(event, distractors[sequence % len(distractors)])
         prepared = _prepare_application_event(event, application)
         _apply_realism(prepared, generator)
+        if application == "metrics":
+            _healthy_baseline(prepared, generator)
         documents.append(prepared)
     representative_trace = hashlib.md5(f"{manifest['run_id']}:representative".encode()).hexdigest()
     # By default the incident runs right up to now. A pack can bound it instead (seconds before now,
     # newest first) so the histogram shows normal traffic both before and after the incident.
     newest, oldest = (int(value) for value in profile.get("signal_window_seconds", (10, 600)))
+    signal_documents = []
     for sequence in range(signal_count):
         timestamp = now - timedelta(seconds=generator.randint(newest, oldest))
         trace_id = representative_trace if sequence == 0 else hashlib.md5(f"{manifest['run_id']}:signal:{sequence // 2}".encode()).hexdigest()
@@ -717,11 +820,18 @@ def generate_seeded_events(manifest):
         prepared = _prepare_application_event(event, application, signal)
         _apply_realism(prepared, generator)
         documents.append(prepared)
+        signal_documents.append(prepared)
         if application == "apm":
             documents.extend(_derived_apm_documents(prepared))
+    # Companions with "trace": "each" join every signal request rather than one representative, so any
+    # failing trace a learner opens carries the evidence (see _companions_per_signal).
+    callers = {id(document): document for document in signal_documents}
     for companion_index, companion in enumerate(profile.get("companions", [])):
         repeats = int(companion.get("count", 1))
         template = _substitute(companion.get("event", {}), manifest)
+        if companion.get("trace") == "each":
+            documents.extend(_companions_per_signal(manifest, application, generator, companion_index, companion, template, signal_documents, callers))
+            continue
         for sequence in range(repeats):
             timestamp = now - timedelta(seconds=int(companion.get("offset_seconds", 120)) + sequence * int(companion.get("interval_seconds", 1)))
             # Companions corroborate the representative request unless they are background of their own
@@ -1004,12 +1114,19 @@ def create_run(seed=None, scenario_name=None, scenario_key=SCENARIO_KEY_UNSET):
     return snapshot
 
 
+def reclaim_after_retention(run):
+    """Reclaim a completed run once its retention window passes, unless stop_run already has."""
+    if not run.setdefault("reclaimed", threading.Event()).wait(COMPLETED_RETENTION_SECONDS):
+        cleanup_run(run)
+
+
 def stop_run(run_id):
     run = get_run(run_id)
     if not run:
         return False
     run["stop"].set()
     cleanup_run(run)
+    run.setdefault("reclaimed", threading.Event()).set()
     update_run(run_id, state="ABORTED", completed_at=now_iso())
     emit("scenario aborted", run_id=run_id, action="aborted", state="ABORTED")
     return True
@@ -1034,11 +1151,12 @@ def transition_run(run_id, requested_state):
         emit(f"scenario {requested_state.lower()}", run_id=run_id, action=requested_state.lower(), state=requested_state)
         snapshot = public_state(run)
     # Reclaim this run's per-run artifacts (lab-{run_id} index, filtered alias,
-    # APM data streams, Kibana space) on completion. Done off-thread so the
-    # learner's completion response returns immediately; the shared ambient
-    # stream and global data view are left intact to keep the next run fast.
+    # APM data streams, Kibana space) once the completed run's retention window
+    # passes. Done off-thread so the learner's completion response returns
+    # immediately; the shared ambient stream and global data view are left intact
+    # to keep the next run fast.
     if requested_state == "COMPLETED":
-        threading.Thread(target=cleanup_run, args=(run,), daemon=True).start()
+        threading.Thread(target=reclaim_after_retention, args=(run,), daemon=True).start()
     return snapshot
 
 

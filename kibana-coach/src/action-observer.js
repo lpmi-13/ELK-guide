@@ -16,9 +16,19 @@ class KibanaActionObserver {
     this.lastTimeSignature = this.timeSignature();
     this.rebaselineFilters();
     this.timePoll = setInterval(() => {
-      if (this.adapter.performing) return;
+      if (this.adapter.performing) {
+        this.coachActed = true;
+        return;
+      }
+      // What the coach just did (a pill it applied, a window it set) is its own action, not the learner's.
+      if (this.coachActed) {
+        this.coachActed = false;
+        this.rebaseline();
+        return;
+      }
       this.captureTimeRange(false);
       this.captureFilterRemoval();
+      this.captureApmTrace();
     }, 700);
   }
 
@@ -27,6 +37,7 @@ class KibanaActionObserver {
   rebaseline() {
     this.lastTimeSignature = this.timeSignature();
     this.rebaselineFilters();
+    this.lastTraceId = this.apmTraceInView();
   }
 
   rebaselineFilters() {
@@ -40,14 +51,22 @@ class KibanaActionObserver {
   }
 
   // Report a pill the learner took away — deleted or disabled — however they did it (the pill's own
-  // popover, its clear button, "Clear all", browser back). Additions only move the baseline; the
-  // click that applied them reports filter_added.
+  // popover, its clear button, "Clear all", browser back). In Discover additions only move the
+  // baseline; the click that applied them reports filter_added. A dashboard pill usually comes from a
+  // click on a chart (a bar on the canvas, a legend entry's "Filter for") with no control to recognise,
+  // so there a new pill reports filter_added itself.
   captureFilterRemoval() {
     const filters = this.readFilterPills();
     const key = filter => `${filter.negate ? '-' : ''}${filter.field}=${filter.value}`;
     const active = new Set(filters.filter(filter => !filter.disabled).map(key));
+    const before = new Set((this.lastFilters || []).filter(filter => !filter.disabled).map(key));
     const lost = (this.lastFilters || []).filter(filter => !filter.disabled && !active.has(key(filter)));
+    const added = this.appName() === 'dashboards' && !this.filterClickPending ? filters.filter(filter => !filter.disabled && !before.has(key(filter))) : [];
     this.lastFilters = filters;
+    if (added.length) {
+      this.report({type: 'filter_added', details: {...added[added.length - 1]}, state_after: {filters, query: this.queryValue(), app: 'dashboard'}});
+      return;
+    }
     if (!lost.length) return;
     const disabled = lost.every(filter => filters.some(item => item.disabled && key(item) === key(filter)));
     this.reportWithCount({type: disabled ? 'filter_disabled' : 'filter_removed', details: {...lost[0]}, state_after: {filters, query: this.queryValue()}});
@@ -100,6 +119,96 @@ class KibanaActionObserver {
       if (count != null) action.state_after = {...(action.state_after || {}), result_count: count};
       this.report(action);
     });
+  }
+
+  // The trace APM is showing, once its waterfall is on screen (verified 9.5.2: the transaction page
+  // shows a sample and names it in `traceId`; its rows are `traceItemRowContent`). '' otherwise.
+  apmTraceInView() {
+    if (this.appName() !== 'apm') return '';
+    const traceId = new URLSearchParams(location.search).get('traceId') || '';
+    const row = document.querySelector("[data-test-subj='traceItemRowContent']");
+    const rect = row?.getBoundingClientRect();
+    return traceId && rect && rect.height && rect.bottom > 0 && rect.top < innerHeight ? traceId : '';
+  }
+
+  // APM opens a trace sample by itself when a transaction group loads, so there is no click to
+  // recognise: report the trace once its waterfall is in view, and again when another sample is.
+  captureApmTrace() {
+    const traceId = this.apmTraceInView();
+    if (!traceId || traceId === this.lastTraceId) return;
+    this.lastTraceId = traceId;
+    const root = document.querySelector("[data-test-subj='traceItemRowContent'] [data-test-subj='apmBarDetailsName']")?.textContent?.trim() || '';
+    this.report({type: 'trace_sample_selected', details: {trace_id: traceId, value: root}, state_after: {app: 'apm', trace_id: traceId}});
+  }
+
+  // A click in APM (verified 9.5.2), or null when it is none of these.
+  apmAction(event, subject) {
+    if (this.appName() !== 'apm') return null;
+    const target = event.target;
+    const row = target.closest?.("[data-test-subj='traceItemRowContent']");
+    if (row && !target.closest('a')) {
+      const value = row.querySelector("[data-test-subj='apmBarDetailsName']")?.textContent?.trim() || '';
+      return {type: 'span_selected', details: {value}, state_after: {app: 'apm'}};
+    }
+    const tab = target.closest?.("[data-test-subj='apmTransactionDistributionTabContent'] [role='tab']");
+    if (tab && /^logs$/i.test(tab.textContent.trim())) return {type: 'correlated_logs_opened', details: {}, state_after: {app: 'apm'}};
+    if (target.closest?.("nav[aria-label='Trace sample pages'], [data-test-subj='apmFullTraceButtonViewFullTraceButton']")) {
+      // The sample it moves to is reported by captureApmTrace once its waterfall shows.
+      return {type: null};
+    }
+    const link = target.closest?.('a[href]');
+    const href = link?.getAttribute('href') || '';
+    const value = link?.textContent?.trim() || '';
+    if (subject === 'apmTransactionDetailLinkLink' || /\/transactions\/view\?/.test(href)) return {type: 'transaction_group_opened', details: {value}, state_after: {app: 'apm'}};
+    if (/\/app\/apm\/services\/[^/?]+(\/overview)?(\?|$)/.test(href)) return {type: 'apm_service_selected', details: {value}, state_after: {app: 'apm'}};
+    return null;
+  }
+
+  // A click on an alert (verified 9.5.2 Observability → Alerts), or null when it is none of these.
+  alertsAction(event, subject) {
+    const target = event.target;
+    const expand = target.closest?.("[data-gridcell-column-id='expandColumn']");
+    // A grid cell's text ends in a screen-reader marker ("↦").
+    const ruleIn = row => row == null ? '' : document.querySelector(`[data-gridcell-column-id='kibana.alert.rule.name'][data-gridcell-row-index='${row}']`)?.textContent?.replace(/↦/g, '').trim() || '';
+    if (expand && target.closest('button') && document.querySelector("[data-gridcell-column-id='kibana.alert.rule.name']")) {
+      return [{type: 'alert_opened', details: {value: ruleIn(expand.getAttribute('data-gridcell-row-index'))}, state_after: {app: 'alerts'}}];
+    }
+    const flyoutAlert = () => document.querySelector("[data-test-subj='alertsFlyoutTitle']")?.textContent?.trim() || '';
+    // The alert's details page shows its Reason, status and history; from the row menu it also opens it.
+    if (subject === 'alertsFlyoutAlertDetailsButton') return [{type: 'alert_reason_inspected', details: {value: flyoutAlert()}, state_after: {app: 'alerts'}}];
+    if (subject === 'viewAlertDetailsPage') {
+      const value = ruleIn(target.closest?.('[data-gridcell-row-index]')?.getAttribute('data-gridcell-row-index')) || ruleIn('0');
+      return [{type: 'alert_opened', details: {value}, state_after: {app: 'alerts'}}, {type: 'alert_reason_inspected', details: {value}, state_after: {app: 'alerts'}}];
+    }
+    if (subject === 'relatedAlertsTab') return [{type: 'alert_history_inspected', details: {}, state_after: {app: 'alerts'}}];
+    if (subject.startsWith('alertDetailsPage_viewInDiscover_')) return [{type: 'alert_source_opened', details: {}, state_after: {app: 'alerts'}}];
+    return null;
+  }
+
+  // A click in the Infrastructure inventory (verified 9.5.2), or null when it is none of these.
+  infrastructureAction(event, subject) {
+    if (this.appName() !== 'metrics') return null;
+    const target = event.target;
+    const app = {app: 'metrics'};
+    // Opening the Show or Metric menu chooses nothing yet.
+    if (subject === 'openInventorySwitcher' || subject === 'infraInventoryMetricDropdown') return {type: null};
+    if (/^goTo/.test(subject) && target.closest?.('[data-popover-panel]')) return {type: 'inventory_type_selected', details: {value: node(target, subject)}, state_after: app};
+    if (target.closest?.("[data-test-subj='infraInventoryMetricsContextMenu'] button") && !/infraModeSwitcher/.test(subject)) {
+      return {type: 'metric_selected', details: {value: target.closest('button').textContent.trim()}, state_after: app};
+    }
+    const entity = target.closest?.("[data-test-subj='nodeContainer']");
+    if (entity) return {type: 'infrastructure_entity_selected', details: {value: entity.querySelector("[data-test-subj='nodeName']")?.textContent?.trim() || ''}, state_after: app};
+    // A host's or pod's own logs: a host's details flyout Logs tab (or its Open in Discover), a pod's
+    // "Kubernetes Pod logs" menu link.
+    if (['infraAssetDetailsLogsTab', 'infraAssetDetailsLogsTabOpenInLogsButton', 'viewLogsContextMenuItem'].includes(subject)) return {type: 'metrics_logs_opened', details: {}, state_after: app};
+    if (subject === 'infraAssetDetailsMetricsTab') return {type: 'metric_period_compared', details: {}, state_after: app};
+    return null;
+    function node(element, fallback) { return element.closest('button')?.textContent?.trim() || fallback; }
+  }
+
+  // The title of the dashboard panel a control belongs to.
+  panelTitle(node) {
+    return node?.closest?.("[data-test-subj='dashboardPanel']")?.querySelector("[data-test-subj='embeddablePanelTitle']")?.textContent?.trim() || '';
   }
 
   appName() {
@@ -274,6 +383,21 @@ class KibanaActionObserver {
     if (this.adapter.performing) return;
     const node = event.target.closest?.('[data-test-subj]');
     const subject = node?.getAttribute('data-test-subj') || '';
+    const apm = this.apmAction(event, subject);
+    if (apm) {
+      if (apm.type) this.report(apm);
+      return;
+    }
+    const infrastructure = this.infrastructureAction(event, subject);
+    if (infrastructure) {
+      if (infrastructure.type) this.report(infrastructure);
+      return;
+    }
+    const alerts = this.alertsAction(event, subject);
+    if (alerts) {
+      for (const action of alerts) this.report(action);
+      return;
+    }
     if (subject === 'querySubmitButton' || /esql.*(submit|run)/i.test(subject)) {
       setTimeout(() => this.reportSearch(), 50);
     } else if (/queryLanguage|select-text-based-language/i.test(subject)) {
@@ -293,17 +417,21 @@ class KibanaActionObserver {
       // a preset equal to the view's current window (the saved search opens at now-1h) is still a
       // deliberate step.
       setTimeout(() => this.captureTimeRange(true), 250);
-    } else if (subject.includes('saveFilter') || /^(plus|minus)-/.test(subject) || /filterFor|filterOut|addFilterForValue|addFilterOutValue/i.test(subject)) {
+    } else if (subject.includes('saveFilter') || /^(plus|minus)-/.test(subject) || /filterFor|filterOut|addFilterForValue|addFilterOutValue|-filter(In|Out)$/i.test(subject)) {
       // A pill was applied — via the Add-filter popover's Save (`saveFilter`), or a
       // filter-for / filter-out on a field's top value (`plus-<field>-<value>` /
       // `minus-<field>-<value>`, verified in Kibana 9.5.2), or a document-cell filter.
       // Read the resulting pills generically so the run's decisive field/value/negate are
       // captured for ANY scenario. The legacy branch hard-coded service.name and dropped
       // the negate state, so it only matched one pack and never lit the filter-out route.
+      // A chart legend's Filter for / Filter out (`legend-<value>-filterIn|Out`, verified 9.5.2) lands here
+      // too; the poll must leave that pill to this report.
+      this.filterClickPending = true;
       setTimeout(() => {
         const filters = this.readFilterPills();
         const latest = filters[filters.length - 1] || {};
         this.lastFilters = filters;
+        this.filterClickPending = false;
         this.reportWithCount({type: 'filter_added', details: {...latest}, state_after: {filters, query: this.queryValue()}});
       }, 250);
     } else if (/fieldToggle|fieldPopoverHeader_addField|FieldListPanel(Add|Remove)|dscFieldDetails(Add|Remove)|removeColumn|add.?column|remove.?column/i.test(subject)) {
@@ -344,14 +472,16 @@ class KibanaActionObserver {
       }, 350);
     } else if (/control-frame|controlGroup|optionsListControl/i.test(subject)) {
       this.report({type: 'dashboard_control_changed', details: {subject}, state_after: {app: 'dashboard'}});
-    } else if (/embeddablePanel.*(inspect|toggleMenu)|inspectPanel/i.test(subject)) {
-      this.report({type: 'panel_inspected', details: {subject}, state_after: {app: 'dashboard'}});
-    } else if (/underlyingData|viewData/i.test(subject)) {
-      this.report({type: 'panel_underlying_data_opened', details: {subject}, state_after: {app: 'dashboard'}});
+    } else if (/openInspector|inspectPanel/i.test(subject)) {
+      // A panel's Inspect hover action (`embeddablePanelAction-openInspector`, verified 9.5.2). Opening
+      // the panel menu itself inspects nothing.
+      this.report({type: 'panel_inspected', details: {subject, panel: this.panelTitle(node)}, state_after: {app: 'dashboard'}});
+    } else if (/underlyingData|viewData|OPEN_IN_DISCOVER/i.test(subject)) {
+      // "Explore in Discover" (`embeddablePanelAction-ACTION_OPEN_IN_DISCOVER`, verified 9.5.2) opens the
+      // panel's records with its filters and time; the dashboard adapter keeps it in this tab.
+      this.report({type: 'panel_underlying_data_opened', details: {subject, panel: this.panelTitle(node)}, state_after: {app: 'dashboard'}});
     } else if (/drilldown/i.test(subject)) {
       this.report({type: 'panel_drilldown_opened', details: {subject}, state_after: {app: 'dashboard'}});
-    } else if (/legend|xyVisSeries|partitionVis/i.test(subject)) {
-      this.report({type: 'panel_value_selected', details: {value: event.target.textContent?.trim() || subject}, state_after: {app: 'dashboard'}});
     } else if (/transactionSample|traceSample/i.test(subject)) {
       this.report({type: 'trace_sample_selected', details: {value: event.target.textContent?.trim()}, state_after: {app: 'apm'}});
     } else if (/waterfall.*span|spanFlyout/i.test(subject)) {

@@ -31,11 +31,18 @@ COMMAND_OBSERVATIONS = {
 }
 
 
+def resolve_truth(value, scenario):
+    """A value as the browser reports it: a ``${truth.<answer>}`` placeholder becomes that answer."""
+    if isinstance(value, str) and value.startswith("${truth.") and value.endswith("}"):
+        return scenario["truth"]["answers"].get(value[len("${truth."):-1].removeprefix("answers."), value)
+    return value
+
+
 def truth_value(validator, scenario):
     """The value a validator expects: its own ``value``, or the truth path it names (first of a list)."""
     truth_key = validator.get("value_from_truth") or validator.get("values_from_truth")
     if not truth_key:
-        return validator.get("value", (validator.get("values") or [None])[0])
+        return resolve_truth(validator.get("value", (validator.get("values") or [None])[0]), scenario)
     value = scenario["truth"]
     for part in truth_key.split("."):
         value = value[part]
@@ -65,7 +72,7 @@ def action_for(goal, scenario):
                 values = value if isinstance(value, list) else [value]
             details["query"] = " ".join([*validator.get("fields", []), *map(str, values)])
         elif kind in {"filter_contains", "filter_excludes"}:
-            value = validator.get("value", (validator.get("values") or [None])[0])
+            value = resolve_truth(validator.get("value", (validator.get("values") or [None])[0]), scenario)
             if validator.get("value_from_truth"):
                 value = scenario["truth"]
                 for part in validator["value_from_truth"].split("."):

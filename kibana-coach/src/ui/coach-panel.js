@@ -62,7 +62,7 @@ class IncidentCoachPanel {
         // Nothing to dodge — no highlighted control and no open doc-viewer flyout — so leave the
         // card where it rests rather than nudging it for every stray scroll or mutation.
         if (this.dragging) return;
-        if (!target && !this.findFlyout() && !this.findPopovers().length && !this.evidenceField && !this.evidenceFields.length && !this.evidenceTargets.length && event?.type !== 'resize') return;
+        if (!target && !this.findFlyout() && !this.findPopovers().length && !this.evidenceField && !this.evidenceFields.length && !this.evidenceTargets.length && !this.coversQueryBar() && event?.type !== 'resize') return;
         // Keep the panel clear of the control, but only re-dim/-highlight if the spotlight is
         // already revealed — a guided step starts with nothing dimmed until the learner asks.
         if (target && this.spotlightRevealed) this.spotlight.show(target);
@@ -85,7 +85,7 @@ class IncidentCoachPanel {
       requestAnimationFrame(() => {
         this.flyoutCheckScheduled = false;
         const open = !!this.findFlyout();
-        const watching = this.activeTarget?.isConnected || this.findPopovers().length || this.evidenceField || this.evidenceFields.length || this.evidenceTargets.length;
+        const watching = this.activeTarget?.isConnected || this.findPopovers().length || this.evidenceField || this.evidenceFields.length || this.evidenceTargets.length || this.coversQueryBar();
         if (open === this.flyoutOpen && !watching) return;
         this.flyoutOpen = open;
         this.reposition();
@@ -675,6 +675,16 @@ class IncidentCoachPanel {
     this.placeAwayFrom(this.activeTarget?.isConnected ? this.activeTarget : null);
   }
 
+  // The card sits over Kibana's query bar row (it can render after the card first appears).
+  coversQueryBar() {
+    if (this.panel.hidden || this.dragging) return false;
+    const card = this.panel.getBoundingClientRect();
+    return [...document.querySelectorAll("[data-test-subj='globalQueryBar'], [data-test-subj='unifiedQueryInput']")].some(node => {
+      const bar = node.getBoundingClientRect();
+      return bar.width && bar.top < innerHeight / 2 && card.left < bar.right && card.right > bar.left && card.top < bar.bottom && card.bottom > bar.top;
+    });
+  }
+
   // Stay put unless the current spot would actually cover the highlighted control or the open
   // doc-viewer flyout (or fell off-screen). Only then glide to the least-disruptive clear corner.
   // Needless hops are jarring.
@@ -690,7 +700,14 @@ class IncidentCoachPanel {
     const height = Math.min(panelRect.height, innerHeight - topMargin - margin);
     const maxLeft = Math.max(margin, innerWidth - width - margin);
     const maxTop = Math.max(topMargin, innerHeight - height - margin);
+    // Kibana's query bar row holds the search, filters and time picker every investigation starts
+    // from, so the card never rests over it: with nothing else to dodge (a challenge has no step
+    // target) it sits just below it on the right rather than covering the time picker.
+    const queryBar = [...document.querySelectorAll("[data-test-subj='globalQueryBar'], [data-test-subj='unifiedQueryInput']")]
+      .map(node => node.getBoundingClientRect()).find(rect => rect.width && rect.bottom > 0 && rect.top < innerHeight / 2);
+    const belowBar = queryBar ? Math.min(Math.round(queryBar.bottom) + 10, maxTop) : null;
     const corners = [
+      ...(belowBar == null ? [] : [{left: maxLeft, top: belowBar}, {left: margin, top: belowBar}]),
       {left: margin, top: topMargin},
       {left: maxLeft, top: topMargin},
       {left: margin, top: maxTop},
@@ -708,6 +725,7 @@ class IncidentCoachPanel {
     if (targetRect && targetRect.width) {
       guards.push({left: targetRect.left - lead, right: targetRect.right + lead, top: targetRect.top - lead, bottom: targetRect.bottom + lead});
     }
+    if (queryBar) guards.push({left: queryBar.left, right: queryBar.right, top: queryBar.top, bottom: queryBar.bottom});
     const flyoutRect = this.findFlyout();
     if (flyoutRect) {
       guards.push({left: flyoutRect.left, right: flyoutRect.right, top: flyoutRect.top, bottom: flyoutRect.bottom});

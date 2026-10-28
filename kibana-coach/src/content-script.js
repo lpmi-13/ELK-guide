@@ -99,6 +99,8 @@ function startIncidentCoach() {
   // an accepted free-text search can carry a note on its success card.
   let checkIn = null;
   let lastSearch = null;
+  // Set once a step that opens another page has reported; that page's coach picks the session up.
+  let leavingPage = false;
   const stepClock = new GuidedStepClock({
     isPaused: () => Boolean(document.hidden || coach.paused || coach.briefing?.active || coach.celebrating ||
       walkthroughController || executionController || recoveryController || checkIn),
@@ -254,6 +256,12 @@ function startIncidentCoach() {
       client.acknowledge(command, 'completed', action?.state_after || {});
       if (explicitlyRequested) client.sendAction({type: 'step_demonstrated', details: {step_id: command.step_id}}, 'learner');
       if (action) client.sendAction(action, 'tutorial');
+      // A step that opens another page (Explore in Discover) reports before it goes, and ignores the
+      // next step meanwhile: the service sends it again when the coach reconnects on that page.
+      if (action?.navigate) {
+        leavingPage = true;
+        setTimeout(() => location.assign(action.navigate), 400);
+      }
     } catch (error) {
       if (error.name === 'AbortError') return;
       coach.toast(error.message, true);
@@ -526,7 +534,14 @@ function startIncidentCoach() {
     await adapter.initialize();
     client = new IncidentSessionClient(config);
     client.stepClock = () => stepClock.stepId ? {step_id: stepClock.stepId, seconds_active: stepClock.seconds} : null;
-    client.currentView = () => { try { return adapter.currentView(); } catch (_error) { return null; } };
+    client.currentView = () => {
+      try {
+        const view = adapter.currentView();
+        // A dashboard keeps its filter pills out of the URL (verified 9.5.2), so read them off the page.
+        if (view?.app === 'dashboards' && observer) view.filters = [...view.filters, ...observer.readFilterPills().filter(pill => !pill.disabled)];
+        return view;
+      } catch (_error) { return null; }
+    };
     client.onCheckIn = showCheckIn;
     client.onStatus = message => coach.toast(message);
     client.onError = message => coach.toast(message, true);
@@ -575,6 +590,7 @@ function startIncidentCoach() {
       client.acknowledgeBriefing(briefing);
     };
     client.onCommand = async command => {
+      if (leavingPage) return;
       // Safety net: reveal Kibana here too, for any flow that reaches a command
       // without first showing a briefing.
       window.__coachBootOverlay?.release();
@@ -620,6 +636,9 @@ function startIncidentCoach() {
     await client.connect();
     observer = new KibanaActionObserver(adapter, action => {
       if (walkthroughController) return;
+      // A demonstration is the coach's own route. What the page does by itself meanwhile (APM opening a
+      // trace sample as a transaction group loads) is not the learner's action.
+      if (client.mode === 'demonstration' && action.type === 'trace_sample_selected') return;
       // A demonstration step reports its own action once its result beat ends. The observer must not
       // report the coach's change first (e.g. the window it just set), or the next step would start
       // over the result the learner is still reading.
