@@ -19,9 +19,9 @@
       "reasoning": "You got this value from the top values you just read, so the filter is based on evidence, not a guess. Adding it as its own filter pill, rather than typing into the query bar, also means one click lifts it back off to widen the view again — without editing any query text.",
       "evidence": "After you filter, the table and histogram shrink down to just the failing requests behind the incident.",
       "demonstration": {
-        "narration": "The ${param.incident.status} spike is our clue. I'll filter to that status so the remaining requests can show where the failures happened.",
+        "narration": "I'll filter to ${param.incident.status} so the remaining requests show where the failures happened.",
         "reasoning": "The window still contains healthy 200s and other traffic.\n\nFiltering for the ${param.incident.status} we saw in Top values leaves the failing requests to investigate. Keeping it in a separate filter pill also makes it easy to widen the view again.",
-        "evidence": "The result table and histogram now show the ${param.incident.status} responses. We have isolated the failure code; next we need to find which endpoint those requests hit."
+        "evidence": "The new filter pill keeps only ${param.incident.status} responses, and the hit count dropped to just those failing requests. The pill's × lifts the filter whenever you need the wider view again."
       },
       "requires": ["survey"],
       "reference_action": {"command": "add_filter", "target": "kibana.filter_bar", "arguments": {"field": "${var.status_field}", "operator": "is", "value": "${param.incident.status}"}},
@@ -44,7 +44,8 @@
       "demonstration": {
         "narration": "I'll open one filtered request to check whether the unusual status and endpoint occur together.",
         "reasoning": "A total can look convincing even when it includes an unrelated record. Opening a typical event checks the key values together, rather than relying on a count alone.",
-        "evidence": "The opened event connects ${var.finding_phrase} with ${truth.scope}. Together, this record and the filtered results support the conclusion: ${truth.conclusion}"
+        "evidence": "This one request carries both ${param.incident.status} and ${param.incident.route}, so the status and endpoint really occur together, not just in separate totals. ${truth.conclusion}",
+        "evidence_focus": {"kind": "document", "fields": ["${var.status_field}", "${var.route_field}"]}
       },
       "requires": ["endpoints"]
     }
@@ -62,7 +63,8 @@
         "demonstration": {
           "narration": "The report doesn't name a failure code. I'll check status-code Top values to see which code stands out before filtering.",
           "reasoning": "Filtering on a guessed status code would assume the answer. Read the field’s top values first so the next filter comes from the data.",
-          "evidence": "The Top values now show ${param.incident.status} alongside the usual 200s. That 500-series code is worth investigating; next we can filter for the value we just observed."
+          "evidence": "The highlighted row is ${param.incident.status}, a server error sitting beside the healthy 200s. It came from the data rather than a guess, so it's the value to filter on.",
+          "evidence_focus": {"kind": "top_values", "field": "${var.status_field}", "value": "${param.incident.status}"}
         },
         "requires": ["scope"],
         "accepts": [
@@ -91,9 +93,10 @@
         "reasoning": "Knowing the status code isn't the same as knowing where it happens. The url.path top values show whether one route is behind most of them.",
         "evidence": "The url.path top values show the endpoint behind almost all of the failures.",
         "demonstration": {
-          "narration": "Now that we're looking at ${param.incident.status_family}, I'll check url.path Top values to see which endpoint gets those failures.",
+          "narration": "I'll check url.path Top values within the ${param.incident.status} responses to see which endpoint the failures hit.",
           "reasoning": "A status-code spike could be spread across many routes or concentrated on one. Reading url.path in the filtered set tells us which pattern is present.",
-          "evidence": "The url.path Top values are mostly ${param.incident.route}. That identifies the endpoint behind these failures; opening an event next will check the status and route together."
+          "evidence": "Almost all of the ${param.incident.status} responses hit ${param.incident.route}, so the failures are tied to that one endpoint rather than spread across the API.",
+          "evidence_focus": {"kind": "top_values", "field": "${var.route_field}", "value": "${param.incident.route}"}
         },
         "requires": ["isolate"],
         "accepts": [

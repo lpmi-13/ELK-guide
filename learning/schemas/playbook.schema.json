@@ -10,6 +10,18 @@
     {"required": ["id", "version", "starting_view", "demonstration_summary", "goals"]}
   ],
   "$defs": {
+    "evidence_focus": {
+      "type": "object",
+      "description": "Demonstration only: what the \"What this shows\" beat rings once the step's action is done. histogram = chart and hit count; query = query bar and hit count; filter = the field/value pill and hit count; top_values = the field's Top values (the row for value, when given); document = the expanded event's rows for fields; columns = the table columns for fields. Omitted, the coach derives it from the command type.",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"enum": ["histogram", "query", "filter", "top_values", "document", "columns"]},
+        "field": {"type": "string"},
+        "value": {"type": ["string", "number"]},
+        "fields": {"type": "array", "items": {"type": "string"}}
+      }
+    },
     "drifts": {
       "type": "array",
       "description": "Guided/challenge: plausible moves away from what this step needs. A matching learner action is recorded silently (never interrupts) and its note is only surfaced at a check-in or in the debrief. Same action/validator shape as accepts; ${action.<detail>} in the note is filled from the action's details.",
@@ -51,7 +63,9 @@
               "narration": {"type": "string"},
               "reasoning": {"type": "string"},
               "evidence": {"type": "string"},
-              "concept": {"type": "string"}
+              "concept": {"type": "string"},
+              "learning_focus": {"type": "array", "items": {"type": "string"}},
+              "evidence_focus": {"$ref": "#/$defs/evidence_focus"}
             }
           },
           "reference_action": {
@@ -116,7 +130,9 @@
               "narration": {"type": "string"},
               "reasoning": {"type": "string"},
               "evidence": {"type": "string"},
-              "concept": {"type": "string"}
+              "concept": {"type": "string"},
+              "learning_focus": {"type": "array", "items": {"type": "string"}},
+              "evidence_focus": {"$ref": "#/$defs/evidence_focus"}
             }
           },
           "requires": {"type": "array", "items": {"type": "string"}},

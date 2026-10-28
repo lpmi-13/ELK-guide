@@ -44,7 +44,8 @@ globalThis.KibanaApplicationAdapters.push({
       const toggle = field ? await waitForSelector(`[data-test-subj='fieldToggle-${cssEscape(field)}']`, 20000, signal) : null;
       const target = toggle || await host.waitFor(command.target, 20000, signal);
       const verb = command.type === 'add_column' ? 'Add' : 'Remove';
-      await host.pointAt(target, coach, timingScale, signal, command.narration || `${verb} the ${field || 'selected'} column from the field list.`, {activate: true});
+      // The caption names the move itself; the goal card already gave the reason for it.
+      await host.pointAt(target, coach, timingScale, signal, `${verb} the ${field || 'selected'} column from the field list.`, {activate: true});
       const type = command.type === 'add_column' ? 'column_added' : 'column_removed';
       return {type, details: {...(command.value || {})}, state_after: command.value || {}};
     }
@@ -61,12 +62,15 @@ globalThis.KibanaApplicationAdapters.push({
         `[data-test-subj='dscFieldListPanelField-${escaped}'] button`,
         `[data-test-subj='dscFieldListPanelField-${escaped}']`,
       ], 20000, signal);
-      await host.pointAt(target, coach, timingScale, signal, command.narration || `Open the ${field} field to read its top values.`, {activate: true});
+      await host.pointAt(target, coach, timingScale, signal, `Open the ${field} field to read its Top values.`, {activate: true});
       const type = command.type === 'open_field_statistics' ? 'field_statistics_opened' : 'field_inspected';
       return {type, details: {...command.value}, state_after: {...command.value}};
     }
     const target = await host.waitFor(command.target, 20000, signal);
-    await host.pointAt(target, coach, timingScale, signal, command.narration || 'Use the highlighted Discover control.', {activate: true});
+    const activity = command.type !== 'expand_document' ? command.narration || 'Use the highlighted Discover control.'
+      : (command.evidence_focus || command.walkthrough?.evidence_focus)?.fields?.length ? 'Expand the first result, then pin the fields to compare at the top of it.'
+        : 'Expand the first result to read all of its fields.';
+    await host.pointAt(target, coach, timingScale, signal, activity, {activate: true});
     const observations = {
       select_data_view: 'data_view_selected', switch_query_language: 'query_language_changed', edit_filter: 'filter_changed', remove_filter: 'filter_removed', disable_filter: 'filter_disabled',
       add_column: 'column_added', remove_column: 'column_removed', sort_column: 'sort_changed', expand_document: 'document_expanded', inspect_field: 'field_inspected',

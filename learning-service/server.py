@@ -551,6 +551,9 @@ def next_command(session):
         "reasoning": explanation_text("reasoning") if session["mode"] == "demonstration" else "",
         "evidence": explanation_text("evidence") if session["mode"] == "demonstration" else "",
         "learning_focus": substitute(explanation.get("learning_focus", []), session) if session["mode"] == "demonstration" else [],
+        # What the demonstration's "What this shows" beat rings on the page once the action is done
+        # (a Top values row, document fields...). Absent, the coach derives it from the command type.
+        "evidence_focus": substitute(explanation.get("evidence_focus"), session) if session["mode"] == "demonstration" else None,
         "concept": explanation_text("concept") if session["mode"] == "demonstration" else "",
         "answer_schema": session["manifest"]["scenario"].get("answer_schema", {}),
     }
@@ -560,7 +563,7 @@ def next_command(session):
         walkthrough = step.get("demonstration", {})
         command["walkthrough"] = {
             field: substitute(walkthrough.get(field, step.get(field, "")), session)
-            for field in ("narration", "reasoning", "evidence", "learning_focus")
+            for field in ("narration", "reasoning", "evidence", "learning_focus", "evidence_focus")
         }
     if session["mode"] == "guided":
         command["restore_state"] = restore_state(session)

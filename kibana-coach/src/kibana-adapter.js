@@ -316,8 +316,10 @@ class KibanaAdapter {
   async pointAt(target, coach, timingScale, signal, activity, {activate = false, showClick = true, hold = true, targetName = null} = {}) {
     // Every application adapter uses this path. Reveal controls inside scrollable panels before
     // placing the spotlight or cursor, so the visible pointer lands on the control we act on.
-    await coach.cursor.reveal(target, {timingScale, signal});
     const informationOnly = !activate && !showClick;
+    // Caption the action before that scroll, so the card says what is happening while the list moves.
+    if (!informationOnly && activity) coach.showTarget(null, activity);
+    await coach.cursor.reveal(target, {timingScale, signal});
     if (informationOnly) coach.showInfo(target, activity);
     else coach.showTarget(target, activity);
     // A pointer with no click is an explanation, not an action. Use the same timed reading beat
@@ -524,6 +526,203 @@ class KibanaAdapter {
     );
     await this.wait(Math.min(6000, 500 * timingScale), signal);
     return {type: 'trace_opened', details: {trace_id: traceId}, state_after: {trace_id: traceId, query: traceQuery}};
+  }
+
+  // The demonstration's "What this shows" beat points at what a step produced, not at the control it
+  // used. Resolve that evidence once Kibana has drawn it — the hit count after a refetch, Top values
+  // after their stats load, the doc viewer's rows after scrolling them into view. Targets are
+  // functions returning the live element, because a virtualized row can be re-rendered while it is
+  // ringed; columns are result-table columns to ring. Either may be empty: the beat still explains.
+  async findEvidence(command, signal) {
+    const columns = command.learning_focus?.length ? command.learning_focus
+      : command.type === 'add_column' && command.value?.field ? [command.value.field] : [];
+    const focus = command.evidence_focus || this.defaultEvidenceFocus(command);
+    if (focus?.kind === 'columns') return {targets: [], columns: focus.fields || columns};
+    let targets = [];
+    try {
+      if (focus) targets = await this.evidenceTargets(focus, signal);
+    } catch (error) {
+      if (error.name === 'AbortError') throw error;
+    }
+    return {targets, columns};
+  }
+
+  defaultEvidenceFocus(command) {
+    const value = command.value || {};
+    if (command.type === 'set_time_range') return {kind: 'histogram'};
+    if (command.type === 'enter_kql') return {kind: 'query'};
+    if (command.type === 'add_filter') return {kind: 'filter', field: value.field, value: value.value};
+    if (command.type === 'open_field_statistics' || command.type === 'inspect_field') return {kind: 'top_values', field: value.field};
+    if (command.type === 'expand_document') return {kind: 'document', fields: []};
+    return null;
+  }
+
+  async evidenceTargets(focus, signal) {
+    const registered = name => () => this.resolve(name);
+    if (focus.kind === 'top_values') return [await this.topValuesEvidence(focus, signal)];
+    if (focus.kind === 'document') return this.documentEvidence(focus.fields || [], signal);
+    await this.resultsSettled(signal);
+    if (focus.kind === 'histogram') return [registered('kibana.histogram'), registered('kibana.result_count')];
+    if (focus.kind === 'query') return [registered('kibana.query_bar'), registered('kibana.result_count')];
+    if (focus.kind === 'filter') return [() => this.findFilterPill(focus.field, focus.value), registered('kibana.result_count')];
+    return [];
+  }
+
+  // Discover keeps the previous hit count on screen while it refetches, and its global loading
+  // indicator doesn't track that search. Wait for its own busy markers (the same ones the observer
+  // reads) to clear — allowing a moment for one to appear — so the beat never rings a stale count.
+  async resultsSettled(signal, {grace = 600, timeout = 8000} = {}) {
+    const busy = () => document.querySelector("[data-test-subj='discoverDataGridUpdating'], [data-test-subj='loadingSpinner'], [data-test-subj='globalLoadingIndicator']");
+    const startedAt = Date.now();
+    let sawBusy = false;
+    while (Date.now() - startedAt < timeout) {
+      if (busy()) sawBusy = true;
+      else if (sawBusy || Date.now() - startedAt >= grace) return;
+      await this.wait(100, signal);
+    }
+  }
+
+  // The pill for field (and value, when its test subject carries it); Add filter names the base field
+  // and a Top values "+" its `.keyword` multi-field, so compare without the suffix.
+  findFilterPill(field, value) {
+    const pills = [...document.querySelectorAll("[data-test-subj*='filter-key-']")].map(node => {
+      const subject = node.getAttribute('data-test-subj') || '';
+      return {
+        node,
+        field: subject.match(/filter-key-([^\s]+)/)?.[1]?.replace(/\.(keyword|text)$/, ''),
+        value: subject.match(/filter-value-([^\s]+)/)?.[1],
+      };
+    });
+    const sameField = pills.filter(pill => pill.field === field);
+    return (sameField.find(pill => value != null && pill.value === String(value)) || sameField[0] || pills[pills.length - 1])?.node || null;
+  }
+
+  // A field's Top values popover (verified 9.5.2): the list renders once its stats load, one
+  // `dscFieldStats-topValues-bucket` per value. Ring the row for `value`, or the whole list.
+  async topValuesEvidence({field, value}, signal) {
+    const popover = () => [...document.querySelectorAll('[data-popover-panel]')].filter(panel => panel.getClientRects().length)
+      .find(panel => !field || panel.querySelector("[data-test-subj='fieldPopoverHeader_fieldDisplayName']")?.textContent?.trim() === field);
+    const list = () => popover()?.querySelector("[data-test-subj='dscFieldStats-topValues']");
+    const deadline = Date.now() + 8000;
+    while (!list() && Date.now() < deadline) await this.wait(100, signal);
+    const row = () => value == null ? null : [...(list()?.querySelectorAll("[data-test-subj='dscFieldStats-topValues-bucket']") || [])]
+      .find(bucket => bucket.querySelector("[data-test-subj='dscFieldStats-topValues-formattedFieldValue']")?.textContent?.trim() === String(value));
+    return () => row() || list() || popover() || null;
+  }
+
+  // The expanded event (verified 9.5.2): the doc viewer lists fields as `tableDocViewRow-<field>-name`
+  // / `-value` cells, 25 rows to a page, inside a scrolling flyout body — so the fields a step needs
+  // can be off-screen or on another page. Walk the page to learn where each sits; if one is on another
+  // page, show 100 rows and walk again. Then pin them, which lifts them to the top of the table side
+  // by side; without pin controls, scroll so they share the view (or start at the first).
+  async documentEvidence(fields, signal) {
+    const viewer = await this.waitFor('kibana.doc_viewer', 8000, signal);
+    const anyRow = () => viewer.querySelector("[data-test-subj^='tableDocViewRow-']");
+    const deadline = Date.now() + 8000;
+    while (!anyRow() && Date.now() < deadline) await this.wait(100, signal);
+    const row = field => {
+      const name = document.querySelector(`[data-test-subj='docViewerFlyout'] [data-test-subj='tableDocViewRow-${String(field).replace(/['\\]/g, '\\$&')}-name']`);
+      return name?.closest("[role='row'], tr") || name;
+    };
+    const scroller = fields.length && anyRow() ? this.scrollableAncestor(anyRow(), viewer) : null;
+    if (scroller) {
+      let found = await this.locateRows(fields, row, scroller, signal);
+      if (found.size < fields.length && await this.showMoreDocumentRows(viewer, signal)) {
+        found = await this.locateRows(fields, row, scroller, signal);
+      }
+      if (found.size && await this.pinDocumentFields([...found.keys()], row, scroller, signal)) {
+        scroller.scrollTop = 0;
+      } else if (found.size) {
+        const top = Math.min(...[...found.values()].map(span => span.top));
+        const bottom = Math.max(...[...found.values()].map(span => span.bottom));
+        const room = scroller.clientHeight;
+        scroller.scrollTop = Math.max(0, bottom - top <= room ? top - (room - (bottom - top)) / 2 : top - 12);
+      }
+      await this.wait(150, signal);
+    }
+    return fields.map(field => () => row(field));
+  }
+
+  // Pin each field (verified 9.5.2: unifiedDocViewer_pinControlButton_<field>, labelled "Pin field" /
+  // "Unpin field"; Kibana keeps pins per data view, and every run has its own). Pinning moves a row,
+  // so find each one afresh. False when a field has no pin control to use.
+  async pinDocumentFields(fields, row, scroller, signal) {
+    for (const field of fields) {
+      await this.locateRows([field], row, scroller, signal);
+      const pin = document.querySelector(`[data-test-subj='docViewerFlyout'] [data-test-subj='unifiedDocViewer_pinControlButton_${String(field).replace(/['\\]/g, '\\$&')}']`);
+      if (!pin) return false;
+      if (/unpin/i.test(pin.getAttribute('aria-label') || '')) continue;
+      this.performing = true;
+      try { pin.click(); } finally { this.performing = false; }
+      await this.wait(250, signal);
+    }
+    return true;
+  }
+
+  // Scroll through the doc viewer once, recording where each field's row sits in the scrolled content.
+  async locateRows(fields, row, scroller, signal) {
+    const found = new Map();
+    const record = () => {
+      const origin = scroller.getBoundingClientRect().top - scroller.scrollTop;
+      for (const field of fields) {
+        const rect = row(field)?.getBoundingClientRect();
+        if (rect?.height && !found.has(field)) found.set(field, {top: rect.top - origin, bottom: rect.bottom - origin});
+      }
+    };
+    scroller.scrollTop = 0;
+    await this.wait(120, signal);
+    record();
+    while (found.size < fields.length && scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 1) {
+      scroller.scrollTop += Math.max(80, Math.round(scroller.clientHeight * 0.75));
+      await this.wait(120, signal);
+      record();
+    }
+    return found;
+  }
+
+  // Put the doc viewer's fields on one page (verified 9.5.2: its "Rows per page" control is
+  // tablePaginationPopoverButton → tablePagination-100-rows; Kibana remembers it as discover:pageSize).
+  async showMoreDocumentRows(viewer, signal) {
+    const button = viewer.querySelector("[data-test-subj='tablePaginationPopoverButton']");
+    if (!button) return false;
+    this.performing = true;
+    try {
+      button.click();
+      const choice = () => document.querySelector("[data-popover-panel] [data-test-subj='tablePagination-100-rows']");
+      const deadline = Date.now() + 2000;
+      while (!choice() && Date.now() < deadline) await this.wait(100, signal);
+      const option = choice();
+      if (!option) return false;
+      option.click();
+      await this.wait(400, signal);
+      return true;
+    } finally {
+      this.performing = false;
+    }
+  }
+
+  scrollableAncestor(node, boundary) {
+    for (let element = node?.parentElement; element && element !== boundary.parentElement; element = element.parentElement) {
+      const overflow = getComputedStyle(element).overflowY;
+      if ((overflow === 'auto' || overflow === 'scroll') && element.scrollHeight > element.clientHeight + 4) return element;
+    }
+    return null;
+  }
+
+  // Close the popovers a demonstration step opened and left up (a field's Top values), so they don't
+  // pile up over the next step's controls and evidence. Verified 9.5.2: an Escape keydown inside the
+  // panel closes it. The doc viewer is a flyout, not a popover, so an opened event stays open.
+  closeTransientPopovers() {
+    const panels = [...document.querySelectorAll('[data-popover-panel]')].filter(panel => panel.getClientRects().length);
+    this.performing = true;
+    try {
+      for (const panel of panels) {
+        (panel.querySelector('[tabindex], button') || panel)
+          .dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, cancelable: true}));
+      }
+    } finally {
+      this.performing = false;
+    }
   }
 
   // Discover's URL state: the parsed `_a` (app) and `_g` (global) rison plus what is needed to write

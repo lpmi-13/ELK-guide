@@ -115,10 +115,20 @@ function startIncidentCoach() {
   const demonstrationTimingScale = 10 * demonstrationSlowdown;
   const completedActionHoldMs = 1000;
 
+  function wordCount(...texts) {
+    return texts.filter(Boolean).join(' ').trim().split(/\s+/).filter(Boolean).length;
+  }
+
   function readingPause(...texts) {
-    const words = texts.filter(Boolean).join(' ').trim().split(/\s+/).filter(Boolean).length;
+    const words = wordCount(...texts);
     if (!words) return 0;
     return Math.min(15000, Math.max(5500, words * 260));
+  }
+
+  // A demonstration step opens on one line of intent: long enough to read it and find the
+  // highlighted control, short enough that the time goes to the result the step produces.
+  function goalPause(text) {
+    return Math.min(8000, Math.max(5000, wordCount(text) * 300));
   }
 
   // The reading pause currently on screen. "Advance" completes it early — the same effect as its
@@ -172,6 +182,22 @@ function startIncidentCoach() {
     });
   }
 
+  // A demonstration step's last beat: ring what the action revealed and say what it shows, then wait
+  // for the learner — reading the result is where the inference happens, so it is never on a timer.
+  // The step is only reported done afterwards, so the next step (or the debrief) can't cover it.
+  // Popovers the step opened are closed on the way out so they don't pile up over the next step.
+  async function showResult(command, signal) {
+    const evidence = await adapter.findEvidence(command, signal);
+    if (advanceAfterAction === signal) {
+      // An Advance pressed during the action hurried its mechanics, not its result.
+      advanceAfterAction = null;
+      coach.setAdvancePending(false);
+    }
+    coach.showResult(command, evidence);
+    await coach.waitForAdvance(signal);
+    adapter.closeTransientPopovers();
+  }
+
   async function execute(command, explicitlyRequested = false) {
     executionController?.abort();
     const controller = new AbortController();
@@ -190,14 +216,16 @@ function startIncidentCoach() {
         await readingBeatWait(completedActionHoldMs, controller.signal);
       } : null;
       if (command.mode === 'demonstration') {
-        // Give the purpose and next move on one card before touching Kibana.
+        // State the step's goal in one line before touching Kibana.
         // The anchor is only the control the opening cards point at; perform() resolves the controls
         // the step actually drives. Some steps (e.g. add_filter) deliberately point at an anchor the
         // registry does not hold, like the filter bar, so a missing anchor must never abort the run —
         // resolveAnchor falls back to no opening highlight and perform() highlights the real controls.
         const target = await adapter.resolveAnchor(command.target, controller.signal);
         coach.showCommand(command, target);
-        await readBeat(command.narration);
+        const pause = goalPause(command.narration);
+        coach.startCountdown(pause);
+        await readingBeatWait(pause, controller.signal);
         // Hand the card over to the live step's action narration.
         coach.beginActionPhase(command);
       }
@@ -209,12 +237,14 @@ function startIncidentCoach() {
         coach.beginWalkthrough(walkthrough);
       }
       const action = await adapter.perform(command, coach, {timingScale, signal: controller.signal, readBeat, holdAction});
+      if (command.mode === 'demonstration' && action) await showResult(command, controller.signal);
       const learning = walkthrough
         ? {...walkthrough, evidence: [walkthrough.reasoning, walkthrough.evidence].filter(Boolean).join('\n\n')}
         : command;
       if (walkthrough && learning.evidence) {
-        // Guided "Show me" still explains the result, since its action starts immediately.
-        coach.showLearning(learning);
+        // Guided "Show me" still explains the result, since its action starts immediately, and rings
+        // the same evidence the demonstration does.
+        coach.showLearning(learning, await adapter.findEvidence(walkthrough, controller.signal));
         await readBeat(learning.evidence);
       }
       coach.finishCommand(command);
@@ -582,6 +612,10 @@ function startIncidentCoach() {
     await client.connect();
     observer = new KibanaActionObserver(adapter, action => {
       if (walkthroughController) return;
+      // A demonstration step reports its own action once its result beat ends. The observer must not
+      // report the coach's change first (e.g. the window it just set), or the next step would start
+      // over the result the learner is still reading.
+      if (executionController && currentCommand?.mode === 'demonstration') return;
       // Tag a learner's window change with when the incident was noticed (from the briefing) so
       // the service can accept any window that reaches back far enough to include it.
       if (action.type === 'time_range_changed') {

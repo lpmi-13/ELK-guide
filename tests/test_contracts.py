@@ -63,6 +63,26 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("await readBeat(walkthrough.reasoning)", content)
         self.assertIn("[walkthrough.reasoning, walkthrough.evidence]", content)
 
+    def test_demonstration_step_is_goal_then_action_then_a_learner_paced_result(self):
+        learning_service = (ROOT / "learning-service/server.py").read_text(encoding="utf-8")
+        coach = (ROOT / "kibana-coach/src/ui/coach-panel.js").read_text(encoding="utf-8")
+        content = (ROOT / "kibana-coach/src/content-script.js").read_text(encoding="utf-8")
+        adapter = (ROOT / "kibana-coach/src/kibana-adapter.js").read_text(encoding="utf-8")
+        # A short goal card, not a long countdown, before the action.
+        self.assertIn("Math.min(8000, Math.max(5000, wordCount(text) * 300))", content)
+        self.assertIn("const pause = goalPause(command.narration);", content)
+        # The result beat rings the evidence and waits for Continue; only then is the step reported,
+        # so neither the next step nor the debrief can cover a result the learner is still reading.
+        self.assertIn("if (command.mode === 'demonstration' && action) await showResult(command, controller.signal);", content)
+        self.assertLess(content.index("await showResult(command, controller.signal)"), content.index("client.sendAction(action, 'tutorial')"))
+        self.assertIn("await coach.waitForAdvance(signal);", content)
+        self.assertIn("adapter.closeTransientPopovers();", content)
+        self.assertIn("if (executionController && currentCommand?.mode === 'demonstration') return;", content)
+        self.assertIn("advance.textContent = 'Continue';", coach)
+        self.assertIn('"evidence_focus": substitute(explanation.get("evidence_focus"), session)', learning_service)
+        for kind in ("histogram", "query", "filter", "top_values", "document"):
+            self.assertIn(f"kind === '{kind}'", adapter)
+
     def test_demonstration_cursor_is_snappy_and_form_values_are_typed(self):
         cursor = (ROOT / "kibana-coach/src/ui/cursor.js").read_text(encoding="utf-8")
         coach = (ROOT / "kibana-coach/src/ui/coach-panel.js").read_text(encoding="utf-8")
@@ -153,7 +173,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("replace the service filter with this trace ID", adapter)
         # The demonstration explains its motive before acting; guided Show me can still
         # use the learning card when the learner starts its action immediately.
-        for beat in ("beginActionPhase", "showLearning", "Doing it now", "What we learned"):
+        for beat in ("beginActionPhase", "showLearning", "showResult", "Doing it now", "What this shows"):
             self.assertIn(beat, coach)
         content = (ROOT / "kibana-coach/src/content-script.js").read_text(encoding="utf-8")
         self.assertNotIn("coach.showWhy(command)", content)

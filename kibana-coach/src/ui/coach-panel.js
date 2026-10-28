@@ -36,6 +36,7 @@ class IncidentCoachPanel {
     this.activeTarget = null;
     this.activeCommandId = null;
     this.evidenceFields = [];
+    this.evidenceTargets = [];
     this.evidenceHighlights = [];
     // A guided step starts undimmed; the spotlight is only revealed on demonstration or a hint.
     this.spotlightRevealed = false;
@@ -61,7 +62,7 @@ class IncidentCoachPanel {
         // Nothing to dodge — no highlighted control and no open doc-viewer flyout — so leave the
         // card where it rests rather than nudging it for every stray scroll or mutation.
         if (this.dragging) return;
-        if (!target && !this.findFlyout() && !this.findPopovers().length && !this.evidenceField && !this.evidenceFields.length && event?.type !== 'resize') return;
+        if (!target && !this.findFlyout() && !this.findPopovers().length && !this.evidenceField && !this.evidenceFields.length && !this.evidenceTargets.length && event?.type !== 'resize') return;
         // Keep the panel clear of the control, but only re-dim/-highlight if the spotlight is
         // already revealed — a guided step starts with nothing dimmed until the learner asks.
         if (target && this.spotlightRevealed) this.spotlight.show(target);
@@ -84,7 +85,7 @@ class IncidentCoachPanel {
       requestAnimationFrame(() => {
         this.flyoutCheckScheduled = false;
         const open = !!this.findFlyout();
-        const watching = this.activeTarget?.isConnected || this.findPopovers().length || this.evidenceField || this.evidenceFields.length;
+        const watching = this.activeTarget?.isConnected || this.findPopovers().length || this.evidenceField || this.evidenceFields.length || this.evidenceTargets.length;
         if (open === this.flyoutOpen && !watching) return;
         this.flyoutOpen = open;
         this.reposition();
@@ -166,6 +167,7 @@ class IncidentCoachPanel {
     advance.disabled = false;
     advance.textContent = 'Advance';
     advance.title = 'Continue to the next part';
+    advance.classList.remove('primary');
     this.root.querySelector('#hint').hidden = command.mode === 'demonstration';
     if (command.type === 'request_diagnosis' || command.type === 'request_answer') this.renderAnswerSchema(command.answer_schema);
     this.root.querySelector('#diagnosis').hidden = !['request_diagnosis', 'request_answer'].includes(command.type) || command.mode === 'demonstration';
@@ -223,7 +225,7 @@ class IncidentCoachPanel {
     advance.title = 'Put the search back now';
     const stage = this.root.querySelector('#stage');
     stage.hidden = false;
-    stage.classList.remove('success', 'celebrate-in', 'acting', 'checkin');
+    stage.classList.remove('success', 'celebrate-in', 'acting', 'result', 'checkin');
     stage.classList.add('recovery');
     if (choices?.length) this.resetCountdown();
     this.renderPhase({eyebrow, headline, detail, choices});
@@ -246,7 +248,7 @@ class IncidentCoachPanel {
     for (const id of ['#hint', '#demonstrate', '#advance', '#pause', '#review-feedback']) this.root.querySelector(id).hidden = true;
     const stage = this.root.querySelector('#stage');
     stage.hidden = false;
-    stage.classList.remove('success', 'celebrate-in', 'acting', 'recovery');
+    stage.classList.remove('success', 'celebrate-in', 'acting', 'result', 'recovery');
     stage.classList.add('checkin');
     this.resetCountdown();
     this.renderPhase({eyebrow: 'Checking in', headline: `Still working on “${title}”?`, detail: drift || '', choices});
@@ -308,9 +310,9 @@ class IncidentCoachPanel {
     this.root.querySelector('#hint-text').textContent = '';
   }
 
-  // The demonstration shows its purpose before the action. Guided "Show me" also has a
-  // learning card afterward, since the learner starts that action immediately.
-  enterPhase(phase, command = this.currentCommand) {
+  // The demonstration shows a one-line goal, performs the action, then says what the result shows
+  // with the evidence ringed on the page. Guided "Show me" uses the same result card after its action.
+  enterPhase(phase, command = this.currentCommand, evidence = null) {
     this.clearHint();
     if (phase !== 'learning') this.clearEvidenceHighlights();
     this.phase = phase;
@@ -333,9 +335,9 @@ class IncidentCoachPanel {
       this.cursor.hide();
       this.activeTarget = null;
       this.evidenceField = command?.type === 'add_column' ? command.value?.field : null;
-      this.renderPhase({eyebrow: 'What we learned', headline: command?.evidence || 'Step complete.'});
+      this.renderPhase({eyebrow: 'What this shows', headline: command?.evidence || 'Step complete.'});
       this.resetCountdown();
-      this.showEvidenceHighlights(command?.learning_focus || []);
+      this.showEvidenceHighlights(evidence?.columns ?? command?.learning_focus ?? [], evidence?.targets || []);
       // The added column is the evidence to read next. Return the coach to the left before the
       // browser paints the refreshed table, then keep that column clear if the user moves the coach.
       if (this.evidenceField && !this.dragging) {
@@ -363,7 +365,21 @@ class IncidentCoachPanel {
 
   beginActionPhase(command = this.currentCommand) { this.enterPhase('action', command); }
 
-  showLearning(command = this.currentCommand) { this.enterPhase('learning', command); }
+  showLearning(command = this.currentCommand, evidence = null) { this.enterPhase('learning', command, evidence); }
+
+  // A demonstration step's result: what the action revealed, with that evidence ringed on the page.
+  // Reading a result is where the inference happens, so this card has no countdown — it waits for
+  // Continue, and Pause has nothing to hold.
+  showResult(command, evidence) {
+    this.enterPhase('learning', command, evidence);
+    this.root.querySelector('#pause').hidden = true;
+    const advance = this.root.querySelector('#advance');
+    advance.disabled = false;
+    advance.textContent = 'Continue';
+    advance.title = 'Continue to the next step';
+    advance.classList.add('primary');
+    requestAnimationFrame(() => this.placeAwayFrom(null));
+  }
 
   setPaused(paused, notify = true) {
     this.paused = paused;
@@ -448,6 +464,7 @@ class IncidentCoachPanel {
     if (this.phase !== 'recovery') stage.classList.remove('recovery');
     if (this.phase !== 'checkin') stage.classList.remove('checkin');
     stage.classList.toggle('acting', this.phase === 'action');
+    stage.classList.toggle('result', this.phase === 'learning');
     stage.classList.remove('phase-in');
     void stage.offsetWidth;
     stage.classList.add('phase-in');
@@ -471,7 +488,9 @@ class IncidentCoachPanel {
 
   showTarget(target, activity = '') {
     this.activeTarget = target;
-    if (activity) {
+    // The caption may already be up (set before the control was scrolled into view); re-rendering
+    // it would replay the card's entrance for the same words.
+    if (activity && !(this.phase === 'action' && this.root.querySelector('#phase-headline').textContent === activity)) {
       this.phase = 'action';
       this.renderPhase({eyebrow: 'Doing it now', headline: activity});
       if (!this.root.querySelector('#countdown').classList.contains('working')) this.startWorking();
@@ -560,12 +579,16 @@ class IncidentCoachPanel {
     for (const highlight of this.evidenceHighlights || []) highlight.remove();
     this.evidenceHighlights = [];
     this.evidenceFields = [];
+    this.evidenceTargets = [];
   }
 
-  showEvidenceHighlights(fields) {
+  // Ring the evidence a result card talks about: result-table columns (`fields`, drawn down to the
+  // bottom of the view) and page elements (`targets`, functions returning the live element).
+  showEvidenceHighlights(fields, targets = []) {
     this.clearEvidenceHighlights();
     this.evidenceFields = Array.isArray(fields) ? fields : [];
-    for (const field of this.evidenceFields) {
+    this.evidenceTargets = targets.filter(Boolean);
+    for (let index = 0; index < this.evidenceFields.length + this.evidenceTargets.length; index += 1) {
       const highlight = document.createElement('div');
       highlight.className = 'incident-evidence-highlight';
       highlight.setAttribute('aria-hidden', 'true');
@@ -575,8 +598,16 @@ class IncidentCoachPanel {
     this.refreshEvidenceHighlights();
   }
 
+  // The on-screen rectangles of the ringed page elements; a target that is gone or off-screen is skipped.
+  evidenceTargetRects() {
+    return this.evidenceTargets.map(target => {
+      const rect = target()?.getBoundingClientRect();
+      return rect && rect.width && rect.height && rect.bottom > 0 && rect.top < innerHeight ? rect : null;
+    });
+  }
+
   refreshEvidenceHighlights() {
-    if (!this.evidenceFields?.length) return;
+    if (!this.evidenceFields?.length && !this.evidenceTargets?.length) return;
     const headers = [...document.querySelectorAll("[role='columnheader'], th")];
     for (const [index, field] of this.evidenceFields.entries()) {
       const highlight = this.evidenceHighlights[index];
@@ -589,6 +620,11 @@ class IncidentCoachPanel {
       if (!highlight.hidden) {
         highlight.style.cssText = `left:${left}px;top:${top}px;width:${right - left}px;height:${innerHeight - top - 48}px`;
       }
+    }
+    for (const [index, rect] of this.evidenceTargetRects().entries()) {
+      const highlight = this.evidenceHighlights[this.evidenceFields.length + index];
+      highlight.hidden = !rect;
+      if (rect) highlight.style.cssText = `left:${rect.left - 5}px;top:${rect.top - 5}px;width:${rect.width + 10}px;height:${rect.height + 10}px`;
     }
   }
 
@@ -667,6 +703,9 @@ class IncidentCoachPanel {
     const evidenceRect = this.findEvidenceRect();
     if (evidenceRect) guards.push(evidenceRect);
     const pad = 16;
+    for (const rect of this.evidenceTargetRects().filter(Boolean)) {
+      guards.push({left: rect.left - pad, right: rect.right + pad, top: rect.top - pad, bottom: rect.bottom + pad});
+    }
     for (const rect of this.findPopovers()) {
       guards.push({left: rect.left - pad, right: rect.right + pad, top: rect.top - pad, bottom: rect.bottom + pad});
     }
@@ -778,7 +817,7 @@ class IncidentCoachPanel {
   // `note` is an extra line under the confirmation (e.g. "This worked, but it searches every field…"),
   // which holds the card a little longer so it can be read.
   celebrate(message = '', note = '') {
-    // A demonstration narrates its own "What we learned" beat, so it needs no separate confirmation.
+    // A demonstration narrates its own "What this shows" beat, so it needs no separate confirmation.
     if (this.currentCommand?.mode === 'demonstration') return;
     this.clearHint();
     this.host.hidden = false;
@@ -790,7 +829,7 @@ class IncidentCoachPanel {
     const stage = this.root.querySelector('#stage');
     const eyebrow = this.root.querySelector('#phase-eyebrow');
     stage.hidden = false;
-    stage.classList.remove('acting', 'recovery', 'checkin');
+    stage.classList.remove('acting', 'result', 'recovery', 'checkin');
     stage.classList.add('success');
     eyebrow.hidden = false;
     eyebrow.innerHTML = '<span class="stage-tick" aria-hidden="true"></span>New evidence found';
@@ -850,14 +889,14 @@ class IncidentCoachPanel {
     [hidden] { display:none!important; }
     header { display:flex; align-items:center; gap:8px; cursor:grab; touch-action:none; user-select:none; } header.dragging { cursor:grabbing; } header strong { flex:1; } .live-dot { width:9px;height:9px;border-radius:50%;background:#1aa87a;box-shadow:0 0 0 4px #1aa87a22; }
     h2 { margin: 14px 0 8px; font-size: 17px; text-transform: capitalize; } h3 { margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.045em;color:#3f5060; } p { line-height:1.45; } #mode { color:#536170; font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
-    #stage { padding:20px 22px;border:1px solid #bcd3e6;border-left:6px solid #006bb4;border-radius:11px;background:#f1f7fd;box-shadow:0 6px 20px #006bb416; } #stage.acting { border-left-color:#e0a200;background:#fff8e8;box-shadow:0 6px 20px #e0a2001f; }
+    #stage { padding:20px 22px;border:1px solid #bcd3e6;border-left:6px solid #006bb4;border-radius:11px;background:#f1f7fd;box-shadow:0 6px 20px #006bb416; } #stage.acting { border-left-color:#e0a200;background:#fff8e8;box-shadow:0 6px 20px #e0a2001f; } #stage.result { border-left-color:#12a56b;background:#f0f9f4;box-shadow:0 6px 20px #12a56b1f; } #stage.result .eyebrow { color:#0b7a4f; }
     .eyebrow { margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#3f6480;font-weight:750; } #phase-headline { margin:0;font-size:20px;line-height:1.38;font-weight:600;letter-spacing:-.01em;color:#0f2231;white-space:pre-line; }
     #stage.phase-in { animation:phase-in .32s cubic-bezier(.22,1,.36,1); } @keyframes phase-in { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
     .countdown { margin-top:16px;height:7px;border-radius:6px;background:#cfe0ee;overflow:hidden; } .countdown span { display:block;height:100%;width:0;background:#006bb4;border-radius:6px; } #stage.acting .countdown { background:#efdaa6; } #stage.acting .countdown span { background:#d98c00; }
     .countdown.working span { width:34%!important;animation:cd-sweep 1.25s cubic-bezier(.55,0,.45,1) infinite; } @keyframes cd-sweep { 0%{transform:translateX(-115%)} 100%{transform:translateX(310%)} }
     @media (prefers-reduced-motion: reduce) { .countdown.working span { transform:none!important;width:100%!important;opacity:.55; } .countdown span { width:100%!important; } }
     button { border:1px solid #8293a3;border-radius:5px;background:#f5f7f9;padding:6px 9px;cursor:pointer; } button:hover,button:focus-visible { outline:2px solid #006bb4;outline-offset:1px; }
-    #stop { color:#a32b1c;border-color:#d77d72; } #advance { margin-left:auto; } #advance:disabled { opacity:.7;cursor:wait; } .actions { display:flex; gap:7px; margin-top:12px; }
+    #stop { color:#a32b1c;border-color:#d77d72; } #advance { margin-left:auto; } #advance.primary { background:#006bb4;border-color:#006bb4;color:#fff;font-weight:600;padding:6px 14px; } #advance:disabled { opacity:.7;cursor:wait; } .actions { display:flex; gap:7px; margin-top:12px; }
     #hint-card { margin-top:14px;padding:13px 16px 14px;border:1px solid #b8dcea;border-left:4px solid #0874a8;border-radius:9px;background:#f0f8fc;box-shadow:0 4px 14px #0874a812; }
     #hint-label { display:block;color:#08638d;font:700 11px/1.3 system-ui,sans-serif;letter-spacing:.09em;text-transform:uppercase; }
     #hint-text { margin:6px 0 0;color:#173d53;font:500 15px/1.5 'Segoe UI',system-ui,sans-serif;letter-spacing:-.005em;white-space:pre-line; }
