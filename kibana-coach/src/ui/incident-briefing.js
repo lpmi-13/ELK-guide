@@ -28,10 +28,10 @@ class IncidentBriefing {
 
   modeCopy(mode) {
     return {
-      demonstration: {label: 'Demonstration', action: 'Begin demonstration', waiting: 'Demonstration will automatically begin'},
-      guided: {label: 'Guided practice', action: 'Begin guided practice', waiting: 'Guided practice will automatically begin'},
-      challenge: {label: 'Challenge', action: 'Begin investigation', waiting: 'Challenge will automatically begin'},
-    }[mode] || {label: mode, action: 'Begin investigation', waiting: 'Investigation begins'};
+      demonstration: {label: 'Demonstration', action: 'Begin demonstration', waiting: 'Demonstration will automatically begin', back: 'Return to the demonstration'},
+      guided: {label: 'Guided practice', action: 'Begin guided practice', waiting: 'Guided practice will automatically begin', back: 'Return to guided practice'},
+      challenge: {label: 'Challenge', action: 'Begin investigation', waiting: 'Challenge will automatically begin', back: 'Return to the investigation'},
+    }[mode] || {label: mode, action: 'Begin investigation', waiting: 'Investigation begins', back: 'Return to the investigation'};
   }
 
   show(briefing, {review = false} = {}) {
@@ -97,7 +97,7 @@ class IncidentBriefing {
       timerTrack.append(this.node('span', 'briefing-timer-fill'));
       timing.append(countdownText, timerTrack);
     }
-    const begin = this.node('button', 'briefing-begin', review ? 'Return to guided practice' : this.modeCopy(briefing.mode).action);
+    const begin = this.node('button', 'briefing-begin', review ? this.modeCopy(briefing.mode).back : this.modeCopy(briefing.mode).action);
     begin.type = 'button';
     footer.classList.toggle('review', review);
     if (!review) footer.append(timing);

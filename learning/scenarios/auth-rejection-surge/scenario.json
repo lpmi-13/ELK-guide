@@ -72,8 +72,7 @@
     "fields": [
       {"id": "finding", "label": "Rejection reason", "kind": "string", "weight": 2},
       {"id": "scope", "label": "Affected client", "kind": "string", "weight": 1},
-      {"id": "conclusion", "label": "Conclusion", "kind": "string", "weight": 1},
-      {"id": "evidence_refs", "label": "Evidence references", "kind": "string", "scored": false},
+      {"id": "conclusion", "label": "Conclusion", "kind": "statement", "mentions": ["finding", "scope"], "weight": 1},
       {"id": "evidence", "label": "Evidence", "kind": "text", "scored": false}
     ]
   },

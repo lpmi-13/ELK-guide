@@ -155,20 +155,25 @@ class IncidentCoachPanel {
     this.evidenceField = null;
     this.clearEvidenceHighlights();
     this.currentCommand = command;
-    this.root.querySelector('#mode').textContent = `${command.mode} · step ${command.step_index + 1} of ${command.step_count}`;
-    this.root.querySelector('#objective').textContent = command.step_id.replaceAll('-', ' ');
+    // A challenge names no steps and shows no progress: the route is the learner's to find, and the
+    // debrief scores it afterwards.
+    const challenge = command.mode === 'challenge';
+    this.root.querySelector('#mode').textContent = challenge ? 'challenge' : `${command.mode} · step ${command.step_index + 1} of ${command.step_count}`;
+    this.root.querySelector('#objective').textContent = challenge ? 'Your investigation' : command.step_id.replaceAll('-', ' ');
+    this.root.querySelector('.progress').hidden = challenge;
     this.root.querySelector('.progress span').style.width = `${100 * command.step_index / command.step_count}%`;
     this.root.querySelector('#pause').hidden = command.mode !== 'demonstration';
     this.root.querySelector('#demonstrate').hidden = command.mode !== 'guided';
     this.root.querySelector('#review-feedback').hidden = true;
-    this.root.querySelector('#incident-info').hidden = command.mode !== 'guided' || !this.currentBriefing;
+    // The briefing is the problem statement, not help, so a challenge can reread it too.
+    this.root.querySelector('#incident-info').hidden = command.mode === 'demonstration' || !this.currentBriefing;
     const advance = this.root.querySelector('#advance');
     advance.hidden = command.mode !== 'demonstration';
     advance.disabled = false;
     advance.textContent = 'Advance';
     advance.title = 'Continue to the next part';
     advance.classList.remove('primary');
-    this.root.querySelector('#hint').hidden = command.mode === 'demonstration';
+    this.root.querySelector('#hint').hidden = command.mode !== 'guided';
     if (command.type === 'request_diagnosis' || command.type === 'request_answer') this.renderAnswerSchema(command.answer_schema);
     this.root.querySelector('#diagnosis').hidden = !['request_diagnosis', 'request_answer'].includes(command.type) || command.mode === 'demonstration';
     // Reveal one beat at a time. A demonstration opens on its intent, then performs

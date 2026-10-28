@@ -69,8 +69,7 @@
     "fields": [
       {"id": "finding", "label": "Rare error type", "kind": "string", "weight": 2},
       {"id": "scope", "label": "Service", "kind": "string", "weight": 1},
-      {"id": "conclusion", "label": "Correlation conclusion", "kind": "string", "weight": 1},
-      {"id": "evidence_refs", "label": "Evidence references", "kind": "string", "scored": false},
+      {"id": "conclusion", "label": "Correlation conclusion", "kind": "statement", "mentions": ["finding", "scope"], "weight": 1},
       {"id": "evidence", "label": "Representative request", "kind": "text", "scored": false}
     ]
   },

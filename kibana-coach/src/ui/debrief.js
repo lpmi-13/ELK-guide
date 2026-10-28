@@ -23,6 +23,11 @@ class IncidentDebrief {
     incomplete: {label: 'Not completed', note: 'no credit'},
   };
 
+  static componentLabels = {
+    task_correctness: 'Answer', evidence_quality: 'Evidence', goal_coverage: 'Investigation covered',
+    relevance: 'Relevant actions', efficiency: 'Efficiency',
+  };
+
   show(feedback) {
     const dialog = document.createElement('dialog');
     dialog.className = 'incident-debrief';
@@ -93,16 +98,34 @@ class IncidentDebrief {
       dialog.showModal();
       return;
     }
-    const components = Object.entries(feedback.components || {}).map(([name, score]) => `<li><span>${name.replaceAll('_', ' ')}</span><strong>${score}</strong></li>`).join('');
+    const components = Object.entries(feedback.components || {}).filter(([name]) => IncidentDebrief.componentLabels[name])
+      .map(([name, score]) => `<li><span>${IncidentDebrief.componentLabels[name]}</span><strong>${score}</strong></li>`).join('');
     const detourSteps = feedback.step_detours || [];
     const result = feedback.scored === false
       ? `Completion: ${feedback.completion ?? 'unscored walkthrough'}${feedback.completion != null ? '%' : ''}`
       : `Score: ${feedback.total}/100`;
     dialog.innerHTML = `<form method="dialog"><button class="dialog-close" aria-label="Close debrief">×</button></form>
       <h2>Investigation debrief</h2><p>${feedback.summary}</p><p class="total">${result}</p>
+      <section class="debrief-answers" hidden><h3>Your answer</h3><ul></ul></section>
       <ul>${components}</ul><p>Assistance: ${feedback.assistance.hints} hints; ${feedback.assistance.demonstrated_steps} demonstrated steps.</p>
-      <p><strong>Reference route:</strong> ${feedback.reference_route.join(' → ')}</p>
+      <p class="debrief-route"><strong>Reference route:</strong> <span></span></p>
       <section class="debrief-detours" hidden><h3>Detours</h3><ul></ul></section>`;
+    // Each graded answer beside what the evidence showed, so a miss says what it should have been.
+    // The learner's own text goes in as text, never markup.
+    const answers = dialog.querySelector('.debrief-answers');
+    for (const field of feedback.answer_review || []) {
+      const item = document.createElement('li');
+      item.className = field.correct ? 'answer-right' : 'answer-wrong';
+      item.innerHTML = '<span class="answer-mark" aria-hidden="true"></span><span class="answer-text"><strong></strong><span class="answer-given"></span><span class="answer-expected"></span></span>';
+      item.querySelector('strong').textContent = field.label;
+      item.querySelector('.answer-mark').textContent = field.correct ? '✓' : '✗';
+      item.querySelector('.answer-given').textContent = `You: ${field.submitted || '(blank)'}`;
+      item.querySelector('.answer-expected').textContent = field.correct ? '' : `Evidence showed: ${field.expected}`;
+      item.querySelector('.answer-expected').hidden = field.correct;
+      answers.querySelector('ul').append(item);
+    }
+    answers.hidden = !(feedback.answer_review || []).length;
+    dialog.querySelector('.debrief-route span').textContent = (feedback.reference_steps || feedback.reference_route || []).join(' → ');
     // Challenge mode has no live feedback, so the dead ends and drift it recorded are shown here.
     const detours = dialog.querySelector('.debrief-detours');
     for (const step of detourSteps) {
@@ -190,6 +213,14 @@ IncidentDebrief.styles = `
     .gd-step-text { flex:1;min-width:0;display:flex;flex-direction:column;gap:2px; }
     .gd-step-title { color:#17304a;font-weight:600; }
     .gd-step-detail { color:#5b6b78;font-size:12px;line-height:1.35; }
+    .debrief-answers h3 { margin:14px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#3f5060; }
+    .incident-debrief .debrief-answers ul { margin:0;padding:0;list-style:none; }
+    .incident-debrief .debrief-answers li { display:flex;justify-content:flex-start;align-items:flex-start;gap:10px;padding:7px 0;border-top:1px solid #e1e7ec; }
+    .answer-mark { flex:0 0 auto;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:800;color:#fff;background:#12a56b; }
+    .answer-wrong .answer-mark { background:#c4412b; }
+    .answer-text { display:flex;flex-direction:column;gap:2px;min-width:0; }
+    .answer-given, .answer-expected { font-size:13px;color:#3f5060;overflow-wrap:anywhere; }
+    .answer-expected { color:#17304a;font-weight:600; }
     .debrief-detours h3 { margin:14px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#3f5060; }
     .incident-debrief .debrief-detours li { display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:6px 0;border-top:1px solid #e1e7ec; }
     .debrief-detours li span { color:#3f5060;font-size:13px; }

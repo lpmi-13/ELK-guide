@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import re
+from datetime import datetime, timedelta, timezone
 
 
 # Coach bookkeeping, not investigation: never evidence, never scored for relevance or efficiency.
@@ -25,6 +26,12 @@ SEARCH_ACTIONS = {"query_submitted", "esql_submitted", "filter_added", "filter_c
 # it was first noticed, or when it began if the pack seeds a visible onset — so a 15-minute window
 # still covers an incident reported 13 minutes ago while a 10-minute one (which would miss it) does not.
 TIME_WINDOW_TOLERANCE_MINUTES = 1.0
+
+# A stated incident window is right when its start is this close to where the seeded rise begins
+# (and its end, if given, no earlier than this before the rise ends). A "last N minutes" answer may
+# reach this far past the onset before it is mostly unrelated traffic.
+ANSWER_CLOCK_TOLERANCE_MINUTES = 2
+ANSWER_WINDOW_SLACK_MINUTES = 10
 
 
 def _details(action):
@@ -463,7 +470,111 @@ def evaluate_action(session, action, evidence=None, earned_state=None):
     return {"outcome": "accepted" if meaningful else "observed", "goals_progressed": progressed, "meaningful": meaningful, "reason": reason}
 
 
-def _answer_matches(actual, expected, field):
+def incident_timing(manifest):
+    """The seeded incident's shape, in minutes before the run was created, when the pack declares one.
+
+    A pack whose lesson is the time window itself (``timing: {noticed, onset, end}``) seeds its
+    failures between ``onset`` and ``end`` and reports them as noticed in between, so the histogram
+    shows a rise that starts before the report. Other packs leave the incident open-ended.
+    """
+    timing = (manifest.get("parameters") or {}).get("timing")
+    return timing if isinstance(timing, dict) else {}
+
+
+def _created_at(manifest):
+    try:
+        return datetime.fromisoformat(str(manifest.get("created_at")))
+    except ValueError:
+        return None
+
+
+def incident_bounds(manifest):
+    """When a timed incident's rise began and ended (UTC), or None for an open-ended incident."""
+    timing, created = incident_timing(manifest), _created_at(manifest)
+    if "onset" not in timing or created is None:
+        return None
+    return created - timedelta(minutes=float(timing["onset"])), created - timedelta(minutes=float(timing.get("end", 0)))
+
+
+def incident_onset_age_minutes(manifest, now=None):
+    """How many minutes ago a timed incident's rise began, measured now — it grows as the run ages,
+    so a "last N minutes" window that held the onset when the run started can stop holding it."""
+    bounds = incident_bounds(manifest)
+    if bounds is None:
+        return None
+    return ((now or datetime.now(timezone.utc)) - bounds[0]).total_seconds() / 60
+
+
+# Answers are graded on the facts they state, not on reproducing a reference sentence: a value counts
+# when it appears as whole words, ignoring case and the punctuation around it (but not the characters
+# values are made of, so "/api/orders" never matches inside "/api/orders/refund").
+_ANSWER_NOISE = re.compile(r"[^\w./:-]+")
+_RELATIVE_WINDOW = re.compile(r"(\d+(?:\.\d+)?)\s*(m|mins?|minutes?|h|hrs?|hours?)\b")
+_LIST_SEPARATOR = re.compile(r"[,;&|]|\b(?:or|and)\b", re.IGNORECASE)
+_CLOCK_TIME = re.compile(r"(?<![\d:])([01]?\d|2[0-3])[:.]([0-5]\d)(?![\d])")
+
+
+def _normalized(value):
+    return " ".join(_ANSWER_NOISE.sub(" ", str(value if value is not None else "")).casefold().split())
+
+
+def _mentions(text, phrase):
+    """``phrase`` appears in ``text`` as whole words (a trailing plural "s" allowed: "500s")."""
+    text, phrase = _normalized(text), _normalized(phrase)
+    if not phrase:
+        return False
+    return re.search(rf"(?<![\w./-]){re.escape(phrase)}s?(?![\w/-])", text) is not None
+
+
+def _accepted(truth, key, expected):
+    accept = (truth.get("accept") or {}).get(key)
+    values = accept if isinstance(accept, list) else [accept] if accept is not None else []
+    return [item for item in [expected, *values] if item not in (None, "")]
+
+
+def _minute_of_day(moment):
+    return moment.hour * 60 + moment.minute
+
+
+def _clock_gap(stated, actual):
+    """Minutes from ``actual`` to ``stated`` on a 24-hour clock (negative when stated is earlier)."""
+    return (stated - actual + 720) % 1440 - 720
+
+
+def _window_matches(text, context):
+    """A stated incident window: clock times read off the histogram, or a "last N minutes" range.
+
+    Clock times need the learner's UTC offset (sent with the answer) because Discover shows local
+    time; the start must sit at the rise and an end, if given, must not cut it short. A relative range
+    is judged at submission: it must reach back to the onset without being mostly unrelated traffic.
+    """
+    manifest = context.get("manifest") or {}
+    bounds = incident_bounds(manifest)
+    if bounds is None:
+        return any(_mentions(text, item) for item in context.get("accepted", []))
+    clocks = [int(hour) * 60 + int(minute) for hour, minute in _CLOCK_TIME.findall(str(text or ""))]
+    offset = _number(context.get("utc_offset_minutes"))
+    if clocks and offset is not None:
+        start, end = (_minute_of_day(moment - timedelta(minutes=offset)) for moment in bounds)
+        if abs(_clock_gap(clocks[0], start)) > ANSWER_CLOCK_TOLERANCE_MINUTES:
+            return False
+        return len(clocks) < 2 or _clock_gap(clocks[1], end) >= -ANSWER_CLOCK_TOLERANCE_MINUTES
+    relative = _RELATIVE_WINDOW.search(_normalized(text))
+    if relative:
+        minutes = float(relative.group(1)) * (60 if relative.group(2).startswith("h") else 1)
+        age = incident_onset_age_minutes(manifest, context.get("now"))
+        return minutes + TIME_WINDOW_TOLERANCE_MINUTES >= age and minutes <= age + ANSWER_WINDOW_SLACK_MINUTES
+    return False
+
+
+def _answer_matches(actual, expected, field, context=None):
+    """Whether one answer field states the expected fact.
+
+    ``context`` carries what the field kinds beyond plain values need: the accepted phrasings
+    (``truth.accept``), the run's manifest and submission time for a stated incident window, and the
+    learner's other answers' graders for a statement that must mention them.
+    """
+    context = context or {}
     kind = field.get("kind", "string")
     if kind == "number":
         try:
@@ -474,7 +585,62 @@ def _answer_matches(actual, expected, field):
         actual_values = actual if isinstance(actual, list) else re.split(r"\s*,\s*", str(actual or ""))
         expected_values = expected if isinstance(expected, list) else [expected]
         return {str(item).casefold() for item in actual_values} == {str(item).casefold() for item in expected_values}
-    return _same(actual, expected, field.get("case_sensitive", False))
+    if kind == "window":
+        return _window_matches(actual, context)
+    if kind == "statement":
+        # A conclusion is right when it states the decisive facts, in the learner's own words.
+        mentions = context.get("mentions") or {}
+        return bool(str(actual or "").strip()) and all(check(actual) for check in mentions.values())
+    accepted = context.get("accepted") or [expected]
+    # A value answer names the value; one that hedges across candidates ("orders, payments or
+    # catalog") or buries it in a paragraph is not an answer.
+    longest = max(len(_normalized(item).split()) for item in accepted)
+    hedged = _LIST_SEPARATOR.search(str(actual or "")) and not any(_LIST_SEPARATOR.search(str(item)) for item in accepted)
+    return not hedged and len(_normalized(actual).split()) <= longest + 6 and any(_mentions(actual, item) for item in accepted)
+
+
+def established_assertions(session):
+    """Assertions a completed goal's accepted route checks: evidence the learner reached in Kibana."""
+    completed = session.get("completed_goals", set())
+    return {
+        validator.get("assertion")
+        for goal in playbook_goals(session) if goal["id"] in completed
+        for route in goal.get("accepts", [])
+        for validator in route.get("validators", []) if validator.get("kind") == "result_assertion"
+    } - {None}
+
+
+def _answer_graders(session, answer_schema, truth, answer):
+    """Per-field grading context and how each expected answer reads in the debrief."""
+    manifest = session.get("manifest", {})
+    now = datetime.now(timezone.utc)
+    kinds = {field["id"]: field.get("kind", "string") for field in answer_schema.get("fields", [])}
+    offset = _number(answer.get("client_utc_offset_minutes"))
+
+    def base(key):
+        expected = _lookup(truth, f"answers.{key}")
+        return {"accepted": _accepted(truth, key, expected), "manifest": manifest, "now": now, "utc_offset_minutes": offset}
+
+    def mention(key):
+        context = base(key)
+        if kinds.get(key) == "window":
+            return lambda text: _window_matches(text, context)
+        return lambda text: any(_mentions(text, item) for item in context["accepted"])
+
+    def context(field):
+        result = base(field["id"])
+        if field.get("kind") == "statement":
+            result["mentions"] = {key: mention(key) for key in field.get("mentions", [])}
+        return result
+
+    def display(field, expected):
+        bounds = incident_bounds(manifest) if field.get("kind") == "window" else None
+        if bounds and offset is not None:
+            start, end = (moment - timedelta(minutes=offset) for moment in bounds)
+            return f"{start:%H:%M}–{end:%H:%M}"
+        return str(expected if expected is not None else "")
+
+    return {"context": context, "display": display}
 
 
 def score_session(session, trace_is_valid=False, evidence=None):
@@ -491,15 +657,19 @@ def score_session(session, trace_is_valid=False, evidence=None):
     correctness_weight = weights.get("correctness", weights.get("diagnosis", 40))
 
     fields = [field for field in answer_schema.get("fields", []) if field.get("scored", True)]
-    supported = []
+    supported, review = [], []
     if fields:
         total_field_weight = sum(float(field.get("weight", 1)) for field in fields) or 1
         correctness = 0.0
+        graders = _answer_graders(session, answer_schema, truth, answer)
         for field in fields:
             expected = _lookup(truth, field.get("answer_from_truth", f"answers.{field['id']}"))
-            if _answer_matches(answer.get(field["id"]), expected, field):
+            correct = _answer_matches(answer.get(field["id"]), expected, field, graders["context"](field))
+            if correct:
                 correctness += correctness_weight * float(field.get("weight", 1)) / total_field_weight
                 supported.append(field.get("label", field["id"]))
+            review.append({"id": field["id"], "label": field.get("label", field["id"]), "submitted": str(answer.get(field["id"]) or ""),
+                           "expected": graders["display"](field, expected), "correct": correct})
     else:
         expected = manifest.get("expected", {})
         checks = [("service", expected.get("service"), 20), ("fault_type", expected.get("fault_type"), 10), ("affected_route", expected.get("route"), 10)]
@@ -511,7 +681,10 @@ def score_session(session, trace_is_valid=False, evidence=None):
     if isinstance(evidence_refs, str):
         evidence_refs = [item.strip() for item in evidence_refs.split(",") if item.strip()]
     declared_assertions = {item.get("id") for item in truth.get("assertions", [])}
-    valid_refs = [item for item in evidence_refs if item in declared_assertions and _assertion(evidence, item)]
+    # Evidence the learner reached in Kibana counts without naming it: the internal assertion ids are
+    # not something a learner can know, so citing them stays optional.
+    cited = set(evidence_refs) | established_assertions(session)
+    valid_refs = [item for item in cited if item in declared_assertions and _assertion(evidence, item)]
     cited_trace = str(answer.get("trace_id", ""))
     reference_credit = bool(valid_refs) or (bool(cited_trace) and trace_is_valid)
     explanation = str(answer.get("evidence") or answer.get("reasoning") or answer.get("conclusion") or "").strip()
@@ -544,7 +717,13 @@ def score_session(session, trace_is_valid=False, evidence=None):
     correct = math.isclose(correctness, correctness_weight)
     scenario_type = scenario.get("type", "investigation")
     answer_name = {"analysis": "comparison", "triage": "triage decision"}.get(scenario_type, "diagnosis")
-    summary = f"Your {answer_name} matches the scenario truth and is supported by the recorded Kibana evidence." if correct else f"The submitted {answer_name} does not yet match every decisive fact in the scenario evidence."
+    if not correct:
+        summary = f"The submitted {answer_name} does not yet match every decisive fact in the scenario evidence."
+    elif reference_credit:
+        summary = f"Your {answer_name} matches the scenario truth and is supported by the recorded Kibana evidence."
+    else:
+        # Right facts, but the recorded investigation never reached the evidence behind them.
+        summary = f"Your {answer_name} matches the scenario truth, but the investigation recorded here doesn't reach the evidence behind it."
     route = [item["action"].get("type") for item in semantic if item.get("evaluation", {}).get("meaningful")]
     detours = [item["action"].get("type") for item in semantic if not item.get("evaluation", {}).get("meaningful")]
     feedback = {
@@ -553,11 +732,15 @@ def score_session(session, trace_is_valid=False, evidence=None):
         "task_correct": correct,
         "diagnosis_correct": correct,
         "supported_parts": supported,
+        "answer_review": review,
         "assistance": {**assistance, "score_penalty": penalty},
         "decisive_route": route,
         "detours": detours,
         "step_detours": step_detours(session),
         "reference_route": [goal.get("reference_action", {}).get("command") for goal in playbook_goals(session)],
+        # The same route as the learner reads it in the debrief.
+        "reference_steps": [goal.get("title", goal["id"]) for goal in playbook_goals(session)
+                            if goal.get("reference_action", {}).get("command") not in {"request_answer", "request_diagnosis"}],
         "summary": summary,
         "replay": {"same_seed": manifest["seed"], "new_seed": None, "modes": ["demonstration", "guided", "challenge"]},
     }

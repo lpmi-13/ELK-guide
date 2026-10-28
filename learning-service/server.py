@@ -20,7 +20,7 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qs, quote, urlparse
 from urllib.request import Request, urlopen
 
-from engine.evaluator import current_goal, evaluate_action, guided_feedback, playbook_goals, score_session
+from engine.evaluator import current_goal, evaluate_action, guided_feedback, incident_onset_age_minutes, incident_timing, playbook_goals, score_session
 from engine.contracts import assert_catalog_valid, insert_goals
 
 PORT = int(os.getenv("PORT", "8091"))
@@ -46,7 +46,7 @@ write_lock = threading.Lock()
 MODE_POLICIES = {
     "demonstration": {"action_actor": "tutorial", "show_narration": True, "highlight_target": True, "validate_timing": "immediate", "allow_demonstrate_step": True},
     "guided": {"action_actor": "learner", "show_narration": True, "highlight_target": True, "validate_timing": "immediate", "allow_demonstrate_step": True},
-    "challenge": {"action_actor": "learner", "show_narration": False, "highlight_target": False, "validate_timing": "debrief", "allow_demonstrate_step": False},
+    "challenge": {"action_actor": "learner", "show_narration": False, "highlight_target": False, "validate_timing": "debrief", "allow_demonstrate_step": False, "allow_hints": False},
 }
 
 
@@ -76,8 +76,9 @@ def now_iso():
 
 
 PARAM_TOKEN = re.compile(r"\$\{param\.([A-Za-z0-9_.]+)\}")
-# How far before a seeded incident's onset the recommended window opens (see apply_incident_window).
-ONSET_LEAD_MINUTES = 3
+# How far before a seeded incident's onset (as it stands when the window is used) the recommended
+# window opens at least, so the rise never sits on the histogram's left edge.
+ONSET_LEAD_MINUTES = 1.5
 
 
 def _param_lookup(parameters, dotted):
@@ -343,6 +344,12 @@ def substitute(value, session):
         # copy can name the same number as the briefing when it justifies the investigation window.
         "${detected_offset_minutes}": session.get("detected_offset_minutes", ""),
     }
+    window = current_incident_window_minutes(session)
+    if window is not None:
+        # A timed incident's recommended window, worked out when the copy or action is used: the onset
+        # recedes as the run ages, so a range fixed when the session began would stop reaching it.
+        replacements["${incident.window}"] = f"{window}m"
+        replacements["${incident.window_spelled}"] = spell_duration(f"{window}m")
     for key, item in truth.get("answers", {}).items():
         replacements[f"${{truth.{key}}}"] = item
     if isinstance(value, str):
@@ -387,15 +394,10 @@ def select_detected_offset(manifest):
     return stable_briefing_choice(values, {"manifest": manifest}, "observed_minutes_ago")
 
 
-def incident_timing(manifest):
-    """The seeded incident's shape, in minutes before seeding, when the pack declares one.
-
-    A pack whose lesson is the time window itself (``timing: {noticed, onset, end}``) seeds its
-    failures between ``onset`` and ``end`` and reports them as noticed in between, so the histogram
-    shows a rise that starts before the report. Other packs leave the incident open-ended.
-    """
-    timing = (manifest.get("parameters") or {}).get("timing")
-    return timing if isinstance(timing, dict) else {}
+def current_incident_window_minutes(session):
+    """The window that opens just before a timed incident's onset as of now, or None if untimed."""
+    age = incident_onset_age_minutes(session.get("manifest", {}))
+    return None if age is None else recommended_window_minutes(age + ONSET_LEAD_MINUTES)
 
 
 def recommended_window_minutes(offset_minutes):
@@ -533,6 +535,11 @@ def next_command(session):
         return None
     index = current_step_index(session)
     goals = playbook_goals(session)
+    if session["mode"] == "challenge" and index < len(goals):
+        # A challenge is the learner's own investigation: the answer form is open from the start, and
+        # nothing the coach sends reveals the reference route's steps or which of them are done.
+        index = next((position for position, goal in enumerate(goals)
+                      if goal.get("reference_action", {}).get("command") in {"request_diagnosis", "request_answer"}), index)
     if index >= len(goals):
         return None
     if session["pending_command"] and session["pending_command"]["step_index"] == index:
@@ -595,6 +602,23 @@ def next_command(session):
             command["pace_seconds"] = pace_seconds(step)
     session["pending_command"] = command
     return command
+
+
+def learner_evaluation(session, evaluation):
+    """The evaluation as the coach may show it. A challenge is scored in its debrief, so mid-run the
+    coach learns only that an action was recorded — not which step it completed or missed."""
+    if session["policy"]["validate_timing"] != "debrief":
+        return evaluation
+    return {"outcome": "recorded", "goals_progressed": [], "meaningful": False}
+
+
+def learner_session(session):
+    """session_public for replies to the learner's own actions, without a challenge's progress."""
+    public = session_public(session)
+    if session["policy"]["validate_timing"] == "debrief":
+        for key in ("completed_goals", "step", "step_count"):
+            public.pop(key, None)
+    return public
 
 
 def refresh_run_ready(session):
@@ -738,11 +762,12 @@ def record_action(session, action):
     if action.get("type") == "step_demonstrated":
         session["assistance"]["demonstrated_steps"] += 1
     record_step_clock(session, action.get("step_clock"))
-    if action.get("type") == "time_range_changed" and session.get("incident_onset_minutes") is not None:
+    onset_age = incident_onset_age_minutes(session["manifest"])
+    if action.get("type") == "time_range_changed" and onset_age is not None:
         # The coach tags a window with when the incident was noticed. When the pack seeded a visible
-        # onset, the window has to reach back to that rise instead, which the learner reads off the
-        # histogram rather than the report.
-        action["details"] = {**(action.get("details") or {}), "incident_offset_minutes": session["incident_onset_minutes"]}
+        # onset, the window has to reach back to that rise instead — which the learner reads off the
+        # histogram rather than the report — as it stands now, however long the learner has taken.
+        action["details"] = {**(action.get("details") or {}), "incident_offset_minutes": round(onset_age, 1)}
     if action.get("type") == "check_in_answered":
         record_check_in_answer(session, action.get("details") or {})
     evidence = action_evidence(session, action)
@@ -754,7 +779,9 @@ def record_action(session, action):
         record_drift(session, evaluation["step_id"], evaluation["note"])
     for goal_id in evaluation["goals_progressed"]:
         session.setdefault("drift", {}).pop(goal_id, None)
-    if evaluation["goals_progressed"]:
+    # The command on screen is spent once its own step completes. A challenge's answer form stays
+    # put while the investigation behind it progresses, so a reconnect doesn't reset it.
+    if (session["pending_command"] or {}).get("step_id") in evaluation["goals_progressed"]:
         session["pending_command"] = None
     session["actions"].append({"action": action, "evaluation": evaluation})
     emit(session, action, evaluation)
@@ -918,7 +945,7 @@ class Handler(BaseHTTPRequestHandler):
                     except ValueError as error:
                         self.respond(409, {"error": str(error)})
                         return
-                    self.respond(202, {"evaluation": evaluation, "session": session_public(session)})
+                    self.respond(202, {"evaluation": learner_evaluation(session, evaluation), "session": learner_session(session)})
                     return
                 if action == "answer":
                     if not session["run_ready"] and not refresh_run_ready(session):
@@ -995,10 +1022,11 @@ class Handler(BaseHTTPRequestHandler):
                 message_type = message.get("message_type")
                 if message_type == "action":
                     evaluation = record_action(session, message["action"])
-                    reply = {"message_type": "action_result", "evaluation": evaluation, "session": session_public(session),
+                    reply = {"message_type": "action_result", "evaluation": learner_evaluation(session, evaluation), "session": learner_session(session),
                              "action": {"type": message["action"].get("type"), "sequence": message["action"].get("sequence")}}
                     send_frame(connection, json.dumps(reply))
-                    if evaluation["goals_progressed"] and not session["paused"]:
+                    # A challenge's answer form is already open; re-sending it would reset what the learner typed.
+                    if evaluation["goals_progressed"] and not session["paused"] and session["mode"] != "challenge":
                         command = next_command(session)
                         if command:
                             send_frame(connection, json.dumps(command))
@@ -1020,6 +1048,9 @@ class Handler(BaseHTTPRequestHandler):
                     command = next_command(session)
                     send_frame(connection, json.dumps(command or {"message_type": "complete", "session_id": session_id}))
                 elif message_type == "hint":
+                    if not session["policy"].get("allow_hints", True):
+                        send_frame(connection, json.dumps({"message_type": "hint", "step_id": None, "level": 0, "text": "Hints are off in challenge mode. The debrief shows the reference route afterwards."}))
+                        continue
                     index = current_step_index(session)
                     goals = playbook_goals(session)
                     if index < len(goals):

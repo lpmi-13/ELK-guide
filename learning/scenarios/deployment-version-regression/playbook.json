@@ -37,6 +37,10 @@
         "learning_focus": ["http.response.status_code"]
       },
       "requires": ["survey"],
+      "accepts": [
+        {"action": ["query_submitted", "filter_added", "filter_changed"], "validators": [{"kind": "query_contains", "fields": ["service.name"], "value": "${param.incident.service}"}, {"kind": "result_assertion", "assertion": "signal"}]},
+        {"action": ["filter_added", "filter_changed"], "validators": [{"kind": "filter_contains", "field": "service.name", "value": "${param.incident.service}"}, {"kind": "result_assertion", "assertion": "signal"}]}
+      ],
       "hints": [
         "Narrow the view to the service the Top values showed, keeping every version of it.",
         "Search service.name for that service and service.version: * in the query bar, then read the status codes.",

@@ -73,6 +73,7 @@
       "scope": "${param.incident.service}",
       "conclusion": "${param.incident.service} version ${param.incident.bad_version} returned HTTP ${param.incident.status} while ${param.incident.good_version} returned 200, identifying the new version as the regression."
     },
+    "accept": {"finding": ["v${param.incident.bad_version}"]},
     "assertions": [
       {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "request failed on newly deployed ${param.incident.service} ${param.incident.bad_version}"}}},
       {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "first unhealthy request from version ${param.incident.bad_version}"}}}
@@ -83,8 +84,7 @@
     "fields": [
       {"id": "finding", "label": "Affected version", "kind": "string", "weight": 2},
       {"id": "scope", "label": "Service", "kind": "string", "weight": 1},
-      {"id": "conclusion", "label": "Comparison conclusion", "kind": "string", "weight": 1},
-      {"id": "evidence_refs", "label": "Evidence references", "kind": "string", "scored": false},
+      {"id": "conclusion", "label": "Comparison conclusion", "kind": "statement", "mentions": ["finding", "scope"], "weight": 1},
       {"id": "evidence", "label": "Version and HTTP status evidence", "kind": "text", "scored": false}
     ]
   },

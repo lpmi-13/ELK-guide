@@ -93,8 +93,7 @@
     "fields": [
       {"id": "finding", "label": "Failure-associated pattern", "kind": "string", "weight": 2},
       {"id": "scope", "label": "Service", "kind": "string", "weight": 1},
-      {"id": "conclusion", "label": "Noise comparison", "kind": "string", "weight": 1},
-      {"id": "evidence_refs", "label": "Evidence references", "kind": "string", "scored": false},
+      {"id": "conclusion", "label": "Noise comparison", "kind": "statement", "mentions": ["finding"], "weight": 1},
       {"id": "evidence", "label": "Evidence", "kind": "text", "scored": false}
     ]
   },

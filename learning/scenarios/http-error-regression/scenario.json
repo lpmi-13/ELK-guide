@@ -59,8 +59,9 @@
     "answers": {
       "finding": "${param.incident.finding}",
       "scope": "${param.incident.status_family}",
-      "conclusion": "${param.incident.error_type} on ${param.incident.service} is the post-release regression."
+      "conclusion": "${param.incident.error_type} on ${param.incident.finding} is the post-release regression."
     },
+    "accept": {"scope": ["${param.incident.status}", "5xx"], "error_type": ["${param.incident.error_type}"]},
     "assertions": [
       {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.message}"}}},
       {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "representative ${param.incident.error_type} request failed"}}}
@@ -71,8 +72,7 @@
     "fields": [
       {"id": "finding", "label": "Affected endpoint or service", "kind": "string", "weight": 2},
       {"id": "scope", "label": "Status family", "kind": "string", "weight": 1},
-      {"id": "conclusion", "label": "Error conclusion", "kind": "string", "weight": 1},
-      {"id": "evidence_refs", "label": "Evidence references", "kind": "string", "scored": false},
+      {"id": "conclusion", "label": "Error conclusion", "kind": "statement", "mentions": ["finding", "error_type"], "weight": 1},
       {"id": "evidence", "label": "Representative document", "kind": "text", "scored": false}
     ]
   },

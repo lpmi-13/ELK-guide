@@ -45,7 +45,7 @@ def action_for(goal, scenario):
             details["language"] = validator["language"]
             state_after["query_language"] = validator["language"]
         elif kind == "query_contains":
-            values = validator.get("values", [])
+            values = validator.get("values", [validator["value"]] if "value" in validator else [])
             truth_key = validator.get("value_from_truth") or validator.get("values_from_truth")
             if truth_key:
                 value = scenario["truth"]

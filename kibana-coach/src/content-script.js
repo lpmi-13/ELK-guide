@@ -582,6 +582,10 @@ function startIncidentCoach() {
       // The same holds for a guided "Show me" walkthrough that is still playing.
       if (executionController && !executionController.signal.aborted &&
           currentCommand?.command_id === command.command_id) return;
+      // A reconnect re-sends the command on screen. An answer form that is already up keeps what the
+      // learner has typed into it.
+      if (['request_answer', 'request_diagnosis'].includes(command.type) && command.mode !== 'demonstration' &&
+          currentCommand?.command_id === command.command_id) return;
       // A new guided step means the one being walked through is already complete (e.g. the learner's
       // own action satisfied it), so stop explaining it rather than narrate over the next step.
       if (command.mode === 'guided') executionController?.abort();
@@ -694,7 +698,8 @@ function startIncidentCoach() {
     };
     coach.onDiagnosis = async answer => {
       try {
-        const feedback = await client.submitDiagnosis(answer);
+        // Discover shows local time, so a window stated as clock times is graded in the learner's zone.
+        const feedback = await client.submitDiagnosis({...answer, client_utc_offset_minutes: new Date().getTimezoneOffset()});
         coach.debrief.show(feedback);
       } catch (error) { coach.toast(error.message, true); }
     };

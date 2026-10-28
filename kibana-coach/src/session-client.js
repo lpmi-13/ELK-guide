@@ -29,9 +29,18 @@ class IncidentSessionClient {
   openSocket() {
     const socketUrl = this.server.replace(/^http/, 'ws');
     this.socket = new WebSocket(`${socketUrl}/api/sessions/${this.sessionId}/events?token=${encodeURIComponent(this.token)}`);
-    this.socket.onopen = () => this.onStatus?.('');
+    this.socket.onopen = () => {
+      this.onStatus?.('');
+      // The service drops a socket that says nothing for a minute, and a learner reading the page or
+      // writing an answer sends nothing. A heartbeat keeps the session from flickering "Reconnecting".
+      clearInterval(this.heartbeat);
+      this.heartbeat = setInterval(() => {
+        if (this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify({message_type: 'heartbeat'}));
+      }, 25000);
+    };
     this.socket.onmessage = event => this.handle(JSON.parse(event.data));
     this.socket.onclose = () => {
+      clearInterval(this.heartbeat);
       if (!this.stopped) {
         this.onStatus?.('Reconnecting to the learning session…');
         setTimeout(() => this.openSocket(), 1500);

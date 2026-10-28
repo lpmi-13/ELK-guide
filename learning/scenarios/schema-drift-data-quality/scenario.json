@@ -58,6 +58,7 @@
       "scope": "service.version ${param.incident.version}",
       "conclusion": "Telemetry producer ${param.incident.producer} on version ${param.incident.version} stopped populating the route field; traffic did not fall."
     },
+    "accept": {"scope": ["${param.incident.version}"]},
     "assertions": [
       {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "request recorded without expected route field"}}},
       {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "traffic volume unchanged despite missing route"}}}
@@ -68,8 +69,7 @@
     "fields": [
       {"id": "finding", "label": "Producer", "kind": "string", "weight": 2},
       {"id": "scope", "label": "Affected version", "kind": "string", "weight": 1},
-      {"id": "conclusion", "label": "Data-quality conclusion", "kind": "string", "weight": 1},
-      {"id": "evidence_refs", "label": "Evidence references", "kind": "string", "scored": false},
+      {"id": "conclusion", "label": "Data-quality conclusion", "kind": "statement", "mentions": ["finding", "scope"], "weight": 1},
       {"id": "evidence", "label": "Evidence", "kind": "text", "scored": false}
     ]
   },

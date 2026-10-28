@@ -90,6 +90,34 @@ class ContractTests(unittest.TestCase):
         self.assertLess(content.index("coach.showGoalFocus("), content.index("const pause = goalPause(command.narration);"))
         self.assertIn("if (phase !== 'learning') this.clearEvidenceHighlights();", coach)
 
+    def test_challenge_mode_shows_no_route_and_no_live_feedback(self):
+        coach = (ROOT / "kibana-coach/src/ui/coach-panel.js").read_text(encoding="utf-8")
+        content = (ROOT / "kibana-coach/src/content-script.js").read_text(encoding="utf-8")
+        debrief = (ROOT / "kibana-coach/src/ui/debrief.js").read_text(encoding="utf-8")
+        server = (ROOT / "learning-service/server.py").read_text(encoding="utf-8")
+        self.assertIn("challenge ? 'challenge' : `${command.mode} · step ${command.step_index + 1} of ${command.step_count}`", coach)
+        self.assertIn("this.root.querySelector('.progress').hidden = challenge;", coach)
+        self.assertIn("this.root.querySelector('#hint').hidden = command.mode !== 'guided';", coach)
+        self.assertIn('if not session["policy"].get("allow_hints", True):', server)
+        self.assertIn('"evaluation": learner_evaluation(session, evaluation), "session": learner_session(session),', server)
+        self.assertIn('and session["mode"] != "challenge":', server)
+        # The debrief puts each answer beside what the evidence showed, as text, and names the route's steps.
+        self.assertIn("item.querySelector('.answer-given').textContent = `You: ${field.submitted || '(blank)'}`;", debrief)
+        self.assertIn("(feedback.reference_steps || feedback.reference_route || []).join(' → ')", debrief)
+        self.assertIn("client_utc_offset_minutes: new Date().getTimezoneOffset()", content)
+
+    def test_an_idle_learner_stays_connected_and_keeps_a_typed_answer(self):
+        import re
+        client = (ROOT / "kibana-coach/src/session-client.js").read_text(encoding="utf-8")
+        content = (ROOT / "kibana-coach/src/content-script.js").read_text(encoding="utf-8")
+        server = (ROOT / "learning-service/server.py").read_text(encoding="utf-8")
+        idle_timeout = int(re.search(r"connection\.settimeout\((\d+)\)", server).group(1))
+        heartbeat = int(re.search(r"message_type: 'heartbeat'\}\)\);\n\s*\}, (\d+)\);", client).group(1))
+        self.assertLess(heartbeat, idle_timeout * 1000 / 2)
+        self.assertIn("clearInterval(this.heartbeat);", client)
+        self.assertIn("currentCommand?.command_id === command.command_id) return;\n      // A reconnect", content)
+        self.assertIn("if (['request_answer', 'request_diagnosis'].includes(command.type) && command.mode !== 'demonstration' &&", content)
+
     def test_expand_document_is_reported_only_once_the_document_is_open(self):
         discover = (ROOT / "kibana-coach/src/adapters/discover.js").read_text(encoding="utf-8")
         wait = discover.index("await host.waitFor('kibana.doc_viewer', 8000, signal)")
@@ -169,10 +197,11 @@ class ContractTests(unittest.TestCase):
         self.assertIn('<button id="incident-info"', coach)
         self.assertIn("this.currentBriefing = briefing", coach)
         self.assertIn("this.briefing.show(this.currentBriefing, {review: true})", coach)
-        self.assertIn("command.mode !== 'guided' || !this.currentBriefing", coach)
+        self.assertIn("command.mode === 'demonstration' || !this.currentBriefing", coach)
         self.assertIn("command.mode !== 'demonstration'", coach)
         self.assertIn("show(briefing, {review = false} = {})", briefing)
-        self.assertIn("review ? 'Return to guided practice'", briefing)
+        self.assertIn("review ? this.modeCopy(briefing.mode).back", briefing)
+        self.assertIn("back: 'Return to guided practice'", briefing)
         self.assertIn("if (!review) {", briefing)
 
     def test_demonstration_explains_and_visibly_performs_the_trace_pivot(self):

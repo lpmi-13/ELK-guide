@@ -149,7 +149,10 @@ class RandomizationTests(unittest.TestCase):
             findings, queries = set(), set()
             for seed in range(60):
                 manifest = self.materialize(pack, seed)
-                findings.add(manifest["scenario"]["truth"]["answers"]["finding"])
+                # What the learner must find: the time-window lesson's window is always "the last 15
+                # minutes" around a randomized onset, so its run-specific facts are in the scope.
+                answers = manifest["scenario"]["truth"]["answers"]
+                findings.add((answers["finding"], answers["scope"]))
                 playbook = self.server.load_manifest_definition(manifest, "playbook")
                 isolate = next(goal for goal in playbook["goals"] if goal["id"] == "isolate")
                 _, signature = self._isolate_target(isolate)
@@ -274,15 +277,17 @@ class RandomizationTests(unittest.TestCase):
                     command = self.server.next_command(session)
                     offset = session["detected_offset_minutes"]
                     onset = session["incident_onset_minutes"]
-                    # A pack that seeds a visible onset is windowed from that rise, not from the report.
+                    # A pack that seeds a visible onset is windowed from that rise as it stands now,
+                    # not from the report.
+                    age = self.server.incident_onset_age_minutes(session["manifest"])
                     expected_minutes = self.server.recommended_window_minutes(
-                        offset if onset is None else onset + self.server.ONSET_LEAD_MINUTES)
+                        offset if onset is None else age + self.server.ONSET_LEAD_MINUTES)
                     expected_from = f"now-{expected_minutes}m"
                     expected_words = self.server.spell_duration(f"{expected_minutes}m")
                     rendered_hints = self.server.substitute(scope["hints"], session)
 
                     with self.subTest(pack=pack, seed=seed, mode=mode):
-                        self.assertEqual(scope["reference_action"]["arguments"]["from"], expected_from)
+                        self.assertEqual(self.server.substitute(scope["reference_action"]["arguments"], session)["from"], expected_from)
                         self.assertEqual(command["value"]["from"], expected_from)
                         self.assertIn(str(offset), rendered_hints[0])
                         self.assertIn(expected_words, rendered_hints[-1])
@@ -312,6 +317,31 @@ class RandomizationTests(unittest.TestCase):
                             self.assertEqual(command["walkthrough"]["narration"],
                                              self.server.substitute(scope["demonstration"]["narration"], session))
 
+    def test_the_recommended_window_keeps_reaching_the_onset_as_the_run_ages(self):
+        from datetime import datetime, timedelta, timezone
+        manifest = self.materialize("discover-time-window", 3)
+        onset = manifest["parameters"]["timing"]["onset"]
+        for mode in ("demonstration", "guided"):
+            for minutes_later in (0, 4, 25):
+                manifest["created_at"] = (datetime.now(timezone.utc) - timedelta(minutes=minutes_later)).isoformat()
+                session = self.server.create_session({"manifest": manifest}, mode)
+                session["run_ready"] = True
+                command = self.server.next_command(session)
+                window = int(command["value"]["from"].removeprefix("now-").removesuffix("m"))
+                with self.subTest(mode=mode, minutes_later=minutes_later):
+                    self.assertGreaterEqual(window, onset + minutes_later + self.server.ONSET_LEAD_MINUTES)
+                    self.assertLess(window, onset + minutes_later + self.server.ONSET_LEAD_MINUTES + 5)
+                    if mode == "guided":
+                        hints = self.server.substitute(session["playbook"]["goals"][0]["hints"], session)
+                        self.assertIn(f"last {self.server.spell_duration(f'{window}m')}", hints[-1])
+                    # A learner's window is judged against the onset as it stands now, too.
+                    action = {"type": "time_range_changed", "sequence": 1, "run_id": session["run_id"], "session_id": session["id"],
+                              "protocol_version": 2, "details": {"from": "now-15m", "to": "now", "from_minutes": 15, "incident_offset_minutes": 8}}
+                    from unittest import mock
+                    with mock.patch.object(self.server, "action_evidence", return_value={"assertions": {}, "trace_services": 0}):
+                        accepted = bool(self.server.record_action(session, action)["goals_progressed"])
+                    self.assertEqual(accepted, 15 + 1 >= onset + minutes_later)
+
     def test_incident_window_is_a_bounded_rise_the_histogram_can_date(self):
         """The time-window lesson's answer must be in the data, not derived from the report.
 
@@ -329,7 +359,8 @@ class RandomizationTests(unittest.TestCase):
             documents = self.controller.generate_seeded_events(manifest)
             failing = [document for document in documents if document["http"]["response"]["status_code"] == incident["status"]]
             ages = [(seeded_at - datetime.fromisoformat(document["@timestamp"])).total_seconds() / 60 for document in failing]
-            window = int(session["playbook"]["goals"][0]["reference_action"]["arguments"]["from"].removeprefix("now-").removesuffix("m"))
+            scope = session["playbook"]["goals"][0]
+            window = int(self.server.substitute(scope["reference_action"]["arguments"], session)["from"].removeprefix("now-").removesuffix("m"))
             briefing = self.server.build_incident_briefing(session)
             with self.subTest(seed=seed):
                 self.assertEqual(session["detected_offset_minutes"], timing["noticed"])
@@ -453,3 +484,154 @@ class RandomizationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AnswerGradingTests(unittest.TestCase):
+    """Challenge answers are graded on the facts they state, the way a reviewer would read them."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.controller = load_module("scenario_controller_grading", ROOT / "scenario-controller/controller.py")
+        cls.server = load_module("learning_server_grading", ROOT / "learning-service/server.py")
+        cls.server.LEARNING_DIR = ROOT / "learning"
+        cls.evaluator = sys.modules["engine.evaluator"]
+
+    def session(self, pack, seed, created_minutes_ago=0):
+        from datetime import datetime, timedelta, timezone
+        manifest = self.controller.materialize(json.loads((ROOT / "learning/scenarios" / pack / "scenario.json").read_text()), seed, run_id=f"run-{seed:012d}")
+        manifest["created_at"] = (datetime.now(timezone.utc) - timedelta(minutes=created_minutes_ago)).isoformat()
+        session = self.server.create_session({"manifest": manifest}, "challenge")
+        session["completed_goals"] = {goal["id"] for goal in session["playbook"]["goals"]}
+        return session
+
+    def grade(self, session, **answer):
+        session["answer"] = answer
+        evidence = {"assertions": {item["id"]: True for item in session["manifest"]["scenario"]["truth"]["assertions"]}}
+        feedback = self.server.score_session(session, evidence=evidence)
+        return {item["id"]: item["correct"] for item in feedback["answer_review"]}, feedback
+
+    def clock(self, moment, minutes=0):
+        from datetime import timedelta
+        return f"{moment + timedelta(minutes=minutes):%H:%M}"
+
+    def test_incident_window_is_graded_against_when_the_rise_happened(self):
+        session = self.session("discover-time-window", 3)
+        incident = session["manifest"]["parameters"]["incident"]
+        start, end = self.evaluator.incident_bounds(session["manifest"])
+        conclusion = f"{incident['service']} errors spiked from {self.clock(start)} to {self.clock(end)}"
+        results, feedback = self.grade(session, finding=f"{self.clock(start, 1)}–{self.clock(end, 1)}", status=f"HTTP {incident['status']}",
+                                       route=incident["route"], scope=f"the {incident['service']} service", conclusion=conclusion,
+                                       evidence="Top values and one expanded request.", client_utc_offset_minutes=0)
+        self.assertTrue(all(results.values()), results)
+        self.assertTrue(feedback["task_correct"])
+        # No internal assertion ids were cited: evidence the learner reached in Kibana still counts.
+        self.assertEqual(feedback["components"]["evidence_quality"], 20)
+        self.assertEqual(next(item for item in feedback["answer_review"] if item["id"] == "finding")["expected"],
+                         f"{self.clock(start)}–{self.clock(end)}")
+        for wrong in (f"{self.clock(start, -6)}–{self.clock(end)}", f"{self.clock(start)}–{self.clock(end, -4)}", "recently"):
+            with self.subTest(finding=wrong):
+                self.assertFalse(self.grade(session, finding=wrong, client_utc_offset_minutes=0)[0]["finding"])
+        # Discover shows local time: the same instant read in UTC+2 is a different clock reading.
+        self.assertTrue(self.grade(session, finding=f"{self.clock(start, 120)} to {self.clock(end, 120)}", client_utc_offset_minutes=-120)[0]["finding"])
+        self.assertTrue(self.grade(session, finding="the last 15 minutes")[0]["finding"])
+        self.assertFalse(self.grade(session, finding="the last hour")[0]["finding"])
+
+    def test_a_relative_window_is_judged_when_it_is_submitted(self):
+        # Twenty minutes later "the last 15 minutes" no longer reaches back to the onset.
+        session = self.session("discover-time-window", 3, created_minutes_ago=20)
+        onset = session["manifest"]["parameters"]["timing"]["onset"]
+        self.assertFalse(self.grade(session, finding="last 15 minutes")[0]["finding"])
+        self.assertTrue(self.grade(session, finding=f"last {onset + 21} minutes")[0]["finding"])
+
+    def test_values_are_matched_as_words_and_conclusions_by_the_facts_they_state(self):
+        for seed in range(40):
+            session = self.session("http-error-regression", seed)
+            incident = session["manifest"]["parameters"]["incident"]
+            if incident["finding"] == "/api/orders/refund":
+                break
+        results, _ = self.grade(session, finding="the /api/orders/refund endpoint", scope=f"{incident['status']}s",
+                                conclusion=f"Refund calls fail with {incident['error_type']} on /api/orders/refund since the release.")
+        self.assertTrue(all(results.values()), results)
+        self.assertFalse(self.grade(session, finding="/api/orders")[0]["finding"])
+        self.assertFalse(self.grade(session, finding="/api/orders, /api/orders/refund or /checkout")[0]["finding"])
+        self.assertFalse(self.grade(session, conclusion="Something regressed after the release.")[0]["conclusion"])
+        self.assertFalse(self.grade(session, conclusion=f"{incident['error_type']} is failing.")[0]["conclusion"])
+
+
+class StepCheckTests(unittest.TestCase):
+    """A step completes on the right evidence, not on any action that touches the right field."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.controller = load_module("scenario_controller_checks", ROOT / "scenario-controller/controller.py")
+        cls.server = load_module("learning_server_checks", ROOT / "learning-service/server.py")
+        cls.server.LEARNING_DIR = ROOT / "learning"
+        cls.matrix = load_module("scenario_matrix_checks", ROOT / "scripts/test-scenario-matrix.py")
+
+    def at_step(self, pack, seed, step_id):
+        manifest = self.controller.materialize(json.loads((ROOT / "learning/scenarios" / pack / "scenario.json").read_text()), seed, run_id=f"run-{seed:012d}")
+        session = self.server.create_session({"manifest": manifest}, "guided")
+        goals = session["playbook"]["goals"]
+        session["completed_goals"] = {goal["id"] for goal in goals[:[goal["id"] for goal in goals].index(step_id)]}
+        evidence = {"assertions": {item["id"]: True for item in manifest["scenario"]["truth"]["assertions"]}}
+        return session, next(goal for goal in goals if goal["id"] == step_id), evidence
+
+    def completes(self, session, evidence, step_id, action):
+        trial = {**session, "completed_goals": set(session["completed_goals"])}
+        return step_id in self.server.evaluate_action(trial, action, evidence)["goals_progressed"]
+
+    def test_a_filter_step_needs_the_observed_value_not_just_the_field(self):
+        for pack in LOG_HUNT_PACKS:
+            for seed in (2, 9):
+                session, isolate, evidence = self.at_step(pack, seed, "isolate")
+                reference = self.matrix.action_for(isolate, session["manifest"]["scenario"])
+                field = next(validator for route in isolate["accepts"] for validator in route["validators"]
+                             if validator["kind"] in {"query_contains", "filter_contains", "filter_excludes"})
+                field = (field.get("fields") or [field.get("field")])[0]
+                with self.subTest(pack=pack, seed=seed):
+                    self.assertTrue(self.completes(session, evidence, "isolate", reference))
+                    for wrong in ({"type": "query_submitted", "details": {"query": f'{field}: "something-else"'}},
+                                  {"type": "filter_added", "details": {"field": field, "value": "something-else", "negate": False}},
+                                  {"type": "filter_added", "details": {"field": "event.outcome", "value": "success", "negate": True}}):
+                        self.assertFalse(self.completes(session, evidence, "isolate", wrong), wrong)
+
+    def test_checking_one_event_means_opening_one(self):
+        for pack in LOG_HUNT_PACKS:
+            session, _inspect, evidence = self.at_step(pack, 4, "inspect")
+            with self.subTest(pack=pack):
+                for action_type in ("column_removed", "field_statistics_opened", "field_inspected"):
+                    self.assertFalse(self.completes(session, evidence, "inspect", {"type": action_type, "details": {"field": "message"}}))
+                self.assertTrue(self.completes(session, evidence, "inspect", {"type": "document_expanded", "details": {}})
+                                or pack == "deployment-version-regression")
+
+
+class ChallengeModeTests(unittest.TestCase):
+    """A challenge is the learner's own investigation, scored only in its debrief."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.controller = load_module("scenario_controller_challenge", ROOT / "scenario-controller/controller.py")
+        cls.server = load_module("learning_server_challenge", ROOT / "learning-service/server.py")
+        cls.server.LEARNING_DIR = ROOT / "learning"
+
+    def test_the_answer_form_is_open_from_the_start_and_progress_stays_private(self):
+        from unittest import mock
+        for pack in LOG_HUNT_PACKS:
+            manifest = self.controller.materialize(json.loads((ROOT / "learning/scenarios" / pack / "scenario.json").read_text()), 5, run_id="run-000000000005")
+            session = self.server.create_session({"manifest": manifest}, "challenge")
+            session["run_ready"] = True
+            command = self.server.next_command(session)
+            with self.subTest(pack=pack):
+                self.assertIn(command["type"], {"request_answer", "request_diagnosis"})
+                self.assertFalse(session["completed_goals"])
+                self.assertFalse(session["policy"]["allow_hints"])
+                scope = session["playbook"]["goals"][0]
+                action = {"type": "time_range_changed", "sequence": 1, "run_id": session["run_id"], "session_id": session["id"],
+                          "protocol_version": 2, "details": {**self.server.substitute(scope["reference_action"]["arguments"], session), "from_minutes": 60}}
+                with mock.patch.object(self.server, "action_evidence", return_value={"assertions": {}, "trace_services": 0}):
+                    evaluation = self.server.record_action(session, action)
+                # The step is recorded for the debrief, but the coach is told nothing about it.
+                self.assertEqual(evaluation["goals_progressed"], ["scope"])
+                self.assertEqual(self.server.learner_evaluation(session, evaluation), {"outcome": "recorded", "goals_progressed": [], "meaningful": False})
+                self.assertFalse({"completed_goals", "step", "step_count"} & set(self.server.learner_session(session)))
+                self.assertEqual(self.server.next_command(session)["command_id"], command["command_id"])

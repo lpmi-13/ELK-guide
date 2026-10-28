@@ -26,8 +26,9 @@
       "hints": [
         "Support noticed the failures ${detected_offset_minutes} minutes ago, but they may have started earlier. Look for where the histogram rises above its usual level.",
         "Use the date picker at the top of Discover (or click and drag across the histogram) to choose a window that starts just before the rise.",
-        "Set the range to the last ${var.window_spelled}; Show me can do it for you."
-      ]
+        "Set the range to the last ${incident.window_spelled}; Show me can do it for you."
+      ],
+      "reference_action": {"command": "set_time_range", "target": "kibana.time_picker", "arguments": {"from": "now-${incident.window}", "to": "now"}}
     },
     "isolate": {
       "title": "Filter to the failing status code",

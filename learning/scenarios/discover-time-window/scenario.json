@@ -28,10 +28,7 @@
     },
     "window": {
       "choose": [
-        {"value": "10m", "label": "last 10 minutes"},
-        {"value": "15m", "label": "last 15 minutes"},
-        {"value": "30m", "label": "last 30 minutes"},
-        {"value": "1h", "label": "last hour"}
+        {"value": "15m", "label": "last 15 minutes"}
       ]
     }
   },
@@ -71,8 +68,11 @@
     "answers": {
       "finding": "${param.window.label}",
       "scope": "${param.incident.service} traffic",
-      "conclusion": "Errors from ${param.incident.service} spiked during the ${param.window.label}."
+      "conclusion": "Errors from ${param.incident.service} spiked during the ${param.window.label}.",
+      "status": "${param.incident.status}",
+      "route": "${param.incident.route}"
     },
+    "accept": {"scope": ["${param.incident.service}"]},
     "assertions": [
       {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.service} temporarily unavailable"}}},
       {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "support-reported ${param.incident.service} interval confirmed"}}}
@@ -81,10 +81,11 @@
   "answer_schema": {
     "type": "comparison",
     "fields": [
-      {"id": "finding", "label": "Incident window", "kind": "string", "weight": 2},
-      {"id": "scope", "label": "Observed scope", "kind": "string", "weight": 1},
-      {"id": "conclusion", "label": "Conclusion", "kind": "string", "weight": 1},
-      {"id": "evidence_refs", "label": "Evidence references", "kind": "string", "scored": false},
+      {"id": "finding", "label": "Incident window", "kind": "window", "weight": 2, "placeholder": "When it started and stopped, e.g. 14:05–14:12"},
+      {"id": "status", "label": "Failing status code", "kind": "string", "weight": 1},
+      {"id": "route", "label": "Affected endpoint", "kind": "string", "weight": 1},
+      {"id": "scope", "label": "Affected service", "kind": "string", "weight": 1},
+      {"id": "conclusion", "label": "Conclusion", "kind": "statement", "mentions": ["scope", "finding"], "weight": 1, "placeholder": "What failed, and when"},
       {"id": "evidence", "label": "Evidence explanation", "kind": "text", "scored": false}
     ]
   },
