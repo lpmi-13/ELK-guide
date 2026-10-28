@@ -1,4 +1,5 @@
 import hashlib
+import importlib.util
 import json
 import unittest
 from pathlib import Path
@@ -251,6 +252,15 @@ class ContractTests(unittest.TestCase):
             self.assertIn(dashboard_id, dashboards, scenario["id"])
             playbook = json.loads((scenario_path.parent / "playbook.json").read_text())
             self.assertIn(playbook["variables"]["panel"], panel_titles[dashboard_id], scenario["id"])
+
+    def test_saved_objects_match_their_generator(self):
+        # Panels and dashboards are built by scripts/generate-saved-objects.py; a hand edit to the
+        # ndjson would be lost on the next regeneration.
+        spec = importlib.util.spec_from_file_location("generate_saved_objects", ROOT / "scripts/generate-saved-objects.py")
+        generator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(generator)
+        existing = (ROOT / "kibana/saved-objects.ndjson").read_text(encoding="utf-8")
+        self.assertEqual(generator.render(existing), existing)
 
     def test_stack_is_pinned_to_elastic_9_5_2(self):
         compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")

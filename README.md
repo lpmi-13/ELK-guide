@@ -132,8 +132,11 @@ The dependency-free suite checks pack contracts, selector parity, manifests, run
 python -m unittest discover -s tests -v
 python scripts/validate-scenarios.py
 python scripts/test-scenario-matrix.py --all
+python scripts/generate-saved-objects.py --check
 docker compose config -q
 ```
+
+The dashboards and their Lens panels in `kibana/saved-objects.ndjson` are generated: edit them in `scripts/generate-saved-objects.py` and run it (no arguments) to rewrite the file.
 
 With the stack running, exercise the converted live investigation end to end, then provision and clean every capability-available core pack:
 
