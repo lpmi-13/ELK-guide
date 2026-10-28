@@ -14,6 +14,7 @@
       "title": "${var.title} complete",
       "checks": [
         {"title": "Scope", "detail": "Set a time window that includes the reported incident."},
+        {"title": "Busiest service", "detail": "Found ${param.incident.service} carrying most of the window's requests."},
         {"title": "Mixed outcomes", "detail": "Filtered ${param.incident.service} across versions and found HTTP ${param.incident.status} alongside 200 responses."},
         {"title": "Version comparison", "detail": "Compared service.version with HTTP status: ${param.incident.bad_version} failed while ${param.incident.good_version} stayed healthy."}
       ],
@@ -28,14 +29,21 @@
   },
   "goal_overrides": {
     "isolate": {
+      "narration": "Search for the service that stood out in service.name's Top values, across all of its versions, and read the HTTP status codes in the results.",
       "demonstration": {
-        "narration": "Only part of the fleet looks unhealthy. I'll keep all versions of ${param.incident.service} together and compare HTTP statuses to see whether failures line up with a release.",
+        "narration": "I'll keep all versions of ${param.incident.service} together and compare HTTP statuses to see whether failures line up with a release.",
         "reasoning": "The service and version filter removes unrelated traffic, but it does not select errors.\n\nRead http.response.status_code in the filtered results to see whether requests succeeded or failed before comparing versions.",
         "evidence": "The filtered ${param.incident.service} results show HTTP ${param.incident.status} alongside 200 in http.response.status_code.\n\nWe still need to compare those outcomes with service.version before attributing the failures.",
         "learning_focus": ["http.response.status_code"]
       },
+      "requires": ["survey"],
+      "hints": [
+        "Narrow the view to the service the Top values showed, keeping every version of it.",
+        "Search service.name for that service and service.version: * in the query bar, then read the status codes.",
+        "Query service.name: ${param.incident.service} and service.version: *; Show me can enter it."
+      ],
       "drifts": [
-        {"action": ["filter_added", "filter_changed"], "validators": [{"kind": "filter_field", "field": "service.name"}, {"kind": "value_not", "value": "${param.incident.service}"}, {"kind": "detail_equals", "field": "negate", "value": false}], "note": "You filtered on the service ${action.value}; check that it's the service the incident report points at."}
+        {"action": ["filter_added", "filter_changed"], "validators": [{"kind": "filter_field", "field": "service.name"}, {"kind": "value_not", "value": "${param.incident.service}"}, {"kind": "detail_equals", "field": "negate", "value": false}], "note": "You filtered on the service ${action.value}; check that it's the service that stood out in service.name's Top values."}
       ]
     },
     "inspect": {
@@ -53,5 +61,39 @@
         "Add the ${var.field} column; Show me can add the reference column."
       ]
     }
-  }
+  },
+  "goal_inserts": [
+    {
+      "after": "scope",
+      "goal": {
+        "id": "survey",
+        "title": "Look at which service the window is about",
+        "concept": "A field's Top values show which service carries the window's traffic, before you have to guess which one the report means.",
+        "narration": "The report doesn't name the unhealthy service. Open the service.name field in the sidebar and read its Top values to see which service most of the window's requests belong to.",
+        "reasoning": "Filtering on a guessed service would assume the answer. The Top values show which service the incident window is about.",
+        "evidence": "The service.name Top values show one service carrying most of the window.",
+        "demonstration": {
+          "narration": "The report doesn't name the unhealthy service. I'll check service.name Top values to see which service most of this window's requests belong to.",
+          "reasoning": "Filtering on a guessed service would assume the answer. Top values count every request in the window, so the next filter comes from the data.",
+          "evidence": "The highlighted row, ${param.incident.service}, carries most of the window's requests, well ahead of the other services. That concentration during the rollout is where to compare versions.",
+          "evidence_focus": {"kind": "top_values", "field": "service.name", "value": "${param.incident.service}"}
+        },
+        "requires": ["scope"],
+        "accepts": [
+          {"action": ["field_statistics_opened", "field_inspected"], "validators": [{"kind": "detail_equals", "field": "field", "value": "service.name"}]},
+          {"action": ["column_added"], "validators": [{"kind": "detail_equals", "field": "field", "value": "service.name"}]}
+        ],
+        "reference_action": {"command": "open_field_statistics", "target": "kibana.field_list", "arguments": {"field": "service.name"}},
+        "hints": [
+          "Let the data show which service the incident window is about, instead of assuming one.",
+          "Open the service.name field in the sidebar and read its Top values (or add it as a column).",
+          "Open service.name and read its Top values; Show me can open the reference field."
+        ],
+        "drifts": [
+          {"action": ["field_statistics_opened", "field_inspected"], "validators": [{"kind": "detail_not", "field": "field", "value": "service.name"}], "note": "You opened ${action.field}; this step is about which service the window is about."},
+          {"action": ["filter_added", "query_submitted"], "validators": [], "note": "You filtered before reading service.name's Top values, so the filter rests on a guess."}
+        ]
+      }
+    }
+  ]
 }

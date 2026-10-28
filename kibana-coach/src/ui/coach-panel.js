@@ -367,6 +367,13 @@ class IncidentCoachPanel {
 
   showLearning(command = this.currentCommand, evidence = null) { this.enterPhase('learning', command, evidence); }
 
+  // A goal that starts by reading the page rings what to read while its one line is on screen. The
+  // action phase clears the rings when the coach starts acting.
+  showGoalFocus(evidence) {
+    this.showEvidenceHighlights(evidence?.columns || [], evidence?.targets || []);
+    requestAnimationFrame(() => this.placeAwayFrom(null));
+  }
+
   // A demonstration step's result: what the action revealed, with that evidence ringed on the page.
   // Reading a result is where the inference happens, so this card has no countdown — it waits for
   // Continue, and Pause has nothing to hold.

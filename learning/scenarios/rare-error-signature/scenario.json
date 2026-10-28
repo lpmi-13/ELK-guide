@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "id": "rare-error-signature",
-  "version": 2,
+  "version": 3,
   "title": "Rare error signature",
   "type": "investigation",
   "classification": "core",

@@ -21,9 +21,9 @@ IGNORED_ACTIONS = {"hint_requested", "command_acknowledged", "step_demonstrated"
 # complete a step while Discover shows "No results".
 SEARCH_ACTIONS = {"query_submitted", "esql_submitted", "filter_added", "filter_changed"}
 
-# A window is accepted when its look-back reaches within this many minutes of when the incident
-# was first noticed, so a 15-minute window still covers an incident reported 13 minutes ago while a
-# 10-minute one (which would miss it) does not.
+# A window is accepted when its look-back reaches within this many minutes of the incident — when
+# it was first noticed, or when it began if the pack seeds a visible onset — so a 15-minute window
+# still covers an incident reported 13 minutes ago while a 10-minute one (which would miss it) does not.
 TIME_WINDOW_TOLERANCE_MINUTES = 1.0
 
 
@@ -385,7 +385,8 @@ def dead_end(session, action, earned_state=None):
 
     ``empty_result``: the search left nothing to read. ``lost_earned_state``: a filter a completed step
     earned is gone. ``window_excludes_incident``: once the window was scoped, a new one no longer
-    reaches back to when the incident was noticed (before scoping, the scope step handles windows).
+    reaches back to the incident — when it was noticed, or its onset when the pack seeds one (before
+    scoping, the scope step handles windows).
     The last two judge the learner's own changes only; the coach's performed actions are trusted.
     """
     if returned_no_results(action):
@@ -402,7 +403,7 @@ def dead_end(session, action, earned_state=None):
         return {"reason_code": "window_excludes_incident",
                 "from_minutes": _number(details.get("from_minutes")),
                 "incident_offset_minutes": _number(details.get("incident_offset_minutes")),
-                "reason": "The window no longer reaches back to when the incident was noticed."}
+                "reason": "The window no longer reaches back to the incident."}
     return None
 
 

@@ -65,7 +65,8 @@
               "evidence": {"type": "string"},
               "concept": {"type": "string"},
               "learning_focus": {"type": "array", "items": {"type": "string"}},
-              "evidence_focus": {"$ref": "#/$defs/evidence_focus"}
+              "evidence_focus": {"$ref": "#/$defs/evidence_focus"},
+              "goal_focus": {"$ref": "#/$defs/evidence_focus"}
             }
           },
           "reference_action": {
@@ -132,7 +133,8 @@
               "evidence": {"type": "string"},
               "concept": {"type": "string"},
               "learning_focus": {"type": "array", "items": {"type": "string"}},
-              "evidence_focus": {"$ref": "#/$defs/evidence_focus"}
+              "evidence_focus": {"$ref": "#/$defs/evidence_focus"},
+              "goal_focus": {"$ref": "#/$defs/evidence_focus"}
             }
           },
           "requires": {"type": "array", "items": {"type": "string"}},

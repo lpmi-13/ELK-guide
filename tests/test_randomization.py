@@ -273,7 +273,10 @@ class RandomizationTests(unittest.TestCase):
                     scope = next(goal for goal in session["playbook"]["goals"] if goal["id"] == "scope")
                     command = self.server.next_command(session)
                     offset = session["detected_offset_minutes"]
-                    expected_minutes = self.server.recommended_window_minutes(offset)
+                    onset = session["incident_onset_minutes"]
+                    # A pack that seeds a visible onset is windowed from that rise, not from the report.
+                    expected_minutes = self.server.recommended_window_minutes(
+                        offset if onset is None else onset + self.server.ONSET_LEAD_MINUTES)
                     expected_from = f"now-{expected_minutes}m"
                     expected_words = self.server.spell_duration(f"{expected_minutes}m")
                     rendered_hints = self.server.substitute(scope["hints"], session)
@@ -283,7 +286,20 @@ class RandomizationTests(unittest.TestCase):
                         self.assertEqual(command["value"]["from"], expected_from)
                         self.assertIn(str(offset), rendered_hints[0])
                         self.assertIn(expected_words, rendered_hints[-1])
-                        if mode == "demonstration":
+                        if onset is not None:
+                            # The copy sends the learner to the histogram's rise; the report only says
+                            # when the failures were noticed, which is after they began.
+                            self.assertGreater(onset, offset)
+                            self.assertIn(str(offset), command["narration"])
+                            self.assertIn("histogram", command["narration"])
+                            self.assertIn("histogram", rendered_hints[0])
+                            self.assertNotIn("five-minute boundary", command["narration"])
+                            if mode == "guided":
+                                self.assertEqual(command["walkthrough"]["narration"],
+                                                 self.server.substitute(scope["demonstration"]["narration"], session))
+                            else:
+                                self.assertEqual(command["goal_focus"], {"kind": "histogram"})
+                        elif mode == "demonstration":
                             self.assertIn(str(offset), command["narration"])
                             self.assertIn(expected_words, command["narration"])
                             self.assertIn("five-minute boundary", command["narration"])
@@ -295,6 +311,69 @@ class RandomizationTests(unittest.TestCase):
                             self.assertEqual(command["walkthrough"]["reasoning"], "")
                             self.assertEqual(command["walkthrough"]["narration"],
                                              self.server.substitute(scope["demonstration"]["narration"], session))
+
+    def test_incident_window_is_a_bounded_rise_the_histogram_can_date(self):
+        """The time-window lesson's answer must be in the data, not derived from the report.
+
+        Its failures start before support noticed them and stop before seeding, so the histogram shows
+        normal traffic either side of a rise; the recommended window opens a few minutes before that
+        rise. The briefing names the user-facing symptom of the run's service, so a catalog incident
+        is not reported as checkout.
+        """
+        from datetime import datetime, timezone
+        for seed in range(30):
+            manifest = self.materialize("discover-time-window", seed)
+            session = self.server.create_session({"manifest": manifest}, "demonstration")
+            incident, timing = manifest["parameters"]["incident"], manifest["parameters"]["timing"]
+            seeded_at = datetime.now(timezone.utc)
+            documents = self.controller.generate_seeded_events(manifest)
+            failing = [document for document in documents if document["http"]["response"]["status_code"] == incident["status"]]
+            ages = [(seeded_at - datetime.fromisoformat(document["@timestamp"])).total_seconds() / 60 for document in failing]
+            window = int(session["playbook"]["goals"][0]["reference_action"]["arguments"]["from"].removeprefix("now-").removesuffix("m"))
+            briefing = self.server.build_incident_briefing(session)
+            with self.subTest(seed=seed):
+                self.assertEqual(session["detected_offset_minutes"], timing["noticed"])
+                self.assertTrue(timing["end"] < timing["noticed"] < timing["onset"])
+                self.assertLessEqual(max(ages), timing["onset"])
+                self.assertGreaterEqual(min(ages), timing["end"] - 0.1)
+                self.assertGreaterEqual(window - timing["onset"], 2)
+                self.assertIn(incident["headline"], briefing["headline"])
+                self.assertIn(incident["journey"], briefing["summary"])
+                self.assertNotIn("checkout", manifest["scenario"]["title"].lower())
+                self.assertNotIn("${", json.dumps(briefing))
+
+    def test_every_log_hunt_filter_comes_from_a_value_a_survey_revealed(self):
+        """No demonstrated filter may name a value the learner hasn't been shown on screen.
+
+        Each pack reads a field's Top values before its first filter, and that filter (or the phrase
+        it excludes) is the value the survey step rings — never one taken from the answer key.
+        """
+        for pack in ("discover-time-window", "http-error-regression", "rare-error-signature", "auth-rejection-surge",
+                     "log-pattern-noise-reduction", "deployment-version-regression"):
+            for seed in range(12):
+                manifest = self.materialize(pack, seed)
+                playbook = self.server.load_manifest_definition(manifest, "playbook")
+                goals = {goal["id"]: goal for goal in playbook["goals"]}
+                survey, isolate = goals["survey"], goals["isolate"]
+                focus = survey["demonstration"]["evidence_focus"]
+                arguments = isolate["reference_action"]["arguments"]
+                with self.subTest(pack=pack, seed=seed):
+                    self.assertEqual([goal["id"] for goal in playbook["goals"]][:3], ["scope", "survey", "isolate"])
+                    self.assertEqual(isolate["requires"], ["survey"])
+                    self.assertEqual(survey["reference_action"], {"command": "open_field_statistics", "target": "kibana.field_list", "arguments": {"field": focus["field"]}})
+                    if isinstance(arguments, dict):
+                        self.assertEqual((arguments["field"], str(arguments["value"])), (focus["field"], str(focus["value"])))
+                    else:
+                        # A query may only name what was on screen: the surveyed value, or a phrase of the
+                        # ringed line when it excludes noise.
+                        fragment = manifest["parameters"]["incident"].get("exclude_fragment")
+                        if fragment:
+                            self.assertIn(fragment, focus["value"])
+                            self.assertIn(f'not {focus["field"]}: "{fragment}"', arguments)
+                        else:
+                            self.assertIn(f'{focus["field"]}: {focus["value"]}', arguments)
+                    for phase in ("narration", "reasoning"):
+                        self.assertNotIn(str(focus["value"]), survey["demonstration"][phase])
 
     def test_time_window_copy_uses_grammar_aware_finding_for_every_variant(self):
         window_options = self.template("discover-time-window")["parameters"]["window"]["choose"]

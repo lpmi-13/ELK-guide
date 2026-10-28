@@ -222,7 +222,10 @@ function startIncidentCoach() {
         // registry does not hold, like the filter bar, so a missing anchor must never abort the run —
         // resolveAnchor falls back to no opening highlight and perform() highlights the real controls.
         const target = await adapter.resolveAnchor(command.target, controller.signal);
-        coach.showCommand(command, target);
+        // A step that starts by reading the page (where the histogram rises) rings that instead of
+        // spotlighting the control, which would dim the very thing the line asks the learner to read.
+        coach.showCommand(command, command.goal_focus ? null : target);
+        if (command.goal_focus) coach.showGoalFocus(await adapter.findEvidence({...command, evidence_focus: command.goal_focus}, controller.signal));
         const pause = goalPause(command.narration);
         coach.startCountdown(pause);
         await readingBeatWait(pause, controller.signal);
@@ -348,7 +351,7 @@ function startIncidentCoach() {
       const offset = reason.incident_offset_minutes ?? coach.currentBriefing?.detected_offset_minutes;
       return {
         eyebrow: 'Incident outside the window — back on track',
-        headline: `The window now starts ${minutesText(reason.from_minutes)} ago, but the incident was noticed ${minutesText(offset)} ago, so it’s outside the view.`,
+        headline: `The window now starts ${minutesText(reason.from_minutes)} ago, but the incident was already under way ${minutesText(offset)} ago, so part of it is outside the view.`,
         detail: 'I’ll put back the window you set earlier. Or widen it yourself — I’ll step aside.',
         stillBroken: () => {
           const range = observer.readTimeRange();

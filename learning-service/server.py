@@ -76,6 +76,8 @@ def now_iso():
 
 
 PARAM_TOKEN = re.compile(r"\$\{param\.([A-Za-z0-9_.]+)\}")
+# How far before a seeded incident's onset the recommended window opens (see apply_incident_window).
+ONSET_LEAD_MINUTES = 3
 
 
 def _param_lookup(parameters, dotted):
@@ -252,6 +254,7 @@ def create_session(run_response, mode):
         "feedback": None,
         "pending_command": None,
         "detected_offset_minutes": detected_offset_minutes,
+        "incident_onset_minutes": incident_timing(manifest).get("onset"),
         "briefing_acknowledged": False,
         "paused": False,
         "run_ready": False,
@@ -375,10 +378,24 @@ def select_detected_offset(manifest):
     here (once, at session creation) so the recommended investigation window can be derived
     from the same value the learner reads in the briefing.
     """
+    timing = incident_timing(manifest)
+    if "noticed" in timing:
+        return int(timing["noticed"])
     definitions = load_incident_briefings()
     profile = definitions.get("scenarios", {}).get(manifest["scenario"]["id"], {})
     values = profile.get("observed_minutes_ago") or [8, 10, 12]
     return stable_briefing_choice(values, {"manifest": manifest}, "observed_minutes_ago")
+
+
+def incident_timing(manifest):
+    """The seeded incident's shape, in minutes before seeding, when the pack declares one.
+
+    A pack whose lesson is the time window itself (``timing: {noticed, onset, end}``) seeds its
+    failures between ``onset`` and ``end`` and reports them as noticed in between, so the histogram
+    shows a rise that starts before the report. Other packs leave the incident open-ended.
+    """
+    timing = (manifest.get("parameters") or {}).get("timing")
+    return timing if isinstance(timing, dict) else {}
 
 
 def recommended_window_minutes(offset_minutes):
@@ -399,7 +416,7 @@ def apply_incident_window(manifest, offset_minutes):
     random choice (for example, "noticed 12 minutes ago" paired with "last 1 hour"). Both compact
     string windows and the labelled value used by the dedicated time-window lesson are supported.
     The latter also appears in its already-resolved truth, so update that copy as well. Re-deriving
-    from the same offset is idempotent.
+    from the same offset is idempotent. A pack that seeds a visible onset is windowed from that onset.
     """
     scenario = manifest.get("scenario", {})
     if scenario.get("starting_view", {}).get("app") != "discover" or offset_minutes is None:
@@ -408,7 +425,11 @@ def apply_incident_window(manifest, offset_minutes):
     window = parameters.get("window")
     if window is not None and not isinstance(window, (str, dict)):
         return
-    minutes = recommended_window_minutes(offset_minutes)
+    # When the pack seeds a visible onset, the window must open a little before that rise (not just
+    # before the report), so its start isn't on the histogram's edge and a few minutes' delay before
+    # the scope step can't push the first failures out of it.
+    onset = incident_timing(manifest).get("onset")
+    minutes = recommended_window_minutes(onset + ONSET_LEAD_MINUTES if onset is not None else offset_minutes)
     new_value = f"{minutes}m"
     new_label = f"last {spell_duration(new_value)}"
     old_label = None
@@ -554,6 +575,9 @@ def next_command(session):
         # What the demonstration's "What this shows" beat rings on the page once the action is done
         # (a Top values row, document fields...). Absent, the coach derives it from the command type.
         "evidence_focus": substitute(explanation.get("evidence_focus"), session) if session["mode"] == "demonstration" else None,
+        # What the opening goal card rings before the action, when the step starts by reading the
+        # page (e.g. where the histogram rises) rather than from a fact in the brief.
+        "goal_focus": substitute(explanation.get("goal_focus"), session) if session["mode"] == "demonstration" else None,
         "concept": explanation_text("concept") if session["mode"] == "demonstration" else "",
         "answer_schema": session["manifest"]["scenario"].get("answer_schema", {}),
     }
@@ -714,6 +738,11 @@ def record_action(session, action):
     if action.get("type") == "step_demonstrated":
         session["assistance"]["demonstrated_steps"] += 1
     record_step_clock(session, action.get("step_clock"))
+    if action.get("type") == "time_range_changed" and session.get("incident_onset_minutes") is not None:
+        # The coach tags a window with when the incident was noticed. When the pack seeded a visible
+        # onset, the window has to reach back to that rise instead, which the learner reads off the
+        # histogram rather than the report.
+        action["details"] = {**(action.get("details") or {}), "incident_offset_minutes": session["incident_onset_minutes"]}
     if action.get("type") == "check_in_answered":
         record_check_in_answer(session, action.get("details") or {})
     evidence = action_evidence(session, action)

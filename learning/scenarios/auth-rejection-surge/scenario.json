@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "id": "auth-rejection-surge",
-  "version": 2,
+  "version": 3,
   "title": "Authentication rejection surge",
   "type": "investigation",
   "classification": "core",

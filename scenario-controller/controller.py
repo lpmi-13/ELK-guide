@@ -707,8 +707,11 @@ def generate_seeded_events(manifest):
         _apply_realism(prepared, generator)
         documents.append(prepared)
     representative_trace = hashlib.md5(f"{manifest['run_id']}:representative".encode()).hexdigest()
+    # By default the incident runs right up to now. A pack can bound it instead (seconds before now,
+    # newest first) so the histogram shows normal traffic both before and after the incident.
+    newest, oldest = (int(value) for value in profile.get("signal_window_seconds", (10, 600)))
     for sequence in range(signal_count):
-        timestamp = now - timedelta(seconds=generator.randint(10, 600))
+        timestamp = now - timedelta(seconds=generator.randint(newest, oldest))
         trace_id = representative_trace if sequence == 0 else hashlib.md5(f"{manifest['run_id']}:signal:{sequence // 2}".encode()).hexdigest()
         event = _deep_merge(_event_template(manifest, timestamp, trace_id, sequence), signal)
         prepared = _prepare_application_event(event, application, signal)
@@ -721,7 +724,10 @@ def generate_seeded_events(manifest):
         template = _substitute(companion.get("event", {}), manifest)
         for sequence in range(repeats):
             timestamp = now - timedelta(seconds=int(companion.get("offset_seconds", 120)) + sequence * int(companion.get("interval_seconds", 1)))
-            event = _deep_merge(_event_template(manifest, timestamp, representative_trace, 1000 + companion_index * 100 + sequence), template)
+            # Companions corroborate the representative request unless they are background of their own
+            # (a repetitive warning flood), which must not all claim to be one trace.
+            trace_id = representative_trace if companion.get("trace") != "own" else hashlib.md5(f"{manifest['run_id']}:companion:{companion_index}:{sequence}".encode()).hexdigest()
+            event = _deep_merge(_event_template(manifest, timestamp, trace_id, 1000 + companion_index * 100 + sequence), template)
             prepared = _prepare_application_event(event, application, template)
             _apply_realism(prepared, generator)
             documents.append(prepared)

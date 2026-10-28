@@ -82,6 +82,20 @@ class ContractTests(unittest.TestCase):
         self.assertIn('"evidence_focus": substitute(explanation.get("evidence_focus"), session)', learning_service)
         for kind in ("histogram", "query", "filter", "top_values", "document"):
             self.assertIn(f"kind === '{kind}'", adapter)
+        # A goal that starts by reading the page (where the histogram rises) rings that while its line
+        # is up, instead of dimming it behind the control's spotlight; the action phase clears the ring.
+        self.assertIn('"goal_focus": substitute(explanation.get("goal_focus"), session)', learning_service)
+        self.assertIn("coach.showCommand(command, command.goal_focus ? null : target);", content)
+        self.assertIn("coach.showGoalFocus(await adapter.findEvidence({...command, evidence_focus: command.goal_focus}, controller.signal));", content)
+        self.assertLess(content.index("coach.showGoalFocus("), content.index("const pause = goalPause(command.narration);"))
+        self.assertIn("if (phase !== 'learning') this.clearEvidenceHighlights();", coach)
+
+    def test_expand_document_is_reported_only_once_the_document_is_open(self):
+        discover = (ROOT / "kibana-coach/src/adapters/discover.js").read_text(encoding="utf-8")
+        wait = discover.index("await host.waitFor('kibana.doc_viewer', 8000, signal)")
+        self.assertLess(discover.index("await host.pointAt(target, coach, timingScale, signal, activity, {activate: true});"), wait)
+        self.assertLess(wait, discover.index("expand_document: 'document_expanded'"))
+        self.assertIn("throw new Error('The document did not open. Try expanding the first result again.');", discover)
 
     def test_demonstration_cursor_is_snappy_and_form_values_are_typed(self):
         cursor = (ROOT / "kibana-coach/src/ui/cursor.js").read_text(encoding="utf-8")

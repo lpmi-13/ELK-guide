@@ -1,1 +1,1 @@
-{"schema_version":2,"id":"log-pattern-noise-reduction-rubric","extends":"investigation.json","variables":{}}
+{"schema_version":2,"id":"log-pattern-noise-reduction-rubric","extends":"investigation.json","variables":{},"goal_inserts":[{"after":"scope","goal":{"id":"survey"}}],"overrides":{"reference_action_cost":5}}

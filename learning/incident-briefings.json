@@ -37,13 +37,13 @@
       "severity": "SEV-3",
       "owner": "Commerce Reliability",
       "environment": "Production · eu-west",
-      "observed_minutes_ago": [8, 10, 13],
+      "observed_minutes_ago": [7, 8, 10],
       "channels": ["support", "monitoring", "pager"],
-      "headline": "Checkout failing on and off for some users",
-      "summary": "Some checkout attempts were slow or failed, but the report didn't say exactly when it started or stopped.",
+      "headline": "${param.incident.headline}",
+      "summary": "Some ${param.incident.journey} attempts were slow or failed, but the report didn't say exactly when it started or stopped.",
       "impact": "The problem may have been short. You can see normal traffic both before and after it, so the first job is to work out exactly when it happened.",
       "signals": [
-        {"label": "Customer signal", "value": "Short-lived checkout failures reported"},
+        {"label": "Customer signal", "value": "Short-lived ${param.incident.journey} failures reported"},
         {"label": "Telemetry", "value": "Normal and anomalous events share the current view"},
         {"label": "Triage request", "value": "Confirm the affected time window"}
       ]

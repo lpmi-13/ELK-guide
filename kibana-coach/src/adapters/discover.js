@@ -71,6 +71,14 @@ globalThis.KibanaApplicationAdapters.push({
       : (command.evidence_focus || command.walkthrough?.evidence_focus)?.fields?.length ? 'Expand the first result, then pin the fields to compare at the top of it.'
         : 'Expand the first result to read all of its fields.';
     await host.pointAt(target, coach, timingScale, signal, activity, {activate: true});
+    // Report the step only once the document is actually open, so a click that opened nothing is
+    // never recorded (and debriefed) as a checked event.
+    if (command.type === 'expand_document') {
+      await host.waitFor('kibana.doc_viewer', 8000, signal).catch(error => {
+        if (error.name === 'AbortError') throw error;
+        throw new Error('The document did not open. Try expanding the first result again.');
+      });
+    }
     const observations = {
       select_data_view: 'data_view_selected', switch_query_language: 'query_language_changed', edit_filter: 'filter_changed', remove_filter: 'filter_removed', disable_filter: 'filter_disabled',
       add_column: 'column_added', remove_column: 'column_removed', sort_column: 'sort_changed', expand_document: 'document_expanded', inspect_field: 'field_inspected',

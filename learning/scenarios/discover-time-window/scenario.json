@@ -1,8 +1,8 @@
 {
   "schema_version": 2,
   "id": "discover-time-window",
-  "version": 3,
-  "title": "Find the checkout incident window",
+  "version": 4,
+  "title": "Find the incident window",
   "type": "analysis",
   "classification": "core",
   "difficulty": 1,
@@ -13,10 +13,17 @@
   "parameters": {
     "incident": {
       "choose": [
-        {"service": "checkout", "route": "/checkout", "status": 503, "status_family": "HTTP 503"},
-        {"service": "orders", "route": "/api/orders", "status": 500, "status_family": "HTTP 5xx"},
-        {"service": "payments", "route": "/api/payments/authorize", "status": 502, "status_family": "HTTP 502"},
-        {"service": "catalog", "route": "/api/catalog/search", "status": 503, "status_family": "HTTP 503"}
+        {"service": "checkout", "route": "/checkout", "status": 503, "status_family": "HTTP 503", "journey": "checkout", "headline": "Checkout failing on and off for some users"},
+        {"service": "orders", "route": "/api/orders", "status": 500, "status_family": "HTTP 5xx", "journey": "order", "headline": "Orders failing on and off for some users"},
+        {"service": "payments", "route": "/api/payments/authorize", "status": 502, "status_family": "HTTP 502", "journey": "card payment", "headline": "Card payments failing on and off for some users"},
+        {"service": "catalog", "route": "/api/catalog/search", "status": 503, "status_family": "HTTP 503", "journey": "product search", "headline": "Product search failing on and off for some users"}
+      ]
+    },
+    "timing": {
+      "choose": [
+        {"noticed": 8, "onset": 11, "end": 5, "noticed_seconds": 480, "onset_seconds": 660, "end_seconds": 300},
+        {"noticed": 10, "onset": 12, "end": 6, "noticed_seconds": 600, "onset_seconds": 720, "end_seconds": 360},
+        {"noticed": 7, "onset": 10, "end": 4, "noticed_seconds": 420, "onset_seconds": 600, "end_seconds": 240}
       ]
     },
     "window": {
@@ -33,6 +40,7 @@
     "seeded_events": {
       "signal_count": 28,
       "noise_count": 80,
+      "signal_window_seconds": ["${param.timing.end_seconds}", "${param.timing.onset_seconds}"],
       "signal": {
         "service": {"name": "${param.incident.service}"},
         "event": {"outcome": "failure"},
@@ -43,6 +51,7 @@
       "companions": [
         {
           "count": 2,
+          "offset_seconds": "${param.timing.noticed_seconds}",
           "event": {
             "service": {"name": "${param.incident.service}"},
             "event": {"outcome": "failure"},

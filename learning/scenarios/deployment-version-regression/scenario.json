@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "id": "deployment-version-regression",
-  "version": 2,
+  "version": 3,
   "title": "Deployment version regression",
   "type": "investigation",
   "classification": "core",

@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "id": "log-pattern-noise-reduction",
-  "version": 2,
+  "version": 3,
   "title": "Reduce log-pattern noise",
   "type": "investigation",
   "classification": "core",
@@ -44,6 +44,30 @@
             "event": {"outcome": "failure"},
             "http": {"response": {"status_code": "${param.incident.status}"}},
             "message": "request failed after ${param.incident.error_message}"
+          }
+        },
+        {
+          "count": 60,
+          "offset_seconds": 15,
+          "interval_seconds": 9,
+          "trace": "own",
+          "event": {
+            "service": {"name": "${param.incident.service}"},
+            "log": {"level": "WARN"},
+            "message": "${param.incident.noise_a}"
+          }
+        },
+        {
+          "count": 20,
+          "offset_seconds": 22,
+          "interval_seconds": 27,
+          "trace": "own",
+          "event": {
+            "service": {"name": "${param.incident.service}"},
+            "event": {"outcome": "failure"},
+            "http": {"response": {"status_code": "${param.incident.status}"}},
+            "log": {"level": "WARN"},
+            "message": "${param.incident.noise_a}"
           }
         }
       ]
