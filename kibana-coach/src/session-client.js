@@ -84,6 +84,9 @@ class IncidentSessionClient {
     // Guided: the active time spent on the current step so far, recorded for the debrief.
     const clock = this.stepClock?.();
     if (clock) action.step_clock = clock;
+    // The search on screen as the action is reported; the service checks evidence against it.
+    const view = this.currentView?.();
+    if (view) action.view = view;
     this.send({message_type: 'action', action});
   }
 

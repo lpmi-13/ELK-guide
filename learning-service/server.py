@@ -20,8 +20,9 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qs, quote, urlparse
 from urllib.request import Request, urlopen
 
-from engine.evaluator import current_goal, evaluate_action, guided_feedback, incident_onset_age_minutes, incident_timing, playbook_goals, score_session
+from engine.evaluator import IGNORED_ACTIONS, answer_phrases, current_goal, evaluate_action, guided_feedback, incident_onset_age_minutes, incident_timing, playbook_goals, reveals_answer, score_session
 from engine.contracts import assert_catalog_valid, insert_goals
+from engine.kql import view_query
 
 PORT = int(os.getenv("PORT", "8091"))
 CONTROLLER_URL = os.getenv("SCENARIO_CONTROLLER_URL", "http://scenario-controller:8092").rstrip("/")
@@ -203,7 +204,7 @@ def http_json(url, method="GET", payload=None, timeout=10):
         return error.code, json.loads(raw) if raw else {"error": str(error)}
 
 
-def emit(session, action, evaluation=None):
+def emit(session, action, evaluation=None, evidence=None):
     event = {
         "@timestamp": now_iso(),
         "log": {"level": "INFO"},
@@ -217,6 +218,10 @@ def emit(session, action, evaluation=None):
         "action": action,
         "validation": evaluation or {},
     }
+    if evidence:
+        # Whether the assertions were checked inside the learner's view, and what they found.
+        event["evidence"] = {"view_scoped": bool(evidence.get("view_scoped")), "assertions": evidence.get("assertions", {}),
+                             "esql_rows": len((evidence.get("esql_result") or {}).get("values") or []) if "esql_result" in evidence else None}
     line = json.dumps(event, separators=(",", ":"))
     with write_lock:
         _log_writer.info(line)
@@ -247,6 +252,8 @@ def create_session(run_response, mode):
         "actions": [],
         "assistance": {"hints": 0, "demonstrated_steps": 0},
         "hint_level": {},
+        # Steps whose served hint named the answer (scored like Show me).
+        "hint_revealed": {},
         # Per-step drift notes still open (cleared when the step completes) and the permanent
         # per-step record behind the debrief: active time, check-ins, dead ends and drift.
         "drift": {},
@@ -410,10 +417,14 @@ def recommended_window_minutes(offset_minutes):
     return max(5, math.ceil(offset_minutes / 5) * 5)
 
 
+# Starting apps whose scope step is the time picker (Discover, and dashboards, whose panels share it).
+TIME_PICKER_APPS = {"discover", "dashboard", "dashboards"}
+
+
 def apply_incident_window(manifest, offset_minutes):
     """Align this run's window (coach copy, reference action, and graded truth) with the offset.
 
-    Every Discover scenario feeds a compact window into the shared scope step. Derive that runtime
+    Every Discover and dashboard scenario feeds a compact window into the shared scope step. Derive that runtime
     value from the same incident age shown in the briefing instead of leaving it as an independent
     random choice (for example, "noticed 12 minutes ago" paired with "last 1 hour"). Both compact
     string windows and the labelled value used by the dedicated time-window lesson are supported.
@@ -421,7 +432,7 @@ def apply_incident_window(manifest, offset_minutes):
     from the same offset is idempotent. A pack that seeds a visible onset is windowed from that onset.
     """
     scenario = manifest.get("scenario", {})
-    if scenario.get("starting_view", {}).get("app") != "discover" or offset_minutes is None:
+    if scenario.get("starting_view", {}).get("app") not in TIME_PICKER_APPS or offset_minutes is None:
         return
     parameters = manifest.get("parameters") or {}
     window = parameters.get("window")
@@ -494,6 +505,41 @@ def build_incident_briefing(session):
     }
 
 
+def opening_time(session):
+    """The window the scenario's starting view opens on (``_g=(time:...)`` in its path), or None."""
+    starting_path = session["manifest"]["scenario"].get("starting_view", {}).get("path", "")
+    opening = re.search(r"time:\(from:([^,)]+),to:([^,)]+)\)", starting_path)
+    return {"from": opening.group(1).strip("'"), "to": opening.group(2).strip("'")} if opening else None
+
+
+def track_view(session, action):
+    """The search on the learner's screen after this action: time range, query and its language,
+    and filter pills. The coach reports it with each action (read from Kibana's URL state, so a
+    restore or a reload is covered too); without that report the service carries the last view
+    forward. Either way the action's own facts win — the window it set, the query it ran, the
+    pills it read — since the URL can lag the action by a moment."""
+    opening = opening_time(session) or {}
+    previous = session.get("view") or {"time_from": opening.get("from"), "time_to": opening.get("to"), "language": "kql", "query": "", "filters": []}
+    reported = action.get("view") if isinstance(action.get("view"), dict) else {}
+    view = {**previous, **{key: reported[key] for key in ("time_from", "time_to", "language", "query", "filters") if key in reported}}
+    details, after = action.get("details") or {}, action.get("state_after") or {}
+    kind = action.get("type")
+    if kind == "time_range_changed":
+        view["time_from"] = details.get("from") or after.get("time_from") or view.get("time_from")
+        view["time_to"] = details.get("to") or after.get("time_to") or view.get("time_to")
+    language = after.get("query_language") or (details.get("language") if kind in {"query_submitted", "esql_submitted", "query_language_changed"} else None)
+    if language:
+        view["language"] = "esql" if str(language).casefold() == "esql" else "kql"
+    if kind in {"query_submitted", "esql_submitted"}:
+        view["query"] = details.get("query", after.get("query", view.get("query", "")))
+    if isinstance(after.get("filters"), list):
+        view["filters"] = after["filters"]
+    elif kind == "filter_added" and details.get("field") and not reported.get("filters"):
+        view["filters"] = [*(view.get("filters") or []), details]
+    session["view"] = view
+    return view
+
+
 def restore_state(session):
     """The search state the investigation should hold before the current step.
 
@@ -502,10 +548,8 @@ def restore_state(session):
     the learner's own input leaves Discover with no results, so they are put back on the path they
     had already earned instead of being stranded in an empty view.
     """
-    starting_path = session["manifest"]["scenario"].get("starting_view", {}).get("path", "")
-    opening = re.search(r"time:\(from:([^,)]+),to:([^,)]+)\)", starting_path)
     state = {
-        "baseline_time": {"from": opening.group(1).strip("'"), "to": opening.group(2).strip("'")} if opening else None,
+        "baseline_time": opening_time(session),
         "time": None,
         "filters": [],
         "query": None,
@@ -604,6 +648,29 @@ def next_command(session):
     return command
 
 
+def next_hint(session):
+    """The current step's next hint, one level deeper each time. A hint that names the step's answer
+    (the bottom-out level usually does) is recorded, so the step scores like Show me."""
+    if not session["policy"].get("allow_hints", True):
+        return {"message_type": "hint", "step_id": None, "level": 0, "text": "Hints are off in challenge mode. The debrief shows the reference route afterwards."}
+    index = current_step_index(session)
+    goals = playbook_goals(session)
+    if index >= len(goals):
+        return None
+    step = goals[index]
+    hints = step.get("hints", [])
+    if not hints:
+        return {"message_type": "hint", "step_id": step["id"], "level": 0, "text": "No additional hint is available for this goal."}
+    level = min(session["hint_level"].get(step["id"], 0), len(hints) - 1)
+    session["hint_level"][step["id"]] = level + 1
+    session["assistance"]["hints"] += 1
+    text = substitute(hints[level], session)
+    truth = session["manifest"]["scenario"].get("truth", {})
+    if reveals_answer(text, answer_phrases(truth, substitute(step.get("reference_action", {}).get("arguments"), session))):
+        session["hint_revealed"][step["id"]] = True
+    return {"message_type": "hint", "step_id": step["id"], "level": level + 1, "text": text}
+
+
 def learner_evaluation(session, evaluation):
     """The evaluation as the coach may show it. A challenge is scored in its debrief, so mid-run the
     coach learns only that an action was recorded — not which step it completed or missed."""
@@ -652,23 +719,71 @@ def elastic_search(query, index="microservices-*"):
     return result if status < 400 else {}
 
 
+def hit_total(result):
+    total = (result or {}).get("hits", {}).get("total", 0)
+    return total.get("value", 0) if isinstance(total, dict) else total
+
+
+# ES|QL the service runs for the learner must read this run's lab data, nothing else.
+ESQL_SOURCE = re.compile(r"^\s*FROM\s+([^|]+?)(?:\s+METADATA\b[^|]*)?\s*(?:\||$)", re.IGNORECASE)
+
+
+def esql_result(session, query, view):
+    """The table an ES|QL query shows the learner: its rows, run over the view's time range. A query
+    Elasticsearch rejects shows the learner an error, not a table, so it comes back empty. None —
+    unknown — when the query reads anything but lab data or Elasticsearch can't be reached."""
+    match = ESQL_SOURCE.match(str(query or ""))
+    sources = [item.strip().strip('"') for item in match.group(1).split(",")] if match else []
+    if not sources or not all(source.startswith("lab-") for source in sources):
+        return None
+    payload = {"query": query}
+    bounds = {key: value for key, value in (("gte", (view or {}).get("time_from")), ("lte", (view or {}).get("time_to"))) if value}
+    if bounds:
+        payload["filter"] = {"range": {"@timestamp": bounds}}
+    try:
+        status, result = http_json(f"{ELASTICSEARCH_URL}/_query", "POST", payload, timeout=15)
+    except (OSError, ValueError):
+        return None
+    if status >= 400:
+        return {"columns": [], "values": [], "rejected": True}
+    if not isinstance(result.get("values"), list):
+        return None
+    return {"columns": [column.get("name") for column in result.get("columns", [])], "values": result["values"][:1000]}
+
+
 def action_evidence(session, action):
-    evidence = {"assertions": {}, "trace_services": 0}
+    """What the evidence assertions say for this action. In guided practice and challenges a count
+    assertion is checked inside the learner's own view (window, query, pills) when that view is known
+    and translatable — the evidence has to be on their screen, not merely somewhere in the run — and
+    against the whole run otherwise. An ES|QL search also returns the result table it showed."""
+    evidence = {"assertions": {}, "trace_services": 0, "view_scoped": False}
     details = action.get("details") or {}
     trace_id = details.get("trace_id") or (action.get("state_after") or {}).get("trace_id")
+    view = session.get("view")
+    # A demonstration is the coach performing the reference route, which it is trusted to do; the
+    # learner's view only matters where the learner's own work is judged.
+    learner_judged = session["mode"] != "demonstration"
+    scope = view_query(view) if view and learner_judged else None
+    if action.get("type") == "esql_submitted" and learner_judged:
+        evidence["esql_result"] = esql_result(session, details.get("query") or (view or {}).get("query"), view)
     for assertion in session["manifest"]["scenario"].get("truth", {}).get("assertions", []):
         kind = assertion.get("kind")
         index = substitute(assertion.get("index", f"lab-{session['run_id']}"), session)
         if kind in {"es_count", "es_cardinality"}:
-            query = {"size": 0, "query": substitute(assertion.get("query", {"match_all": {}}), session)}
+            assertion_query = substitute(assertion.get("query", {"match_all": {}}), session)
+            query = {"size": 0, "query": assertion_query}
             if kind == "es_cardinality":
                 query["aggs"] = {"value": {"cardinality": {"field": assertion["field"]}}}
-            result = elastic_search(query, index)
-            if kind == "es_cardinality":
-                value = result.get("aggregations", {}).get("value", {}).get("value", 0)
+                value = elastic_search(query, index).get("aggregations", {}).get("value", {}).get("value", 0)
             else:
-                total = result.get("hits", {}).get("total", 0)
-                value = total.get("value", 0) if isinstance(total, dict) else total
+                value = None
+                if scope is not None:
+                    status, result = http_json(f"{ELASTICSEARCH_URL}/{index}/_search?allow_no_indices=true", "POST",
+                                               {"size": 0, "query": {"bool": {"filter": [assertion_query, scope]}}})
+                    if status < 400:
+                        value, evidence["view_scoped"] = hit_total(result), True
+                if value is None:
+                    value = hit_total(elastic_search(query, index))
             evidence["assertions"][assertion["id"]] = value >= assertion.get("minimum", 1)
         elif kind == "trace_from_action" and trace_id:
             trace_filter = [{"match_phrase": {"trace.id": str(trace_id)}}]
@@ -770,6 +885,8 @@ def record_action(session, action):
         action["details"] = {**(action.get("details") or {}), "incident_offset_minutes": round(onset_age, 1)}
     if action.get("type") == "check_in_answered":
         record_check_in_answer(session, action.get("details") or {})
+    if action.get("type") not in IGNORED_ACTIONS:
+        track_view(session, action)
     evidence = action_evidence(session, action)
     earned = restore_state(session) if session["mode"] in {"guided", "challenge"} else None
     evaluation = evaluate_action(session, action, evidence, earned_state=earned)
@@ -784,7 +901,7 @@ def record_action(session, action):
     if (session["pending_command"] or {}).get("step_id") in evaluation["goals_progressed"]:
         session["pending_command"] = None
     session["actions"].append({"action": action, "evaluation": evaluation})
-    emit(session, action, evaluation)
+    emit(session, action, evaluation, evidence)
     if guided_practice_complete(session) and not session["feedback"]:
         # The answer goal is a terminal marker in guided practice. Close it without recording an
         # answer that the learner never submitted.
@@ -1048,21 +1165,9 @@ class Handler(BaseHTTPRequestHandler):
                     command = next_command(session)
                     send_frame(connection, json.dumps(command or {"message_type": "complete", "session_id": session_id}))
                 elif message_type == "hint":
-                    if not session["policy"].get("allow_hints", True):
-                        send_frame(connection, json.dumps({"message_type": "hint", "step_id": None, "level": 0, "text": "Hints are off in challenge mode. The debrief shows the reference route afterwards."}))
-                        continue
-                    index = current_step_index(session)
-                    goals = playbook_goals(session)
-                    if index < len(goals):
-                        step = goals[index]
-                        hints = step.get("hints", [])
-                        if not hints:
-                            send_frame(connection, json.dumps({"message_type": "hint", "step_id": step["id"], "level": 0, "text": "No additional hint is available for this goal."}))
-                            continue
-                        level = min(session["hint_level"].get(step["id"], 0), len(hints) - 1)
-                        session["hint_level"][step["id"]] = level + 1
-                        session["assistance"]["hints"] += 1
-                        send_frame(connection, json.dumps({"message_type": "hint", "step_id": step["id"], "level": level + 1, "text": substitute(hints[level], session)}))
+                    hint = next_hint(session)
+                    if hint:
+                        send_frame(connection, json.dumps(hint))
                 elif message_type == "pause":
                     session["paused"] = True
                     send_frame(connection, json.dumps({"message_type": "status", "paused": True}))

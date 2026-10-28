@@ -526,6 +526,7 @@ function startIncidentCoach() {
     await adapter.initialize();
     client = new IncidentSessionClient(config);
     client.stepClock = () => stepClock.stepId ? {step_id: stepClock.stepId, seconds_active: stepClock.seconds} : null;
+    client.currentView = () => { try { return adapter.currentView(); } catch (_error) { return null; } };
     client.onCheckIn = showCheckIn;
     client.onStatus = message => coach.toast(message);
     client.onError = message => coach.toast(message, true);

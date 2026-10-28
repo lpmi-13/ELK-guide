@@ -746,6 +746,49 @@ class KibanaAdapter {
     return {hash, split, params, app, global};
   }
 
+  // The visible candidate for target `name` whose text names `text` (a service, transaction, span,
+  // chart value, entity or alert), else `fallback`. A pack names what to pick; a generic selector's
+  // first match would be whichever row happens to come first.
+  targetNaming(name, text, fallback) {
+    if (text == null || text === '') return fallback;
+    const wanted = String(text).toLowerCase();
+    const candidates = (this.registry?.targets?.[name] || []).flatMap(selector => Array.from(document.querySelectorAll(selector)));
+    return candidates.find(element => element.getClientRects().length && element.textContent.trim().toLowerCase().includes(wanted)) || fallback;
+  }
+
+  // What the learner is looking at, for the service to check evidence against: the time range, the
+  // query (KQL or ES|QL) and the filter pills, read from the URL state Kibana keeps however they were
+  // set (`_g`/`_a`, or APM's rangeFrom/rangeTo/kuery parameters). Null when the page carries none.
+  currentView() {
+    const hash = location.hash || '';
+    const split = hash.indexOf('?');
+    const raw = split < 0 ? (location.search || '').replace(/^\?/, '') : hash.slice(split + 1);
+    const params = new Map(raw.split('&').filter(Boolean).map(part => {
+      const at = part.indexOf('=');
+      let value = at < 0 ? '' : part.slice(at + 1);
+      try { value = decodeURIComponent(value); } catch (_error) { /* keep it encoded */ }
+      return [at < 0 ? part : part.slice(0, at), value];
+    }));
+    const rison = key => {
+      if (!params.get(key)) return {};
+      try { return KibanaRison.parse(params.get(key)) || {}; } catch (_error) { return null; }
+    };
+    const app = rison('_a');
+    const global = rison('_g');
+    if (!app || !global) return null;
+    const time = global.time || (params.has('rangeFrom') ? {from: params.get('rangeFrom'), to: params.get('rangeTo')} : null);
+    const esql = typeof app.query?.esql === 'string' ? app.query.esql : null;
+    const language = esql != null ? 'esql' : app.query?.language === 'lucene' ? 'lucene' : 'kql';
+    const query = esql ?? (typeof app.query?.query === 'string' ? app.query.query : params.get('kuery') || '');
+    const filters = [...(global.filters || []), ...(app.filters || [])].map(filter => {
+      const meta = filter.meta || {};
+      const value = meta.type === 'phrases' || meta.type === 'range' ? meta.params : meta.params?.query ?? meta.value;
+      return {field: meta.key || null, type: meta.type || 'phrase', value: value ?? null, negate: Boolean(meta.negate), disabled: Boolean(meta.disabled)};
+    });
+    if (!time && !query && !filters.length) return null;
+    return {app: location.pathname.match(/\/app\/([^/?#]+)/)?.[1] || '', time_from: time?.from || null, time_to: time?.to || null, language, query, filters};
+  }
+
   // Put Discover's search back to `state` (see the service's restore_state): drop whatever query and
   // filter pills are applied now and apply the ones the completed steps established instead. The
   // window is kept unless `includeTime` asks for it too (it is only reset when the query and filters
@@ -782,6 +825,20 @@ class KibanaAdapter {
     }
     const time = state.time || state.baseline_time;
     if (includeTime && time?.from) global.time = {from: time.from, to: time.to || 'now'};
+    this.writeDiscoverUrlState(current, app, global);
+    return true;
+  }
+
+  // Run an ES|QL query through Discover's URL state. 9.5's ES|QL editor is Monaco, which ignores
+  // synthetic typing, so the coach points at the editor and applies the query this way instead.
+  runEsql(query) {
+    const current = this.readDiscoverUrlState();
+    if (!current) return false;
+    this.writeDiscoverUrlState(current, {...current.app, dataSource: {type: 'esql'}, query: {esql: query}}, current.global);
+    return true;
+  }
+
+  writeDiscoverUrlState({hash, split, params}, app, global) {
     const encode = value => encodeURIComponent(KibanaRison.encode(value)).replace(/%(21|27|28|29|2A|2C|3A|40|24)/gi, escaped => decodeURIComponent(escaped));
     const replaced = new Map([['_a', encode(app)], ['_g', encode(global)]]);
     const rebuilt = params.map(([name, value]) => replaced.has(name)
@@ -790,7 +847,6 @@ class KibanaAdapter {
     for (const [name, value] of replaced) if (!params.some(([key]) => key === name)) rebuilt.push(`${name}=${value}`);
     const next = `${hash.slice(0, split)}?${rebuilt.join('&')}`;
     if (next !== hash) location.hash = next;
-    return true;
   }
 
   // Field names the query explainer can check a query against: the Discover sidebar's field rows

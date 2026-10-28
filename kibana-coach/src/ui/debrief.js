@@ -19,6 +19,7 @@ class IncidentDebrief {
   static outcomes = {
     independent: {label: 'On your own', note: 'full credit'},
     hinted: {label: 'With a hint', note: 'half credit'},
+    told: {label: 'Hint gave the answer', note: 'no credit'},
     shown: {label: 'Shown to you', note: 'no credit'},
     incomplete: {label: 'Not completed', note: 'no credit'},
   };
@@ -63,7 +64,7 @@ class IncidentDebrief {
               <span class="guided-score-ticks" aria-hidden="true">${Array.from({length: 6}, () => '<i></i>').join('')}</span>
             </div>
             <div class="guided-score-labels" aria-hidden="true">${Array.from({length: 6}, (_, index) => `<span>${index * 20}%</span>`).join('')}</div>
-            <p class="guided-score-rule">Per phase: ${phaseCredit}% without help · ${hintCredit}% with hints only · 0% with Show me</p>
+            <p class="guided-score-rule">Per phase: ${phaseCredit}% without help · ${hintCredit}% with hints that leave the answer to you · 0% once a hint or Show me gives it</p>
           </section>
           <section class="gd-steps-section" hidden>
             <h3>Step by step</h3>
@@ -208,7 +209,7 @@ IncidentDebrief.styles = `
     @keyframes gd-step { from{opacity:0;transform:translateX(-8px)} }
     .gd-step.outcome-independent { --tone:#12a56b;--tone-soft:#12a56b1c; }
     .gd-step.outcome-hinted { --tone:#d98c00;--tone-soft:#d98c001f; }
-    .gd-step.outcome-shown { --tone:#1f78c1;--tone-soft:#1f78c11c; }
+    .gd-step.outcome-shown, .gd-step.outcome-told { --tone:#1f78c1;--tone-soft:#1f78c11c; }
     .gd-step-marker { flex:0 0 auto;width:10px;height:10px;border-radius:50%;background:var(--tone);box-shadow:0 0 0 4px var(--tone-soft); }
     .gd-step-text { flex:1;min-width:0;display:flex;flex-direction:column;gap:2px; }
     .gd-step-title { color:#17304a;font-weight:600; }

@@ -245,24 +245,43 @@ class KibanaActionObserver {
 
   onKey(event) {
     if (this.adapter.performing || event.key !== 'Enter') return;
-    if (event.target === this.adapter.resolve('kibana.query_bar') || event.target === this.adapter.resolve('kibana.esql_editor')) {
-      const esql = event.target === this.adapter.resolve('kibana.esql_editor');
+    if (event.target === this.adapter.resolve('kibana.query_bar')) {
       const query = event.target.value;
-      setTimeout(() => this.reportWithCount({type: esql ? 'esql_submitted' : 'query_submitted', details: {query, language: esql ? 'esql' : 'kql'}, state_after: esql ? {query, query_language: 'esql'} : {...this.searchState(), query, query_language: 'kql'}}), 50);
+      setTimeout(() => this.reportSearch(query), 50);
+    } else if ((event.ctrlKey || event.metaKey) && event.target.closest?.("[data-test-subj='ESQLEditor']")) {
+      // The ES|QL editor runs its query on Ctrl/Cmd+Enter (plain Enter is a new line).
+      setTimeout(() => this.reportSearch(), 50);
     }
+  }
+
+  // Report a submitted search once Discover settles, as KQL or ES|QL by what Discover's URL state
+  // says then: in 9.5 the ES|QL editor is Monaco (no textarea value to read) and shares the KQL
+  // bar's querySubmitButton, so neither the clicked control nor the editor tells them apart.
+  reportSearch(kqlQuery = null) {
+    this.resultCount().then(count => {
+      const view = this.adapter.currentView?.();
+      const esql = view?.language === 'esql';
+      const query = esql ? view.query : (kqlQuery ?? this.queryValue());
+      const action = esql
+        ? {type: 'esql_submitted', details: {query, language: 'esql'}, state_after: {query, query_language: 'esql'}}
+        : {type: 'query_submitted', details: {query, language: 'kql'}, state_after: {...this.searchState(), query, query_language: 'kql'}};
+      if (count != null) action.state_after.result_count = count;
+      this.report(action);
+    });
   }
 
   onClick(event) {
     if (this.adapter.performing) return;
     const node = event.target.closest?.('[data-test-subj]');
     const subject = node?.getAttribute('data-test-subj') || '';
-    if (subject === 'querySubmitButton') {
-      setTimeout(() => this.reportWithCount({type: 'query_submitted', details: {query: this.queryValue()}, state_after: this.searchState()}), 50);
-    } else if (/esql.*(submit|run)/i.test(subject)) {
-      const query = this.adapter.resolve('kibana.esql_editor')?.value || '';
-      setTimeout(() => this.reportWithCount({type: 'esql_submitted', details: {query, language: 'esql'}, state_after: {query, query_language: 'esql'}}), 50);
-    } else if (/queryLanguage/i.test(subject)) {
-      setTimeout(() => this.report({type: 'query_language_changed', details: {language: this.adapter.resolve('kibana.esql_editor') ? 'esql' : 'kql'}, state_after: {query_language: this.adapter.resolve('kibana.esql_editor') ? 'esql' : 'kql'}}), 100);
+    if (subject === 'querySubmitButton' || /esql.*(submit|run)/i.test(subject)) {
+      setTimeout(() => this.reportSearch(), 50);
+    } else if (/queryLanguage|select-text-based-language/i.test(subject)) {
+      // 9.5's "Query in ES|QL" button; the URL state names the language once Discover has switched.
+      setTimeout(() => {
+        const language = this.adapter.currentView?.()?.language || (this.adapter.resolve('kibana.esql_editor') ? 'esql' : 'kql');
+        this.report({type: 'query_language_changed', details: {language}, state_after: {query_language: language}});
+      }, 1500);
     } else if (/superDatePickerApplyTimeButton|euiQuickSelect__applyButton|dateRangePicker\w*Apply|dateRangePickerPresetItem|CommonlyUsed|superDatePickerQuickMenu/i.test(subject)) {
       // A window was applied — via custom-range Apply (`dateRangePickerCustomRangeApplyButton`),
       // or a preset / recent quick pick. In Kibana 9.5.2 both the Presets and Recent lists render

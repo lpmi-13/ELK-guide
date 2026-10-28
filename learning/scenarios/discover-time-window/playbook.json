@@ -145,7 +145,7 @@
         {"title": "Affected endpoint", "detail": "Isolated the affected endpoint ${param.incident.route}."},
         {"title": "Confirming", "detail": "Confirmed ${param.incident.status} and ${param.incident.route} together in the same event."}
       ],
-      "answer": {"finding": "${truth.finding}", "scope": "${truth.scope}", "conclusion": "${truth.conclusion}", "evidence_refs": "signal,corroboration", "evidence": "The status-code and url.path top values, plus the event we opened, connect ${var.finding_phrase} to ${truth.scope}."}
+      "answer": {"finding": "${truth.finding}", "scope": "${truth.scope}", "conclusion": "${truth.conclusion}", "evidence": "The status-code and url.path top values, plus the event we opened, connect ${var.finding_phrase} to ${truth.scope}."}
     }
   }
 }

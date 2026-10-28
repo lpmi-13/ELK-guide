@@ -1,1 +1,1 @@
-{"schema_version":2,"id":"active-alert-triage-playbook","extends":"alerts.json","variables":{}}
+{"schema_version":2,"id":"active-alert-triage-playbook","extends":"alerts.json","variables":{"alert":"Fulfilment customer failures"}}

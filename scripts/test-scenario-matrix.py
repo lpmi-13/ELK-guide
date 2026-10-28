@@ -31,6 +31,17 @@ COMMAND_OBSERVATIONS = {
 }
 
 
+def truth_value(validator, scenario):
+    """The value a validator expects: its own ``value``, or the truth path it names (first of a list)."""
+    truth_key = validator.get("value_from_truth") or validator.get("values_from_truth")
+    if not truth_key:
+        return validator.get("value", (validator.get("values") or [None])[0])
+    value = scenario["truth"]
+    for part in truth_key.split("."):
+        value = value[part]
+    return value[0] if isinstance(value, list) else value
+
+
 def action_for(goal, scenario):
     route = goal["accepts"][0]
     accepted = route["action"] if isinstance(route["action"], list) else [route["action"]]
@@ -54,7 +65,7 @@ def action_for(goal, scenario):
                 values = value if isinstance(value, list) else [value]
             details["query"] = " ".join([*validator.get("fields", []), *map(str, values)])
         elif kind in {"filter_contains", "filter_excludes"}:
-            value = validator.get("value")
+            value = validator.get("value", (validator.get("values") or [None])[0])
             if validator.get("value_from_truth"):
                 value = scenario["truth"]
                 for part in validator["value_from_truth"].split("."):
@@ -62,6 +73,8 @@ def action_for(goal, scenario):
             details.update({"field": validator["field"], "value": value, "negate": kind == "filter_excludes"})
         elif kind in {"inspected", "selected_entity"}:
             details.update({"entity_type": validator.get("entity_type"), "id": validator.get("value", "representative")})
+        elif kind == "selected_value":
+            details[validator.get("field") or "value"] = truth_value(validator, scenario)
         elif kind == "detail_equals":
             value = validator.get("value")
             truth_key = validator.get("value_from_truth") or validator.get("values_from_truth")

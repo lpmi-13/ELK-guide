@@ -90,7 +90,7 @@ class GuidedFeedbackTests(unittest.TestCase):
         self.assertEqual(feedback["total"], 25)
         self.assertEqual(feedback["completion"], 100)
         self.assertEqual(feedback["assistance"], {
-            "hints": 3, "demonstrated_steps": 2, "hinted_steps": 2,
+            "hints": 3, "demonstrated_steps": 2, "hinted_steps": 2, "told_steps": 0,
             "shown_steps": 1, "independent_steps": 0, "step_count": 2,
         })
 
@@ -108,6 +108,28 @@ class GuidedFeedbackTests(unittest.TestCase):
             {"action": {"type": "step_demonstrated", "details": {"step_id": "inspect"}}},
         ]
         self.assertEqual(server.guided_feedback(self.session)["total"], 25)
+
+    def test_a_hint_that_names_the_answer_earns_no_credit(self):
+        self.session["hint_level"] = {"scope": 3, "inspect": 1}
+        self.session["hint_revealed"] = {"scope": True}
+        feedback = server.guided_feedback(self.session)
+        self.assertEqual([(step["id"], step["outcome"]) for step in feedback["steps"]], [("scope", "told"), ("inspect", "hinted")])
+        self.assertEqual(feedback["total"], 25)
+        self.assertEqual(feedback["assistance"]["told_steps"], 1)
+
+    def test_the_hint_ladder_records_when_it_gives_the_answer_away(self):
+        goals = self.session["playbook"]["goals"]
+        goals[0].update({"hints": ["Start with when the problem was reported.", "Use the date picker at the top of Discover.",
+                                   "Set the range to the last 10 minutes; Show me can do it for you."],
+                         "reference_action": {"command": "set_time_range", "arguments": {"from": "now-10m", "to": "now"}}})
+        self.session.update({"completed_goals": set(), "hint_level": {}, "hint_revealed": {}, "assistance": {"hints": 0, "demonstrated_steps": 0},
+                             "policy": server.MODE_POLICIES["guided"]})
+        levels = [server.next_hint(self.session) for _ in range(3)]
+        self.assertEqual([hint["level"] for hint in levels], [1, 2, 3])
+        # Only the bottom-out hint names the window, and only it costs the step its credit.
+        self.assertEqual(self.session["hint_revealed"], {"scope": True})
+        self.session["completed_goals"] = {"scope"}
+        self.assertEqual(server.guided_feedback(self.session)["steps"][0]["outcome"], "told")
 
     def test_credit_scales_with_practice_step_count(self):
         for step_count, expected in ((3, 83.3), (4, 87.5), (5, 90)):

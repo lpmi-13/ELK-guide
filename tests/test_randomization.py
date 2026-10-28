@@ -289,8 +289,9 @@ class RandomizationTests(unittest.TestCase):
                     with self.subTest(pack=pack, seed=seed, mode=mode):
                         self.assertEqual(self.server.substitute(scope["reference_action"]["arguments"], session)["from"], expected_from)
                         self.assertEqual(command["value"]["from"], expected_from)
-                        self.assertIn(str(offset), rendered_hints[0])
                         self.assertIn(expected_words, rendered_hints[-1])
+                        # Only the bottom-out hint names the window; the earlier ones leave it to the learner.
+                        self.assertFalse(self.server.reveals_answer(" ".join(rendered_hints[:-1]), [expected_words]))
                         if onset is not None:
                             # The copy sends the learner to the histogram's rise; the report only says
                             # when the failures were noticed, which is after they began.
@@ -310,9 +311,11 @@ class RandomizationTests(unittest.TestCase):
                             self.assertIn("five-minute boundary", command["narration"])
                             self.assertEqual(command["reasoning"], "")
                         else:
+                            # Guided practice states when the problem was noticed and leaves the window
+                            # to the learner; Show me's walkthrough names it.
                             self.assertIn(str(offset), command["narration"])
-                            self.assertIn(expected_words, command["narration"])
-                            self.assertIn("five-minute boundary", command["narration"])
+                            self.assertFalse(self.server.reveals_answer(command["narration"], [expected_words]))
+                            self.assertIn(expected_words, command["walkthrough"]["narration"])
                             self.assertEqual(command["walkthrough"]["reasoning"], "")
                             self.assertEqual(command["walkthrough"]["narration"],
                                              self.server.substitute(scope["demonstration"]["narration"], session))

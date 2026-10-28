@@ -246,6 +246,37 @@ def validate_detail_not(session, action, _evidence, validator):
     return not any(_same(actual, item, validator.get("case_sensitive", False)) for item in _expected_values(session, validator))
 
 
+# Where an entity pick lands in an observation: the clicked row's text (``value``) or the argument the
+# coach used when it performed the pick.
+SELECTION_DETAILS = ("value", "service", "metric", "type", "transaction", "span", "alert", "id", "name")
+
+
+def validate_selected_value(session, action, _evidence, validator):
+    """What the learner picked — a service, transaction, span, metric, entity, alert or chart value —
+    names the expected one (as whole words, so the clicked row may carry extra text)."""
+    details = _details(action)
+    keys = [validator["field"]] if validator.get("field") else SELECTION_DETAILS
+    picked = [details.get(key) for key in keys if isinstance(details.get(key), (str, int, float)) and not isinstance(details.get(key), bool)]
+    return any(_mentions(item, expected) for item in picked for expected in _expected_values(session, validator))
+
+
+def validate_result_contains(session, _action, evidence, validator):
+    """The ES|QL table the search showed has the expected value in a cell (in ``column`` when one is
+    named), so the learner's own query surfaced it. When the service could not run the query the
+    table is unknown, which is not a failure."""
+    table = evidence.get("esql_result")
+    if not isinstance(table, dict):
+        return True
+    columns = table.get("columns") or []
+    wanted = [index for index, name in enumerate(columns) if not validator.get("column") or _same(name, validator["column"])]
+    cells = []
+    for row in table.get("values") or []:
+        for index in wanted:
+            cell = row[index] if index < len(row) else None
+            cells.extend(cell if isinstance(cell, list) else [cell])
+    return any(cell is not None and _same(cell, expected) for cell in cells for expected in _expected_values(session, validator))
+
+
 def validate_app(_session, action, _evidence, validator):
     app = _details(action).get("app") or _after(action).get("app")
     return _same(app, validator.get("app"))
@@ -273,6 +304,8 @@ VALIDATORS = {
     "state_equals": validate_state_equals,
     "inspected": validate_inspected,
     "selected_entity": validate_inspected,
+    "selected_value": validate_selected_value,
+    "result_contains": validate_result_contains,
     "app_is": validate_app,
     "answer_submitted": validate_answer_submitted,
     "resource_isolated": validate_result_assertion,
@@ -518,12 +551,28 @@ def _normalized(value):
     return " ".join(_ANSWER_NOISE.sub(" ", str(value if value is not None else "")).casefold().split())
 
 
+_NUMBER = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?")
+
+
 def _mentions(text, phrase):
-    """``phrase`` appears in ``text`` as whole words (a trailing plural "s" allowed: "500s")."""
+    """``phrase`` appears in ``text`` as whole words (a trailing plural "s" allowed: "500s"). A number
+    may carry a unit ("210ms", "72%") but is never part of a longer one ("2" is not in "2.5" or "12")."""
     text, phrase = _normalized(text), _normalized(phrase)
     if not phrase:
         return False
+    if re.fullmatch(r"\d+(?:\.\d+)?", phrase):
+        return re.search(rf"(?<![\w.-]){re.escape(phrase)}(?!\d|\.\d)", text) is not None
     return re.search(rf"(?<![\w./-]){re.escape(phrase)}s?(?![\w/-])", text) is not None
+
+
+def _numbers(text):
+    return [float(item) for item in _NUMBER.findall(str(text if text is not None else "").replace(",", ""))]
+
+
+def _number_matches(actual, expected, tolerance):
+    """A stated number ("about 220 rps") is within ``tolerance`` of the expected one."""
+    target = _numbers(expected)
+    return bool(target) and any(math.isclose(value, target[0], abs_tol=tolerance, rel_tol=0) for value in _numbers(actual))
 
 
 def _accepted(truth, key, expected):
@@ -577,10 +626,7 @@ def _answer_matches(actual, expected, field, context=None):
     context = context or {}
     kind = field.get("kind", "string")
     if kind == "number":
-        try:
-            return math.isclose(float(actual), float(expected), abs_tol=float(field.get("tolerance", 0)), rel_tol=0)
-        except (TypeError, ValueError):
-            return False
+        return _number_matches(actual, expected, float(field.get("tolerance", 0)))
     if kind == "string_list":
         actual_values = actual if isinstance(actual, list) else re.split(r"\s*,\s*", str(actual or ""))
         expected_values = expected if isinstance(expected, list) else [expected]
@@ -599,6 +645,46 @@ def _answer_matches(actual, expected, field, context=None):
     return not hedged and len(_normalized(actual).split()) <= longest + 6 and any(_mentions(actual, item) for item in accepted)
 
 
+# Reference-action arguments that are a step's answer (what to choose), as opposed to where to look
+# (a field, a target, a query language or an operator).
+ANSWER_ARGUMENTS = ("value", "from", "service", "metric", "type", "transaction", "span")
+
+
+def _window_phrases(value):
+    """How a relative window ("now-15m") reads in prose: "15 minutes", "15-minute", "15m"."""
+    match = re.fullmatch(r"now-(\d+)([mh])", str(value or "").strip())
+    if not match:
+        return []
+    amount, unit = int(match.group(1)), match.group(2)
+    minutes = amount * 60 if unit == "h" else amount
+    phrases = [f"{minutes} minute", f"{minutes}-minute", f"{minutes} min", f"{minutes}m"]
+    if unit == "h":
+        phrases += [f"{amount} hour", f"{amount}-hour", f"{amount}h"] + (["an hour", "one hour"] if amount == 1 else [])
+    return phrases
+
+
+def answer_phrases(truth, arguments):
+    """What would give a step's answer away: the finding (and its accepted phrasings) and the step's
+    reference-action answer arguments, with a relative window spelled out as prose would say it."""
+    phrases = list(_accepted(truth, "finding", _lookup(truth, "answers.finding")))
+    if isinstance(arguments, dict):
+        for key in ANSWER_ARGUMENTS:
+            value = arguments.get(key)
+            if isinstance(value, (str, int, float)) and not isinstance(value, bool) and str(value).strip():
+                phrases += _window_phrases(value) if key == "from" else [value]
+    return phrases
+
+
+# "Noticed 9 minutes ago" is when the report came in (part of the brief), not a window to choose.
+_REPORTED_AGE = re.compile(r"\b\d+(?:\.\d+)?\s*(?:minutes?|mins?|hours?)\s+ago\b", re.IGNORECASE)
+
+
+def reveals_answer(text, phrases):
+    """Whether coach text names the step's answer, so following it is not the learner's own work."""
+    text = _REPORTED_AGE.sub(" ", str(text or ""))
+    return any(_mentions(text, phrase) for phrase in phrases)
+
+
 def established_assertions(session):
     """Assertions a completed goal's accepted route checks: evidence the learner reached in Kibana."""
     completed = session.get("completed_goals", set())
@@ -615,6 +701,7 @@ def _answer_graders(session, answer_schema, truth, answer):
     manifest = session.get("manifest", {})
     now = datetime.now(timezone.utc)
     kinds = {field["id"]: field.get("kind", "string") for field in answer_schema.get("fields", [])}
+    tolerances = {field["id"]: float(field.get("tolerance", 0)) for field in answer_schema.get("fields", [])}
     offset = _number(answer.get("client_utc_offset_minutes"))
 
     def base(key):
@@ -625,6 +712,8 @@ def _answer_graders(session, answer_schema, truth, answer):
         context = base(key)
         if kinds.get(key) == "window":
             return lambda text: _window_matches(text, context)
+        if kinds.get(key) == "number":
+            return lambda text: any(_number_matches(text, item, tolerances[key]) for item in context["accepted"])
         return lambda text: any(_mentions(text, item) for item in context["accepted"])
 
     def context(field):
@@ -809,6 +898,8 @@ def guided_feedback(session):
         if goal.get("reference_action", {}).get("command") not in {"request_answer", "request_diagnosis"}
     }
     hinted_ids = {step_id for step_id, count in session.get("hint_level", {}).items() if count and step_id in practice_ids}
+    # A hint that named the step's answer leaves only the clicking to the learner: no credit, like Show me.
+    told_ids = {step_id for step_id, told in session.get("hint_revealed", {}).items() if told and step_id in practice_ids}
     shown_ids = {
         (item.get("action", {}).get("details") or {}).get("step_id")
         for item in session.get("actions", [])
@@ -819,7 +910,7 @@ def guided_feedback(session):
     completed_ids = session["completed_goals"] & practice_ids
     helped_ids = hinted_ids | shown_ids
     independent_ids = completed_ids - helped_ids
-    hint_only_ids = (completed_ids & hinted_ids) - shown_ids
+    hint_only_ids = (completed_ids & hinted_ids) - shown_ids - told_ids
     total = round(100 * (len(independent_ids) + 0.5 * len(hint_only_ids)) / max(1, step_count), 1)
 
     def outcome(goal_id):
@@ -827,6 +918,8 @@ def guided_feedback(session):
             return "incomplete"
         if goal_id in shown_ids:
             return "shown"
+        if goal_id in told_ids:
+            return "told"
         return "hinted" if goal_id in hinted_ids else "independent"
 
     steps = []
@@ -851,6 +944,7 @@ def guided_feedback(session):
             "hints": assistance.get("hints", 0),
             "demonstrated_steps": assistance.get("demonstrated_steps", 0),
             "hinted_steps": len(hinted_ids),
+            "told_steps": len(told_ids - shown_ids),
             "shown_steps": len(shown_ids),
             "independent_steps": len(independent_ids),
             "step_count": step_count,

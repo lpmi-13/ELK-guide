@@ -30,6 +30,14 @@ globalThis.KibanaApplicationAdapters.push({
   name: 'discover',
   commands: new Set(['select_data_view', 'enter_kql', 'switch_query_language', 'enter_esql', 'edit_filter', 'remove_filter', 'disable_filter', 'add_column', 'remove_column', 'sort_column', 'expand_document', 'inspect_field', 'open_field_statistics', 'open_surrounding_documents']),
   async perform(command, host, coach, {timingScale = 1, signal} = {}) {
+    if (command.type === 'enter_esql' && document.querySelector("[data-test-subj='ESQLEditor'] .monaco-editor")) {
+      const value = typeof command.value === 'string' ? command.value : command.value?.query || '';
+      const editor = await waitForSelector("[data-test-subj='ESQLEditor']", 20000, signal);
+      await host.pointAt(editor, coach, timingScale, signal, 'Write the ES|QL pipeline here, then run it.', {showClick: false});
+      if (!host.runEsql(value)) throw new Error('Discover could not take the ES|QL query. Try this step again.');
+      await host.wait(2500, signal);
+      return {type: 'esql_submitted', details: {query: value, language: 'esql'}, state_after: {query: value, query_language: 'esql'}};
+    }
     if (command.type === 'enter_kql' || command.type === 'enter_esql') {
       const value = typeof command.value === 'string' ? command.value : command.value?.query || '';
       const input = await host.waitFor(command.type === 'enter_esql' ? 'kibana.esql_editor' : 'kibana.query_bar', 20000, signal);

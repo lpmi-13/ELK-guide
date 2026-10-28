@@ -22,7 +22,6 @@
         "finding": "${truth.finding}",
         "scope": "${truth.scope}",
         "conclusion": "${truth.conclusion}",
-        "evidence_refs": "signal,corroboration",
         "evidence": "HTTP ${param.incident.status} on ${param.incident.bad_version} versus 200 on ${param.incident.good_version} corroborates the version regression."
       }
     }
