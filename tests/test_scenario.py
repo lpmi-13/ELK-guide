@@ -54,9 +54,19 @@ class ScenarioTests(unittest.TestCase):
                     for check in checks:
                         if check["id"] not in {"seeded-signal", "signal", "corroboration"}:
                             continue
-                        message = check["query"]["term"]["message.keyword"]
-                        matching = sum(document.get("message") == message for document in documents)
+                        matching = sum(self.matches(document, check["query"]) for document in documents)
                         self.assertGreaterEqual(matching, check["minimum"], check["id"])
+
+    @classmethod
+    def matches(cls, document, query):
+        """Whether a seeded document matches an evidence query's terms (a term, or a bool of them)."""
+        if "bool" in query:
+            return all(cls.matches(document, clause) for clause in query["bool"].get("filter", []))
+        field, value = next(iter(query["term"].items()))
+        actual = document
+        for part in field.removesuffix(".keyword").split("."):
+            actual = actual.get(part) if isinstance(actual, dict) else None
+        return actual == value or str(actual) == str(value)
 
     def test_negative_seed_is_not_a_valid_run_seed(self):
         with self.assertRaisesRegex(ValueError, "non-negative"):

@@ -40,6 +40,8 @@ LAB_RETENTION = os.getenv("LAB_RETENTION", "8h")
 # can read the debrief beside the evidence — and a final step that opens another page (Explore in
 # Discover, a trace's logs) still finds it. DELETE /api/runs/<id> reclaims a run at once.
 COMPLETED_RETENTION_SECONDS = float(os.getenv("COMPLETED_RETENTION_SECONDS", "600"))
+METRIC_TAIL_SECONDS = int(os.getenv("METRIC_TAIL_SECONDS", str(3 * 3600)))
+METRIC_TAIL_INTERVAL_SECONDS = 30
 LAB_ILM_POLICY = "lab-retention"
 LAB_INDEX_TEMPLATE = "lab-lifecycle"
 LAB_INDEX_PATTERNS = ["microservices-*", "tutorial-*", "scenario-*", "lab-*"]
@@ -765,12 +767,19 @@ def _companions_per_signal(manifest, application, generator, companion_index, co
     documents = []
     for position, signal_document in enumerate(signal_documents):
         caller = callers[id(signal_document)] if companion.get("parent") == "previous" else signal_document
-        started = datetime.fromisoformat(signal_document["@timestamp"]) + timedelta(milliseconds=5 * (companion_index + 1))
+        # `offset_ms` places a companion within the request, so a pack can lay out calls one after another.
+        started = datetime.fromisoformat(signal_document["@timestamp"]) + timedelta(milliseconds=int(companion.get("offset_ms", 5 * (companion_index + 1))))
         sequence = 2000 + companion_index * 1000 + position
         event = _deep_merge(_event_template(manifest, started, signal_document["trace"]["id"], sequence), template)
         if template.get("processor", {}).get("event") != "log":
             event["parent"] = {"id": _span_or_transaction_id(caller)}
         prepared = _prepare_application_event(event, application, template)
+        # Preparing a bare span points it at its own template's transaction, which no document carries;
+        # here it is a call the request made, so it hangs off the caller. An orphan draws APM's "the trace
+        # document is incomplete" over the waterfall (verified 9.5.2).
+        if prepared.get("processor", {}).get("event") == "span" and "parent" in event:
+            prepared["parent"] = event["parent"]
+            prepared["transaction"] = {"id": signal_document["transaction"]["id"]}
         _apply_realism(prepared, generator)
         _span_or_transaction_id(prepared)
         documents.append(prepared)
@@ -780,10 +789,21 @@ def _companions_per_signal(manifest, application, generator, companion_index, co
     return documents
 
 
+def _seed_anchor(manifest):
+    """The instant a run's timestamps count back from: when it was created. The learning service names
+    the incident's moments ("noticed at 14:03") from the same instant, so they match the data to the
+    second rather than drifting by however long the space and saved objects took to set up."""
+    try:
+        anchor = datetime.fromisoformat(str(manifest.get("created_at")))
+    except ValueError:
+        return datetime.now(timezone.utc)
+    return anchor if anchor.tzinfo else anchor.replace(tzinfo=timezone.utc)
+
+
 def generate_seeded_events(manifest):
     profile = manifest["scenario"].get("provisioning", {}).get("seeded_events", {})
     generator = random.Random(manifest["seed"])
-    now = datetime.now(timezone.utc)
+    now = _seed_anchor(manifest)
     signal_count = int(profile.get("signal_count", 36))
     noise_count = int(profile.get("noise_count", 72))
     signal = _substitute(profile.get("signal", {}), manifest)
@@ -815,7 +835,10 @@ def generate_seeded_events(manifest):
     signal_documents = []
     for sequence in range(signal_count):
         timestamp = now - timedelta(seconds=generator.randint(newest, oldest))
-        trace_id = representative_trace if sequence == 0 else hashlib.md5(f"{manifest['run_id']}:signal:{sequence // 2}".encode()).hexdigest()
+        # Log rows pair up as one request's two lines. An APM trace has one root, though: two transactions
+        # sharing a trace.id double its spans and draw "the trace document is incomplete" (verified 9.5.2).
+        trace_key = sequence if application == "apm" else sequence // 2
+        trace_id = representative_trace if sequence == 0 else hashlib.md5(f"{manifest['run_id']}:signal:{trace_key}".encode()).hexdigest()
         event = _deep_merge(_event_template(manifest, timestamp, trace_id, sequence), signal)
         prepared = _prepare_application_event(event, application, signal)
         _apply_realism(prepared, generator)
@@ -846,6 +869,38 @@ def generate_seeded_events(manifest):
     return documents
 
 
+def _metric_tail(manifest, documents, application, now):
+    """Readings that keep every host and pod reporting for the life of the run.
+
+    The Infrastructure inventory reads only about the last minute (verified 9.5.2: a host whose newest
+    metric is older than that comes back null, which it draws as 0%), and seeded documents stop when the
+    run is provisioned. So without these, every entity falls to 0% a minute later, the outlier included.
+    Each entity repeats its latest reading from just before now to well beyond any session; queries end
+    at now, so a reading stays out of view until its time comes. They go to the metrics stream only,
+    never the run's own index, so they change no evidence count. A reading a pack leaves out (a CPU pack's
+    memory) gets a healthy baseline, so a view of that metric doesn't read 0% either.
+    """
+    if application != "metrics":
+        return []
+    latest = {}
+    for document in documents:
+        if document.get("processor", {}).get("event") != "metric":
+            continue
+        entity = _lookup_nested(document, "kubernetes.pod.name") or _lookup_nested(document, "host.name")
+        if entity and (entity not in latest or document["@timestamp"] > latest[entity]["@timestamp"]):
+            latest[entity] = document
+    generator = random.Random(manifest["seed"])
+    tail = []
+    for offset in range(-60, METRIC_TAIL_SECONDS, METRIC_TAIL_INTERVAL_SECONDS):
+        timestamp = (now + timedelta(seconds=offset)).isoformat()
+        for document in latest.values():
+            reading = copy.deepcopy(document)
+            reading["@timestamp"] = timestamp
+            _healthy_baseline(reading, generator)
+            tail.append(reading)
+    return tail
+
+
 def bulk_seed(manifest):
     documents = generate_seeded_events(manifest)
     index = f"lab-{manifest['run_id']}"
@@ -860,6 +915,10 @@ def bulk_seed(manifest):
             data_streams.add(application_index)
             lines.append(json.dumps({"create": {"_index": application_index}}))
             lines.append(json.dumps(application_document, separators=(",", ":")))
+    for reading in _metric_tail(manifest, documents, application, datetime.now(timezone.utc)):
+        application_index, application_document = _application_document(reading, application, manifest)
+        lines.append(json.dumps({"create": {"_index": application_index}}))
+        lines.append(json.dumps(application_document, separators=(",", ":")))
     # Record these before indexing so lifecycle cleanup can also remove streams
     # created by a partially successful bulk request.
     update_run(manifest["run_id"], data_streams=sorted(data_streams))

@@ -103,10 +103,13 @@ class DeadEndTests(unittest.TestCase):
         # The coach's own performed actions are trusted.
         self.assertNotEqual(evaluator.evaluate_action(s, {"type": "filter_removed", "actor": "tutorial", "state_after": {"filters": []}}, {}, earned_state=earned)["outcome"], "dead_end")
 
-    def test_a_window_that_misses_the_incident_is_a_dead_end_only_after_scoping(self):
+    def test_a_window_that_misses_the_incident_is_a_dead_end_on_the_scope_step_and_after_it(self):
         narrow = {"from": "now-5m", "to": "now", "from_minutes": 5, "incident_offset_minutes": 12}
         before = session()
-        self.assertEqual(evaluator.evaluate_action(before, {"type": "time_range_changed", "details": narrow}, {}, server.restore_state(before))["outcome"], "observed")
+        result = evaluator.evaluate_action(before, {"type": "time_range_changed", "actor": "learner", "details": narrow}, {}, server.restore_state(before))
+        self.assertEqual((result["outcome"], result["reason_code"], result["step_id"]), ("dead_end", "window_misses_incident", "scope"))
+        # The coach's own windows are trusted.
+        self.assertEqual(evaluator.evaluate_action(before, {"type": "time_range_changed", "actor": "tutorial", "details": narrow}, {}, server.restore_state(before))["outcome"], "observed")
         after = session(completed={"scope"})
         result = evaluator.evaluate_action(after, {"type": "time_range_changed", "actor": "learner", "details": narrow}, {}, server.restore_state(after))
         self.assertEqual((result["outcome"], result["reason_code"]), ("dead_end", "window_excludes_incident"))
@@ -118,6 +121,148 @@ class DeadEndTests(unittest.TestCase):
         result = record(s, "filter_added", {"field": STATUS, "value": "503", "negate": False}, {"filters": [{"field": STATUS, "value": "503", "negate": False}], "result_count": 0})
         self.assertEqual(result["outcome"], "dead_end")
         self.assertNotIn("isolate", s["completed_goals"])
+
+
+def timed_session(mode="guided", completed=(), timing=None, created_minutes_ago=2, noticed=10):
+    """A session whose incident is in real time: created a couple of minutes ago, noticed ``noticed``
+    minutes before that, read by a learner in Kolkata (UTC+5:30)."""
+    from datetime import datetime, timedelta, timezone
+    s = session(mode, completed)
+    s["manifest"]["created_at"] = (datetime.now(timezone.utc) - timedelta(minutes=created_minutes_ago)).isoformat()
+    s["manifest"].setdefault("parameters", {})["timing"] = timing or {}
+    s["detected_offset_minutes"] = noticed
+    s["utc_offset_minutes"] = -330
+    # The learner began straight after the run was created: the report was then `noticed` minutes old.
+    s["briefing_read_at"] = s["manifest"]["created_at"]
+    return s
+
+
+def moments(s):
+    return evaluator.incident_moments(s["manifest"], s.get("detected_offset_minutes"))
+
+
+def move_incident_back(s, minutes):
+    """As if ``minutes`` had passed: the incident (and the run) moves that much further into the past."""
+    from datetime import datetime, timedelta
+    s["manifest"]["created_at"] = (datetime.fromisoformat(s["manifest"]["created_at"]) - timedelta(minutes=minutes)).isoformat()
+
+
+class WindowFeedbackTests(unittest.TestCase):
+    def test_relative_windows_are_named_as_the_picker_names_them(self):
+        names = {"now-15m": "the last 15 minutes", "now-1h": "the last hour", "now-24h": "the last 24 hours",
+                 "now-7d": "the last 7 days", "now/d": None, "2026-11-07T14:00:00.000Z": None}
+        for time_from, name in names.items():
+            self.assertEqual(server.relative_window_name(time_from), name, time_from)
+
+    def test_a_relative_window_from_a_stale_briefing_is_explained_at_once_in_clock_time(self):
+        s = timed_session()
+        noticed = moments(s)["noticed"]
+        result = record(s, "time_range_changed", {"from": "now-10m", "to": "now"}, actor="learner")
+        self.assertEqual((result["outcome"], result["reason_code"], result["step_id"]), ("dead_end", "window_misses_incident", "scope"))
+        start = server.clock_text(evaluator.parse_instant(result["window_start_at"]), s)
+        clock = server.clock_text(noticed, s)
+        self.assertEqual(clock, (noticed + __import__("datetime").timedelta(minutes=330)).strftime("%H:%M"))
+        self.assertEqual(result["headline"], f"Your window, the last 10 minutes, starts at {start}, after the report at {clock}.")
+        self.assertEqual(result["detail"], f"The report came in 12 minutes ago: time kept moving while you read. "
+                                           f"Choose a longer window, or type a start before {clock} so it stays put.")
+        self.assertNotIn("restore_time", result)  # on the scope step the learner chooses again
+        self.assertIn("time kept moving while you read", s["step_log"]["scope"]["dead_ends"][0]["note"])
+        # Choosing a longer relative window completes the step.
+        self.assertEqual(record(s, "time_range_changed", {"from": "now-30m", "to": "now"}, actor="learner")["goals_progressed"], ["scope"])
+
+    def test_time_moving_on_is_only_blamed_when_the_window_reached_the_moment_at_the_start(self):
+        # The report was 10 minutes old when the briefing was read; the last 5 minutes never reached it.
+        s = timed_session()
+        result = record(s, "time_range_changed", {"from": "now-5m", "to": "now"}, actor="learner")
+        clock = server.clock_text(moments(s)["noticed"], s)
+        self.assertEqual(result["detail"], f"The report came in 12 minutes ago. Choose a longer window, or type a start before {clock} so it stays put.")
+        self.assertNotIn("time kept moving", result["note"])
+
+    def test_a_fixed_start_that_misses_says_where_to_start(self):
+        s = timed_session()
+        late = server.iso_instant(moments(s)["noticed"] + __import__("datetime").timedelta(minutes=3))
+        result = record(s, "time_range_changed", {"from": late, "to": "now"}, actor="learner")
+        clock = server.clock_text(moments(s)["noticed"], s)
+        self.assertTrue(result["headline"].startswith("Your window starts at "))
+        self.assertEqual(result["detail"], f"Start it before {clock}.")
+
+    def test_a_challenge_explains_the_miss_only_in_its_debrief(self):
+        s = timed_session(mode="challenge")
+        s["policy"] = {"validate_timing": "debrief"}
+        result = record(s, "time_range_changed", {"from": "now-10m", "to": "now"}, actor="learner")
+        self.assertEqual(server.learner_evaluation(s, result), {"outcome": "recorded", "goals_progressed": [], "meaningful": False})
+        [detour] = evaluator.step_detours(s)
+        self.assertEqual((detour["id"], detour["dead_ends"]), ("scope", ["window missed the incident"]))
+        self.assertTrue(detour["notes"][0].startswith("Your window, the last 10 minutes, started at "))
+        self.assertIn("12 minutes earlier by then", detour["notes"][0])
+
+    def test_the_rise_is_not_dated_on_the_scope_card_but_is_in_the_debrief(self):
+        s = timed_session(timing={"noticed": 8, "onset": 11, "end": 5})
+        result = record(s, "time_range_changed", {"from": "now-10m", "to": "now"}, actor="learner")
+        self.assertEqual(result["reason_code"], "window_misses_incident")
+        self.assertTrue(result["headline"].endswith("after the rise in failures."), result["headline"])
+        self.assertEqual(result["detail"], "Find where the histogram rises, and start the window before it.")
+        self.assertIn(f"after the rise in failures at {server.clock_text(moments(s)['onset'], s)}", result["note"])
+
+    def test_a_relative_window_that_slides_past_the_incident_is_a_dead_end_once(self):
+        s = timed_session(completed={"scope"})
+        self.assertEqual(record(s, "time_range_changed", {"from": "now-15m", "to": "now"}, actor="learner")["outcome"], "observed")
+        self.assertEqual(record(s, "column_added", {"field": "x"}, actor="learner")["outcome"], "observed")
+        move_incident_back(s, 10)
+        result = record(s, "column_added", {"field": "y"}, actor="learner")
+        self.assertEqual((result["outcome"], result["reason_code"], result["step_id"]), ("dead_end", "window_slid_past_incident", "isolate"))
+        fixed = server.recommended_window_start(moments(s))
+        clock = server.clock_text(moments(s)["noticed"], s)
+        self.assertTrue(result["headline"].startswith("Your window, the last 15 minutes, now starts at "), result["headline"])
+        self.assertTrue(result["headline"].endswith(f"after the report at {clock}."))
+        self.assertIn(f"I'll set a fixed start of {server.clock_text(fixed, s)} so it stays put.", result["detail"])
+        self.assertEqual(result["restore_time"], {"from": server.iso_instant(fixed), "to": "now"})
+        self.assertEqual(evaluator.dead_end_labels(s["step_log"]["isolate"]), ["window slid past the incident"])
+        # Once per window: the next action isn't flagged again; a new window starts afresh.
+        self.assertEqual(record(s, "column_added", {"field": "z"}, actor="learner")["outcome"], "observed")
+        record(s, "time_range_changed", {"from": "now-20m", "to": "now"}, actor="learner")
+        move_incident_back(s, 10)
+        self.assertEqual(record(s, "column_added", {"field": "w"}, actor="learner")["reason_code"], "window_slid_past_incident")
+
+    def test_a_slide_does_not_matter_for_a_fixed_start_or_once_the_investigation_is_done(self):
+        fixed = timed_session(completed={"scope"})
+        record(fixed, "time_range_changed", {"from": server.iso_instant(moments(fixed)["noticed"] - __import__("datetime").timedelta(minutes=2)), "to": "now"}, actor="learner")
+        move_incident_back(fixed, 30)
+        self.assertEqual(record(fixed, "column_added", {"field": "x"}, actor="learner")["outcome"], "observed")
+        done = timed_session(completed={"scope", "isolate", "inspect"})
+        record(done, "time_range_changed", {"from": "now-15m", "to": "now"}, actor="learner")
+        move_incident_back(done, 10)
+        self.assertEqual(record(done, "column_added", {"field": "x"}, actor="learner")["outcome"], "observed")
+
+    def test_the_coach_is_told_when_a_relative_window_will_slide(self):
+        from datetime import timedelta
+        s = timed_session(completed={"scope"})
+        changed = action(s, "time_range_changed", {"from": "now-15m", "to": "now"})
+        with patch.object(server, "action_evidence", return_value={"assertions": {}}):
+            server.record_action(s, changed)
+        watch = server.window_watch(s, changed)
+        noticed = moments(s)["noticed"]
+        self.assertEqual(watch["from"], "now-15m")
+        self.assertAlmostEqual((evaluator.parse_instant(watch["slides_at"]) - (noticed + timedelta(minutes=16))).total_seconds(), 0, delta=1)
+        # Nothing to watch for a fixed start, or in a challenge.
+        self.assertIsNone(server.window_watch(s, {"type": "time_range_changed", "details": {"from": "2026-11-07T14:00:00.000Z", "to": "now"}}))
+        self.assertIsNone(server.window_watch({**s, "mode": "challenge"}, changed))
+        # When the watch goes off, the service confirms the slide, records it, and only once.
+        self.assertIsNone(server.window_check_reply(s))
+        move_incident_back(s, 10)
+        reply = server.window_check_reply(s)
+        self.assertEqual((reply["message_type"], reply["evaluation"]["reason_code"]), ("window_slid", "window_slid_past_incident"))
+        self.assertIn("restore_time", reply["evaluation"])
+        self.assertEqual(s["step_log"]["isolate"]["dead_ends"][0]["reason_code"], "window_slid_past_incident")
+        self.assertIsNone(server.window_check_reply(s))
+
+    def test_a_later_window_that_misses_puts_back_a_fixed_start(self):
+        s = timed_session(completed={"scope"})
+        result = record(s, "time_range_changed", {"from": "now-5m", "to": "now"}, actor="learner")
+        fixed = server.recommended_window_start(moments(s))
+        self.assertEqual(result["reason_code"], "window_excludes_incident")
+        self.assertEqual(result["restore_time"]["from"], server.iso_instant(fixed))
+        self.assertTrue(result["detail"].startswith(f"I'll set the window to start at {server.clock_text(fixed, s)}, before it."))
 
 
 class DriftTests(unittest.TestCase):
@@ -261,7 +406,7 @@ class RecordingTests(unittest.TestCase):
         s["answer"] = {}
         feedback = evaluator.score_session(s)
         self.assertEqual(feedback["step_detours"], [{"id": "isolate", "title": "Filter to the failing status code",
-                                                     "dead_ends": ["search with no results"],
+                                                     "dead_ends": ["search with no results"], "notes": [],
                                                      "drift": ["You filtered on a status code, but not the one that stood out in the top values."]}])
 
 

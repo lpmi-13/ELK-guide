@@ -1,10 +1,13 @@
 import hashlib
 import importlib.util
 import json
+import sys
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "learning-service" / "engine"))
+from contracts import expand_descriptor  # noqa: E402
 
 
 class ContractTests(unittest.TestCase):
@@ -62,7 +65,60 @@ class ContractTests(unittest.TestCase):
         self.assertIn("coach.beginWalkthrough(walkthrough)", content)
         self.assertNotIn("await readBeat(walkthrough.narration)", content)
         self.assertNotIn("await readBeat(walkthrough.reasoning)", content)
-        self.assertIn("[walkthrough.reasoning, walkthrough.evidence]", content)
+        # It ends on the same result card as a demonstration, which waits for the learner, and the card
+        # sets the reasoning under the finding rather than running the two together.
+        self.assertIn("await showResult(learning, controller.signal)", content)
+        self.assertNotIn("readBeat(learning.evidence)", content)
+        self.assertIn("why: command?.mode === 'guided' ? command.reasoning : ''", coach)
+
+    def test_every_demonstrated_step_highlights_what_its_result_card_talks_about(self):
+        # A result card that rings nothing leaves the learner to guess what it refers to, so every command
+        # a pack demonstrates must map to evidence, and only to registry targets that exist.
+        import re
+        adapter = (ROOT / "kibana-coach/src/kibana-adapter.js").read_text(encoding="utf-8")
+        registry = json.loads((ROOT / "kibana-coach/selectors/kibana-9.5.json").read_text())["targets"]
+        start = adapter.index("  defaultEvidenceFocus(command) {")
+        mapping = adapter[start:adapter.index("  async evidenceTargets(focus, signal) {")]
+        # findEvidence rings an added column directly.
+        mapped = set(re.findall(r"case '([a-z_]+)':", mapping)) | {"add_column"}
+        for name in re.findall(r"'(kibana\.[a-z_]+)'", mapping):
+            self.assertIn(name, registry)
+        catalog = json.loads((ROOT / "learning/catalog.json").read_text())
+        for entry in catalog["scenarios"]:
+            pack = ROOT / "learning" / entry["pack"]
+            playbook = expand_descriptor(ROOT / "learning", "playbook", json.loads((pack / "playbook.json").read_text()))
+            for goal in playbook["goals"]:
+                command = goal["reference_action"]["command"]
+                if command in {"request_answer", "request_diagnosis"}:
+                    continue
+                with self.subTest(pack=entry["id"], goal=goal["id"]):
+                    self.assertTrue(command in mapped or goal.get("demonstration", {}).get("evidence_focus"), command)
+
+    def test_no_demonstration_copy_hedges_about_what_is_on_screen(self):
+        # "should corroborate" tells the learner to look for something instead of showing it.
+        catalog = json.loads((ROOT / "learning/catalog.json").read_text())
+        for entry in catalog["scenarios"]:
+            pack = ROOT / "learning" / entry["pack"]
+            playbook = expand_descriptor(ROOT / "learning", "playbook", json.loads((pack / "playbook.json").read_text()))
+            for goal in playbook["goals"]:
+                evidence = goal.get("demonstration", {}).get("evidence", "")
+                with self.subTest(pack=entry["id"], goal=goal["id"]):
+                    self.assertNotRegex(evidence, r"\b(should (corroborate|align|identify|establish|pair)|the topology)\b")
+                    # A pack that forgets one of these would show the placeholder itself on the card.
+                    self.assertNotRegex(evidence, r"\$\{var\.(trace_evidence|inspect_evidence|row_evidence|log_evidence)\}")
+            for check in playbook["demonstration_summary"]["checks"]:
+                self.assertNotRegex(check["detail"], r"\bthe the\b")
+
+    def test_a_step_that_opens_another_page_tells_its_result_there(self):
+        content = (ROOT / "kibana-coach/src/content-script.js").read_text(encoding="utf-8")
+        self.assertIn("sessionStorage.setItem(carriedResultKey, JSON.stringify(learning));", content)
+        self.assertIn("await showResult(command, controller.signal);\n      coach.finishCommand(command);", content)
+
+    def test_the_coach_card_keeps_off_every_flyout_and_ringed_column(self):
+        coach = (ROOT / "kibana-coach/src/ui/coach-panel.js").read_text(encoding="utf-8")
+        self.assertIn("\"[data-test-subj='docViewerFlyout'], .euiFlyout\"", coach)
+        self.assertIn("guards.push(...this.evidenceColumnRects());", coach)
+        self.assertIn("[this.evidenceField, ...(this.evidenceFields || [])]", coach)
 
     def test_demonstration_step_is_goal_then_action_then_a_learner_paced_result(self):
         learning_service = (ROOT / "learning-service/server.py").read_text(encoding="utf-8")
@@ -74,7 +130,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("const pause = goalPause(command.narration);", content)
         # The result beat rings the evidence and waits for Continue; only then is the step reported,
         # so neither the next step nor the debrief can cover a result the learner is still reading.
-        self.assertIn("if (command.mode === 'demonstration' && action) await showResult(command, controller.signal);", content)
+        self.assertIn("if (command.mode === 'demonstration' && action && !leaving) await showResult(command, controller.signal);", content)
         self.assertLess(content.index("await showResult(command, controller.signal)"), content.index("client.sendAction(action, 'tutorial')"))
         self.assertIn("await coach.waitForAdvance(signal);", content)
         self.assertIn("adapter.closeTransientPopovers();", content)
@@ -135,7 +191,10 @@ class ContractTests(unittest.TestCase):
         self.assertIn("cubic-bezier(.4,.1,.6,.9)", coach)
         self.assertIn("this.typingIntervalMs = 70", adapter)
         self.assertIn("const range = this.relativeTimeRange(command.value)", adapter)
-        self.assertIn("await this.typeValue(number, range.amount, signal, coach)", adapter)
+        # A start date is typed into the date box as a learner would, then confirmed in the URL.
+        self.assertIn("if (start) return this.setAbsoluteStart(command, start, toggle, coach, timingScale, signal);", adapter)
+        self.assertIn("await this.typeValue(input, typed, signal, coach);", adapter)
+        self.assertIn("await this.typeValue(number, range.amount, signal, coach, {clearFirst: false})", adapter)
         self.assertIn("await this.typeValue(input, query, signal, coach)", adapter)
         self.assertIn("this.pointAt(number", adapter)
         self.assertIn("this.pointAt(unit", adapter)
@@ -168,11 +227,15 @@ class ContractTests(unittest.TestCase):
         learning_service = (ROOT / "learning-service/server.py").read_text(encoding="utf-8")
         gateway = (ROOT / "kibana-gateway/nginx.conf").read_text(encoding="utf-8")
 
-        self.assertIn("Date.now() - Number(minutesAgo || 0) * 60_000", briefing)
+        # The report's moments are clock times beside how long ago they were, from the instants the
+        # service sends, so they stay true however late the briefing is read.
+        self.assertIn("new Date(briefing.noticed_at)", briefing)
+        self.assertIn("`Noticed at ${this.clock(noticed)} (${this.ago(noticed)}).`", briefing)
+        self.assertIn("briefing.timed_facts", briefing)
+        self.assertIn("&utc_offset=${new Date().getTimezoneOffset()}", client)
         self.assertIn("setTimeout(dismiss, duration)", briefing)
         self.assertIn("dialog.showModal()", briefing)
         self.assertIn("briefing.summary", briefing)
-        self.assertIn("Noticed ${briefing.detected_offset_minutes} minutes ago", briefing)
         self.assertIn("briefing.impact", briefing)
         self.assertNotIn("briefing.environment", briefing)
         self.assertNotIn("briefing.owner", briefing)
@@ -215,9 +278,9 @@ class ContractTests(unittest.TestCase):
         self.assertIn("trace.id", trace_step["narration"])
         self.assertIn('const traceQuery = `scenario.id:', adapter)
         self.assertIn("replace the service filter with this trace ID", adapter)
-        # The demonstration explains its motive before acting; guided Show me can still
-        # use the learning card when the learner starts its action immediately.
-        for beat in ("beginActionPhase", "showLearning", "showResult", "Doing it now", "What this shows"):
+        # The demonstration explains its motive before acting; guided Show me uses the same result card
+        # when the learner starts its action immediately.
+        for beat in ("beginActionPhase", "showResult", "Doing it now", "What this shows"):
             self.assertIn(beat, coach)
         content = (ROOT / "kibana-coach/src/content-script.js").read_text(encoding="utf-8")
         self.assertNotIn("coach.showWhy(command)", content)

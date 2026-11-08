@@ -230,9 +230,12 @@ class KibanaAdapter {
     if (commit) element.dispatchEvent(new Event('change', {bubbles: true}));
   }
 
-  async typeValue(element, value, signal, coach) {
+  // `clearFirst: false` types over the old value the way a person does after selecting it, so the box is
+  // never empty on the way. Kibana's relative time count reads an empty box as a change of direction
+  // ("hours ago" flips to "hours from now") and shows a validation error until the value is finished.
+  async typeValue(element, value, signal, coach, {clearFirst = true} = {}) {
     element.focus();
-    this.setNativeValue(element, '', {data: null, inputType: 'deleteContentBackward', commit: false});
+    if (clearFirst) this.setNativeValue(element, '', {data: null, inputType: 'deleteContentBackward', commit: false});
     let typed = '';
     const characters = Array.from(String(value));
     const typing = {skip: false};
@@ -279,7 +282,19 @@ class KibanaAdapter {
   // of throwing. The anchor is only the control to highlight while the "what / why" cards are read;
   // perform() resolves and drives the controls the step actually acts on, so a missing anchor must
   // never abort the demonstration. A stop/pause (AbortError) still propagates so the run unwinds.
-  async resolveAnchor(name, signal) {
+  // Given the command, the anchor is the element the card's words are about when that can be told: a
+  // named span, host or panel action rather than the first thing the registry's selector happens to
+  // match. That element may be below the fold, so the card reveals it (see coach.revealTarget).
+  async resolveAnchor(name, signal, command = null) {
+    if (command) {
+      const application = (globalThis.KibanaApplicationAdapters || []).find(item => item.commands.has(command.type));
+      const anchor = application?.anchor || (command.type === 'add_filter' ? () => this.resolve('kibana.add_filter') : null);
+      const named = await Promise.resolve(anchor?.call(application, command, this, signal)).catch(error => {
+        if (error.name === 'AbortError') throw error;
+        return null;
+      });
+      if (named) return named;
+    }
     if (!name || !this.registry?.targets?.[name]) return this.resolve(name);
     try {
       return await this.waitFor(name, 20000, signal);
@@ -383,7 +398,56 @@ class KibanaAdapter {
     return {from: '', to: ''};
   }
 
+  // A window's start as a date when it is one ('2026-11-07T14:00:00.000Z'), or null for "now-15m".
+  absoluteStart(value = {}) {
+    const text = String(value?.from || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}T/.test(text)) return null;
+    const date = new Date(text);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  // A start as a learner types it into Kibana's date box, in the browser's time as Discover shows it
+  // (verified 9.5.2: "Nov 7 14:00 to now" applies a fixed start; a bare "14:00 to now" is ignored).
+  typedStart(date) {
+    const pad = number => String(number).padStart(2, '0');
+    return `${date.toLocaleString('en-US', {month: 'short'})} ${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  }
+
+  // Set a window that starts at a fixed time and runs to now, typed into the date box as a learner
+  // would. Unlike "the last 15 minutes", its start stays put while the investigation goes on.
+  async setAbsoluteStart(command, start, toggle, coach, timingScale, signal) {
+    const typed = `${this.typedStart(start)} to now`;
+    const done = {type: 'time_range_changed', details: {from: command.value.from, to: 'now'}, state_after: {time_from: command.value.from, time_to: 'now'}};
+    const applied = () => {
+      const current = this.currentTimeRange();
+      return Math.abs(new Date(current.from).getTime() - start.getTime()) < 1000 && /^now$/i.test(current.to || 'now');
+    };
+    if (applied()) {
+      await this.pointAt(toggle, coach, timingScale, signal, `The window already starts at ${this.typedStart(start)}, so there's nothing to change here.`, {showClick: false});
+      return done;
+    }
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      // Discover may redraw the picker while the first histogram loads; open it again and retry.
+      const liveToggle = attempt ? await this.waitFor('kibana.time_picker', 5000, signal) : toggle;
+      await this.pointAt(liveToggle, coach, timingScale, signal, 'Open the date box.', {activate: true, hold: false, targetName: 'kibana.time_picker'});
+      const input = await this.waitFor('kibana.time_input', 3000, signal).catch(error => {
+        if (error.name === 'AbortError') throw error;
+        return null;
+      });
+      if (!input) continue;
+      await this.pointAt(input, coach, timingScale, signal, `Type the start, “${typed}”, and press Enter.`, {activate: true, hold: false, targetName: 'kibana.time_input'});
+      await this.typeValue(input, typed, signal, coach);
+      input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true}));
+      const deadline = Date.now() + 3000;
+      while (!applied() && Date.now() < deadline) await this.wait(100, signal);
+      if (applied()) return done;
+    }
+    throw new Error('Kibana did not take the typed start. Try this step again.');
+  }
+
   async setTimeRange(command, toggle, coach, timingScale, signal) {
+    const start = this.absoluteStart(command.value);
+    if (start) return this.setAbsoluteStart(command, start, toggle, coach, timingScale, signal);
     const range = this.relativeTimeRange(command.value);
     // If the window is already exactly what we'd set, opening the picker to re-enter the same range
     // is a confusing no-op (e.g. an incident whose recommended window matches the view's default).
@@ -423,12 +487,13 @@ class KibanaAdapter {
       if (number && unit && apply) break;
     }
     if (!number || !unit || !apply) throw new Error('Kibana time picker controls did not remain available. Try this step again.');
-    await this.pointAt(number, coach, timingScale, signal, `Click the Time value box, clear its old value, and type ${range.amount}.`, {activate: true, hold: false, targetName: 'kibana.time_value'});
+    await this.pointAt(number, coach, timingScale, signal, `Click the number box under Start date and type ${range.amount}.`, {activate: true, hold: false, targetName: 'kibana.time_value'});
     number = await this.waitFor('kibana.time_value', 3000, signal);
-    await this.typeValue(number, range.amount, signal, coach);
-    await this.pointAt(unit, coach, timingScale, signal, `Choose ${range.unitLabel} as the unit.`, {activate: true, hold: false, targetName: 'kibana.time_unit'});
-    unit = await this.waitFor('kibana.time_unit', 3000, signal);
+    await this.typeValue(number, range.amount, signal, coach, {clearFirst: false});
     const unitPattern = new RegExp(`^${range.unitName}s?(?: ago)?$`, 'i');
+    const unitOption = Array.from(unit.options || []).find(option => unitPattern.test(option.textContent.trim()));
+    await this.pointAt(unit, coach, timingScale, signal, `Choose “${unitOption?.textContent.trim() || range.unitLabel}” as the unit.`, {activate: true, hold: false, targetName: 'kibana.time_unit'});
+    unit = await this.waitFor('kibana.time_unit', 3000, signal);
     const matchingOption = Array.from(unit.options).find(option => unitPattern.test(option.textContent.trim()));
     unit.value = matchingOption?.value || range.unitCode;
     unit.dispatchEvent(new Event('input', {bubbles: true}));
@@ -445,7 +510,9 @@ class KibanaAdapter {
     await this.typeValue(input, query, signal, coach);
     const submit = this.resolve('kibana.query_submit');
     if (submit) {
-      await this.pointAt(submit, coach, timingScale, signal, 'Run the query and refresh the results.', {activate: true});
+      // The button reads Update once the query has changed, and Refresh otherwise.
+      const submitLabel = submit.textContent?.trim();
+      await this.pointAt(submit, coach, timingScale, signal, submitLabel ? `Click ${submitLabel} to run the query.` : 'Run the query and refresh the results.', {activate: true});
     } else {
       input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', bubbles: true}));
       await this.holdAction?.();
@@ -486,7 +553,7 @@ class KibanaAdapter {
     await this.pointAt(valueInput, coach, timingScale, signal, `Enter the value ${filter.value}.`, {activate: true, hold: false});
     await this.typeValue(valueInput, String(filter.value), signal, coach);
     const save = await this.waitFor('kibana.filter_save', 8000, signal);
-    await this.pointAt(save, coach, timingScale, signal, `Apply the ${negate ? 'is not' : 'is'} filter.`, {activate: true});
+    await this.pointAt(save, coach, timingScale, signal, `Click ${save.textContent?.trim() || 'Add filter'} to apply it.`, {activate: true});
     await this.settle(400, timingScale, signal);
     return {type: 'filter_added', details: filter, state_after: {filters: [{field: filter.field, value: filter.value, negate}]}};
   }
@@ -549,23 +616,202 @@ class KibanaAdapter {
 
   defaultEvidenceFocus(command) {
     const value = command.value || {};
-    if (command.type === 'set_time_range') return {kind: 'histogram'};
-    if (command.type === 'enter_kql') return {kind: 'query'};
-    if (command.type === 'add_filter') return {kind: 'filter', field: value.field, value: value.value};
-    if (command.type === 'open_field_statistics' || command.type === 'inspect_field') return {kind: 'top_values', field: value.field};
-    if (command.type === 'expand_document') return {kind: 'document', fields: []};
-    return null;
+    const registered = (...names) => ({kind: 'registered', names});
+    switch (command.type) {
+      // Discover redraws its histogram; every panel of a dashboard follows the picker above them.
+      case 'set_time_range': return /\/app\/dashboards/.test(location.pathname) ? registered('kibana.time_picker') : {kind: 'histogram'};
+      case 'enter_kql': return {kind: 'query'};
+      case 'add_filter': return {kind: 'filter', field: value.field, value: value.value};
+      case 'sort_column': return {kind: 'columns', fields: [value.field || '@timestamp']};
+      case 'open_field_statistics': return {kind: 'top_values', field: value.field};
+      case 'inspect_field': return command.target === 'kibana.esql_first_result' ? {kind: 'esql_row', value: value.value} : {kind: 'top_values', field: value.field};
+      case 'expand_document': return {kind: 'document', fields: []};
+      case 'switch_query_language': return registered('kibana.esql_editor');
+      case 'enter_esql': return registered('kibana.esql_results');
+      case 'interact_with_panel_value': return {kind: 'panel_filter', value: value.value, panels: [value.panel]};
+      case 'inspect_panel': return registered('kibana.inspector_panel');
+      case 'view_panel_underlying_data':
+      case 'navigate_from_alert_to_source': return registered('kibana.result_count');
+      case 'select_apm_service': return registered('kibana.apm_transactions_table');
+      case 'open_transaction_group': return registered('kibana.apm_latency_distribution', 'kibana.apm_trace_sample_pager');
+      case 'select_trace_sample': return registered('kibana.apm_waterfall');
+      case 'select_span': return {kind: 'span_details'};
+      case 'navigate_to_correlated_logs': return registered('kibana.apm_trace_logs');
+      case 'select_inventory_type': return registered('kibana.inventory_map');
+      case 'select_metric': return registered('kibana.metric_selector', 'kibana.inventory_map');
+      case 'select_infrastructure_entity': return {kind: 'entity', value: value.value};
+      // A host's logs stay in its details flyout; a pod's "Kubernetes Pod logs" link opens Discover.
+      case 'navigate_from_metrics_to_logs': return registered(document.querySelector("[data-test-subj='infraAssetDetailsFlyout']") ? 'kibana.inventory_logs' : 'kibana.result_count');
+      case 'open_alert': return {kind: 'alert_summary', scope: 'alertsFlyout'};
+      case 'inspect_alert_reason': return {kind: 'alert_summary', scope: 'alertDetails'};
+      default: return null;
+    }
   }
 
   async evidenceTargets(focus, signal) {
     const registered = name => () => this.resolve(name);
     if (focus.kind === 'top_values') return [await this.topValuesEvidence(focus, signal)];
-    if (focus.kind === 'document') return this.documentEvidence(focus.fields || [], signal);
+    if (focus.kind === 'document') return this.documentEvidence(focus.fields || [], signal, focus);
+    if (focus.kind === 'registered') {
+      await this.waitForTargets(focus.names, signal);
+      if (focus.names.includes('kibana.result_count')) await this.resultsSettled(signal);
+      return focus.names.map(registered);
+    }
+    if (focus.kind === 'esql_row') {
+      await this.waitForNaming('kibana.esql_first_result', focus.value, signal, 8000);
+      return [() => this.namedCandidate('kibana.esql_first_result', focus.value) || this.resolve('kibana.esql_first_result')];
+    }
+    if (focus.kind === 'panel_filter') {
+      const panel = title => () => [...document.querySelectorAll("[data-test-subj='dashboardPanel']")]
+        .find(node => node.querySelector("[data-test-subj='embeddablePanelTitle']")?.textContent?.trim() === title) || null;
+      return [() => this.findFilterPill(null, focus.value), ...(focus.panels || []).filter(Boolean).map(panel)];
+    }
+    if (focus.kind === 'span_details') return this.spanDetailsEvidence(signal);
+    if (focus.kind === 'entity') return [await this.entityEvidence(focus, signal)];
+    if (focus.kind === 'inventory_outlier') {
+      await this.waitForNaming('kibana.infrastructure_entity', focus.value, signal, 8000);
+      return [registered('kibana.metric_selector'), () => this.namedCandidate('kibana.infrastructure_entity', focus.value)];
+    }
+    if (focus.kind === 'alert_summary') return this.alertSummaryEvidence(focus, signal);
+    if (focus.kind === 'request_line') return this.requestLineEvidence(focus.text, signal);
+    if (focus.kind === 'table_row') return [await this.tableRowEvidence(focus, signal)];
+    // A goal card can ask for these before Discover has first drawn them.
+    await this.waitForTargets(['kibana.result_count'], signal, 8000);
     await this.resultsSettled(signal);
     if (focus.kind === 'histogram') return [registered('kibana.histogram'), registered('kibana.result_count')];
     if (focus.kind === 'query') return [registered('kibana.query_bar'), registered('kibana.result_count')];
     if (focus.kind === 'filter') return [() => this.findFilterPill(focus.field, focus.value), registered('kibana.result_count')];
     return [];
+  }
+
+  // Wait for each named target; one that never renders still leaves the others ringed. A page that a
+  // step has just opened can take a while to draw them.
+  async waitForTargets(names, signal, timeout = 15000) {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline && names.some(name => !this.resolve(name))) await this.wait(100, signal);
+  }
+
+  // The smallest visible element inside `scope` whose text matches, e.g. a label with its value.
+  smallestWithText(scope, pattern) {
+    let best = null;
+    let bestArea = Infinity;
+    for (const node of scope?.querySelectorAll('div, span, section, h2, h3, h4, tr') || []) {
+      if (!pattern.test(node.textContent || '')) continue;
+      const rect = node.getBoundingClientRect();
+      const area = rect.width * rect.height;
+      if (area && area < bestArea) {
+        best = node;
+        bestArea = area;
+      }
+    }
+    return best;
+  }
+
+  // The line of the inspector's request that says what a panel counts. The request is in a Monaco editor,
+  // which only renders the lines in view, so wheel down until that line is among them.
+  // The first result row, in the table's order, whose `field` cell reads `value` — after a sort,
+  // the first request on a new version (verified 9.5.2: grid cells carry their column and row index).
+  // The grid draws only the rows near its viewport, so scroll down until that row exists, then leave
+  // two rows above it in view: the card's "the rows above it" has to be on screen too. The target is a
+  // function, because the grid can re-render the row while it is ringed.
+  async tableRowEvidence(focus, signal) {
+    const column = `[data-gridcell-column-id='${String(focus.field).replace(/['\\]/g, '\\$&')}']`;
+    const find = () => {
+      // A cell's own text carries the grid's keyboard hint ("2.4.0↵"); its content element holds the value.
+      const value = cell => (cell.querySelector("[data-datagrid-cellcontent='true']") || cell).textContent.trim();
+      const cells = [...document.querySelectorAll(column)].filter(cell => value(cell) === String(focus.value) && cell.getClientRects().length);
+      cells.sort((left, right) => Number(left.getAttribute('data-gridcell-row-index')) - Number(right.getAttribute('data-gridcell-row-index')));
+      return cells[0]?.closest('.euiDataGridRow, [role="row"]') || cells[0] || null;
+    };
+    const deadline = Date.now() + 8000;
+    while (!document.querySelector(column) && Date.now() < deadline) await this.wait(100, signal);
+    const table = document.querySelector("[data-test-subj='discoverDocTable']") || document.body;
+    const scroller = this.scrollableAncestor(document.querySelector(column), table);
+    if (scroller) {
+      scroller.scrollTop = 0;
+      await this.wait(150, signal);
+      while (!find() && scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 1) {
+        scroller.scrollTop += Math.max(80, Math.round(scroller.clientHeight * 0.6));
+        await this.wait(150, signal);
+      }
+      const row = find();
+      if (row) {
+        const rect = row.getBoundingClientRect();
+        scroller.scrollTop = Math.max(0, scroller.scrollTop + rect.top - scroller.getBoundingClientRect().top - rect.height * 3);
+      } else {
+        scroller.scrollTop = 0;
+      }
+      await this.wait(150, signal);
+    }
+    return find;
+  }
+
+  async requestLineEvidence(text, signal) {
+    const viewer = "[data-test-subj='inspectorRequestCodeViewerContainer']";
+    const line = () => [...document.querySelectorAll(`${viewer} .view-line`)].find(node => node.textContent.includes(text)) || null;
+    const deadline = Date.now() + 8000;
+    while (!document.querySelector(`${viewer} .view-line`) && Date.now() < deadline) await this.wait(100, signal);
+    // Monaco reads the legacy wheelDeltaY (verified 9.5.2: a synthetic event with only deltaY scrolls nothing).
+    const wheel = () => document.querySelector(`${viewer} .monaco-scrollable-element`)
+      ?.dispatchEvent(new WheelEvent('wheel', {deltaY: 120, wheelDeltaY: -120, wheelDelta: -120, bubbles: true, cancelable: true}));
+    for (let attempt = 0; attempt < 40 && !line(); attempt += 1) {
+      wheel();
+      await this.wait(100, signal);
+    }
+    // It first appears at the bottom edge; bring it up into the middle of the code.
+    const code = document.querySelector(viewer)?.getBoundingClientRect();
+    for (let attempt = 0; attempt < 12 && line() && code && line().getBoundingClientRect().top > code.top + code.height / 2; attempt += 1) {
+      wheel();
+      await this.wait(100, signal);
+    }
+    return [line];
+  }
+
+  // APM's span details flyout (verified 9.5.2) has no test subjects on its summary: a labelled Name and
+  // a duration reading "3,400 ms (92% of transaction)". A failing span also lists its error.type.
+  async spanDetailsEvidence(signal) {
+    const flyout = () => [...document.querySelectorAll('.euiFlyout')].filter(node => node.getClientRects().length).pop() || null;
+    const name = () => this.smallestWithText(flyout(), /^Name\s*\S/);
+    const duration = () => this.smallestWithText(flyout(), /\d\s*(?:ms|s|μs)\s*\(\d+% of transaction\)/);
+    const errorType = () => {
+      const key = [...(flyout()?.querySelectorAll("[data-test-subj='dot-key']") || [])].find(node => node.textContent.trim() === 'error.type');
+      return key?.closest('tr') || key?.parentElement || null;
+    };
+    const deadline = Date.now() + 8000;
+    while (!(name() && duration()) && Date.now() < deadline) await this.wait(100, signal);
+    return errorType() ? [name, duration, errorType] : [name, duration];
+  }
+
+  // What a selected host or pod reads. A host's details flyout leads with a tile for each metric; a pod
+  // opens a small menu, so its own tile in the inventory is what shows the value.
+  async entityEvidence({value, metric}, signal) {
+    const tile = () => {
+      const wanted = /memory/i.test(metric || '') ? 'infraAssetDetailsKPImemoryUsage' : 'infraAssetDetailsKPIcpuUsage';
+      const flyout = document.querySelector("[data-test-subj='infraAssetDetailsFlyout']");
+      return flyout?.querySelector(`[data-test-subj='${wanted}']`) || null;
+    };
+    const target = () => tile() || this.namedCandidate('kibana.infrastructure_entity', value);
+    const deadline = Date.now() + 8000;
+    while (!tile() && !document.querySelector("[data-test-subj='nodeContextMenu']") && Date.now() < deadline) await this.wait(100, signal);
+    return target;
+  }
+
+  // An alert's identity and state, in its flyout or on its details page, plus the Reason that says what
+  // crossed the rule's threshold (verified 9.5.2: a "Reason" heading above the text, no test subject).
+  async alertSummaryEvidence({scope}, signal) {
+    const root = () => document.querySelector(`[data-test-subj='${scope}']`);
+    const title = () => root()?.querySelector("[data-test-subj='alertsFlyoutTitle'], [data-test-subj='alertDetailsPageTitle']") || null;
+    const status = () => root()?.querySelector("[data-test-subj='alertLifecycleStatusBadge']") || null;
+    // In the flyout the heading and its text share a wrapper; on the details page they are siblings.
+    const reason = () => {
+      const heading = [...(root()?.querySelectorAll('h1, h2, h3, h4, h5, h6') || [])].find(node => node.textContent.trim() === 'Reason');
+      let text = heading?.nextElementSibling;
+      while (text && !text.textContent.trim()) text = text.nextElementSibling;
+      return text || this.smallestWithText(root(), /^Reason\s*\S/);
+    };
+    const deadline = Date.now() + 15000;
+    while (!(title() && status() && reason()) && Date.now() < deadline) await this.wait(100, signal);
+    return [title, status, reason];
   }
 
   // Discover keeps the previous hit count on screen while it refetches, and its global loading
@@ -593,8 +839,11 @@ class KibanaAdapter {
         value: subject.match(/filter-value-([^\s]+)/)?.[1],
       };
     });
-    const sameField = pills.filter(pill => pill.field === field);
-    return (sameField.find(pill => value != null && pill.value === String(value)) || sameField[0] || pills[pills.length - 1])?.node || null;
+    // The test subject drops a value's spaces ("filter-value-failedtransactions").
+    const wanted = value == null ? null : `filter-value-${String(value).replace(/\s+/g, '')}`;
+    const namesValue = pill => wanted != null && (pill.node.getAttribute('data-test-subj') || '').includes(wanted);
+    const sameField = field == null ? pills : pills.filter(pill => pill.field === field);
+    return (sameField.find(namesValue) || sameField[0] || pills[pills.length - 1])?.node || null;
   }
 
   // A field's Top values popover (verified 9.5.2): the list renders once its stats load, one
@@ -615,8 +864,22 @@ class KibanaAdapter {
   // can be off-screen or on another page. Walk the page to learn where each sits; if one is on another
   // page, show 100 rows and walk again. Then pin them, which lifts them to the top of the table side
   // by side; without pin controls, scroll so they share the view (or start at the first).
-  async documentEvidence(fields, signal) {
+  // `open` is for a page the step has just opened (Explore in Discover), whose table doesn't show these
+  // fields as columns: the first record is opened to read them.
+  async documentEvidence(fields, signal, {open = false} = {}) {
+    if (open && !this.resolve('kibana.doc_viewer')) {
+      await this.waitForTargets(['kibana.first_result'], signal, 20000);
+      await this.resultsSettled(signal);
+      this.performing = true;
+      try { this.resolve('kibana.first_result')?.click(); } finally { this.performing = false; }
+    }
     const viewer = await this.waitFor('kibana.doc_viewer', 8000, signal);
+    // A logs view opens the record on its overview; the fields are on the Table tab (verified 9.5.2).
+    const tableTab = viewer.querySelector("[data-test-subj='docViewerTab-doc_view_table']");
+    if (tableTab && tableTab.getAttribute('aria-selected') !== 'true') {
+      tableTab.click();
+      await this.wait(300, signal);
+    }
     const anyRow = () => viewer.querySelector("[data-test-subj^='tableDocViewRow-']");
     const deadline = Date.now() + 8000;
     while (!anyRow() && Date.now() < deadline) await this.wait(100, signal);
@@ -751,9 +1014,30 @@ class KibanaAdapter {
   // first match would be whichever row happens to come first.
   targetNaming(name, text, fallback) {
     if (text == null || text === '') return fallback;
-    const wanted = String(text).toLowerCase();
-    const candidates = (this.registry?.targets?.[name] || []).flatMap(selector => Array.from(document.querySelectorAll(selector)));
-    return candidates.find(element => element.getClientRects().length && element.textContent.trim().toLowerCase().includes(wanted)) || fallback;
+    return this.namedCandidate(name, text) || fallback;
+  }
+
+  // An exact match first, so "POST /checkout" is never taken for "POST /checkout/retry".
+  namedCandidate(name, text) {
+    if (text == null || text === '') return null;
+    const wanted = String(text).trim().toLowerCase();
+    const read = element => element.textContent.trim().toLowerCase();
+    const candidates = (this.registry?.targets?.[name] || []).flatMap(selector => Array.from(document.querySelectorAll(selector)))
+      .filter(element => element.getClientRects().length);
+    return candidates.find(element => read(element) === wanted) || candidates.find(element => read(element).includes(wanted)) || null;
+  }
+
+  // Lists and waterfalls render after the page does, and their first rows are not the ones a step is
+  // about, so give the named row a moment to appear before settling for the fallback.
+  async waitForNaming(name, text, signal, timeout = 6000) {
+    if (text == null || text === '') return null;
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const named = this.namedCandidate(name, text);
+      if (named) return named;
+      await this.wait(100, signal);
+    }
+    return null;
   }
 
   // What the learner is looking at, for the service to check evidence against: the time range, the

@@ -71,6 +71,13 @@ test('readFilterPills captures field, value, and negate from the real 9.5.2 pill
   ]);
 });
 
+test('readFilterPills keeps the spaces a test subject drops from a value', () => {
+  const {dom, document} = makeDom();
+  const {observer} = makeObserver(document);
+  dom.pills = [element({subject: 'filter-badge-1 filter filter-enabled filter-key-panel.metric.keyword filter-value-failedtransactions', text: 'panel.metric.keyword: failed transactions'})];
+  assert.deepEqual(observer.readFilterPills(), [{field: 'panel.metric', value: 'failed transactions', negate: false}]);
+});
+
 test('readFilterPills falls back to the pill text when structured tokens are absent', () => {
   const {dom, document} = makeDom();
   const {observer} = makeObserver(document);
@@ -205,4 +212,21 @@ test('a non-field control click is not mistaken for a field preview', () => {
   observer.onClick({target: element({subject: 'dateRangePickerCustomRangeNavItem'})});
   observer.onClick({target: element({subject: 'someUnrelatedButton'})});
   assert.equal(reports.length, 0);
+});
+
+test('a sort the learner picks is reported from the URL, not Discover writing its default', () => {
+  const {document} = makeDom();
+  const location = {pathname: '/app/discover', hash: '', href: "http://kibana/app/discover#/?_a=(columns:!(),sort:!())"};
+  const {observer, reports} = makeObserver(document, location);
+  observer.lastSort = observer.sortSignature();
+  // Discover filling in its own newest-first default is not the learner's choice.
+  location.href = "http://kibana/app/discover#/?_a=(columns:!(),sort:!(!('@timestamp',desc)))";
+  observer.captureSort();
+  assert.deepEqual(reports, []);
+  // "Sort Old-New" on the @timestamp header (verified 9.5.2 URL state).
+  location.href = "http://kibana/app/discover#/?_a=(columns:!(),sort:!(!('@timestamp',asc)))";
+  observer.captureSort();
+  assert.deepEqual(reports, [{type: 'sort_changed', details: {field: '@timestamp', direction: 'asc'}, state_after: {sort: [['@timestamp', 'asc']]}}]);
+  observer.captureSort();
+  assert.equal(reports.length, 1);
 });

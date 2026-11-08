@@ -127,14 +127,18 @@ class IncidentDebrief {
     }
     answers.hidden = !(feedback.answer_review || []).length;
     dialog.querySelector('.debrief-route span').textContent = (feedback.reference_steps || feedback.reference_route || []).join(' → ');
-    // Challenge mode has no live feedback, so the dead ends and drift it recorded are shown here.
+    // Challenge mode has no live feedback, so the dead ends and drift it recorded are shown here, one
+    // line each. A window that missed the incident comes with what happened, in clock time.
     const detours = dialog.querySelector('.debrief-detours');
     for (const step of detourSteps) {
       const item = document.createElement('li');
-      const lines = [...(step.dead_ends || []).map(label => `Dead end: ${label}`), ...(step.drift || [])];
-      item.innerHTML = '<strong></strong><span></span>';
+      item.innerHTML = '<strong></strong>';
       item.querySelector('strong').textContent = step.title || step.id;
-      item.querySelector('span').textContent = lines.join(' · ');
+      for (const line of [...(step.dead_ends || []).map(label => `Dead end: ${label}`), ...(step.notes || []), ...(step.drift || [])]) {
+        const span = document.createElement('span');
+        span.textContent = line;
+        item.append(span);
+      }
       detours.querySelector('ul').append(item);
     }
     detours.hidden = !detourSteps.length;

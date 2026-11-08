@@ -6,11 +6,12 @@ class IncidentCoachPanel {
       <aside class="panel" aria-label="Incident coach" hidden>
         <header title="Drag to move the coach"><span class="live-dot"></span><strong>Incident coach</strong><button id="stop" title="Stop automation">Stop</button></header>
         <div class="progress" aria-hidden="true"><span></span></div>
-        <p id="mode"></p><h2 id="objective"></h2>
+        <div class="step-line"><h2 id="objective"></h2><p id="mode"></p></div>
         <section id="stage" aria-live="polite">
           <p id="phase-eyebrow" class="eyebrow"></p>
           <p id="phase-headline"></p>
           <p id="phase-detail" hidden></p>
+          <details id="phase-why" hidden open><summary>Why this step</summary><p id="phase-why-text"></p></details>
           <div id="stage-actions" class="stage-actions" hidden></div>
           <div id="countdown" class="countdown" aria-hidden="true" hidden><span></span></div>
         </section>
@@ -44,6 +45,16 @@ class IncidentCoachPanel {
     this.celebrating = false;
     this.advanceRequested = false;
     this.pendingCommand = null;
+    // A learner who opens or closes a result card's reasoning has decided: the coach leaves it that way
+    // from then on. Null until they do. The card stays where it is until its next beat, so the control
+    // doesn't jump away from the pointer that just used it.
+    this.reasoningOpen = null;
+    const why = this.root.querySelector('#phase-why');
+    why.querySelector('summary').addEventListener('click', () => {
+      this.reasoningOpen = !why.open;
+      this.keepPlace = true;
+    });
+    why.addEventListener('toggle', () => this.refit());
     const dragHandle = this.root.querySelector('header');
     dragHandle.addEventListener('pointerdown', event => this.startDrag(event));
     dragHandle.addEventListener('pointermove', event => this.moveDrag(event));
@@ -199,6 +210,36 @@ class IncidentCoachPanel {
     requestAnimationFrame(() => this.placeAwayFrom(target));
   }
 
+  // Bring a target into view when it's below the fold, so a highlight is never drawn off-screen. The
+  // scroll listener keeps the highlight and the card with it as the page moves.
+  revealTarget(target) {
+    if (!target?.isConnected || !target.getClientRects().length || this.cursor.isVisible(target)) return;
+    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    target.scrollIntoView({block: 'center', inline: 'nearest', behavior: reducedMotion ? 'instant' : 'smooth'});
+  }
+
+  // The card is about what its rings show, so when one isn't all on screen the page scrolls. Rings that
+  // fit together end up low in the view, which leaves the upper corners clear for the card; otherwise
+  // the first clipped one is centred.
+  revealEvidence() {
+    const elements = this.evidenceTargets.map(target => target()).filter(element => element?.getClientRects().length);
+    const clipped = elements.find(element => {
+      const rect = element.getBoundingClientRect();
+      return !this.cursor.isVisible(element) || (rect.height < innerHeight * 0.7 && (rect.top < 96 || rect.bottom > innerHeight - 8));
+    });
+    if (!clipped) return;
+    const rects = elements.map(element => element.getBoundingClientRect());
+    const fits = Math.max(...rects.map(rect => rect.bottom)) - Math.min(...rects.map(rect => rect.top)) < innerHeight - 140;
+    const lowest = elements[rects.reduce((best, rect, index) => rect.bottom > rects[best].bottom ? index : best, 0)];
+    const behavior = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth';
+    if (fits) {
+      lowest.style.scrollMarginBottom = '16px';
+      lowest.scrollIntoView({block: 'end', inline: 'nearest', behavior});
+    } else {
+      clipped.scrollIntoView({block: 'center', inline: 'nearest', behavior});
+    }
+  }
+
   updateCommandTarget(command, target) {
     if (this.pendingCommand?.command === command) this.pendingCommand.target = target;
     else if (this.activeCommandId === command.command_id) {
@@ -237,9 +278,9 @@ class IncidentCoachPanel {
     requestAnimationFrame(() => this.placeAwayFrom(this.activeTarget?.isConnected ? this.activeTarget : null));
   }
 
-  showRecoveryWorking() {
+  showRecoveryWorking(headline = 'Clearing the dead end and re-applying what the investigation has established so far…') {
     this.root.querySelector('#advance').hidden = true;
-    this.renderPhase({eyebrow: 'Restoring the search', headline: 'Clearing the dead end and re-applying what the investigation has established so far…'});
+    this.renderPhase({eyebrow: 'Restoring the search', headline});
     this.startWorking();
   }
 
@@ -316,7 +357,8 @@ class IncidentCoachPanel {
   }
 
   // The demonstration shows a one-line goal, performs the action, then says what the result shows
-  // with the evidence ringed on the page. Guided "Show me" uses the same result card after its action.
+  // with the evidence ringed on the page. Guided "Show me" starts at the action, so it has had no goal
+  // card to give the motive on: its result card adds why the step is done under the finding.
   enterPhase(phase, command = this.currentCommand, evidence = null) {
     this.clearHint();
     if (phase !== 'learning') this.clearEvidenceHighlights();
@@ -329,7 +371,9 @@ class IncidentCoachPanel {
       this.renderPhase({eyebrow: 'What I’ll do next', headline: command?.narration || ''});
       this.resetCountdown();
     } else if (phase === 'action') {
-      this.renderPhase({eyebrow: 'Doing it now', headline: 'Watch the highlighted control and the cursor.'});
+      // The control can still be loading (a Show me clicked as the page opens), so don't promise a
+      // highlight until there is one. showTarget replaces this line as soon as there is.
+      this.renderPhase({eyebrow: 'Doing it now', headline: this.activeTarget?.isConnected ? 'Watch the highlighted control and the cursor.' : 'Finding the control to use…'});
       this.startWorking();
     } else if (phase === 'learning') {
       // The action is done; this beat talks about the result, not a control. Drop the spotlight and
@@ -340,9 +384,11 @@ class IncidentCoachPanel {
       this.cursor.hide();
       this.activeTarget = null;
       this.evidenceField = command?.type === 'add_column' ? command.value?.field : null;
-      this.renderPhase({eyebrow: 'What this shows', headline: command?.evidence || 'Step complete.'});
+      const [finding, support] = IncidentCoachPanel.splitFinding(command?.evidence || 'Step complete.');
+      this.renderPhase({eyebrow: 'What this shows', headline: finding, detail: support, why: command?.mode === 'guided' ? command.reasoning : ''});
       this.resetCountdown();
       this.showEvidenceHighlights(evidence?.columns ?? command?.learning_focus ?? [], evidence?.targets || []);
+      this.revealEvidence();
       // The added column is the evidence to read next. Return the coach to the left before the
       // browser paints the refreshed table, then keep that column clear if the user moves the coach.
       if (this.evidenceField && !this.dragging) {
@@ -353,8 +399,15 @@ class IncidentCoachPanel {
     }
   }
 
+  // A result card leads with its first sentence, the finding, and sets what follows it quieter, so a
+  // long result still scans.
+  static splitFinding(text) {
+    const end = text.search(/[.!?]\s+\S/);
+    return end < 0 ? [text, ''] : [text.slice(0, end + 1), text.slice(end + 1).trim()];
+  }
+
   // "Show me" on a guided step starts the action right away, then explains it after the result.
-  // Advance can skip that final reading beat; Hint and Show me are moot while the coach acts.
+  // Hint and Show me are moot while the coach acts.
   beginWalkthrough(command) {
     this.root.querySelector('#demonstrate').hidden = true;
     this.root.querySelector('#hint').hidden = true;
@@ -370,8 +423,6 @@ class IncidentCoachPanel {
 
   beginActionPhase(command = this.currentCommand) { this.enterPhase('action', command); }
 
-  showLearning(command = this.currentCommand, evidence = null) { this.enterPhase('learning', command, evidence); }
-
   // A goal that starts by reading the page rings what to read while its one line is on screen. The
   // action phase clears the rings when the coach starts acting.
   showGoalFocus(evidence) {
@@ -379,7 +430,8 @@ class IncidentCoachPanel {
     requestAnimationFrame(() => this.placeAwayFrom(null));
   }
 
-  // A demonstration step's result: what the action revealed, with that evidence ringed on the page.
+  // A step's result, in a demonstration or a guided "Show me": what the action revealed, with that
+  // evidence ringed on the page.
   // Reading a result is where the inference happens, so this card has no countdown — it waits for
   // Continue, and Pause has nothing to hold.
   showResult(command, evidence) {
@@ -463,7 +515,7 @@ class IncidentCoachPanel {
     bar.hidden = true;
   }
 
-  renderPhase({eyebrow = '', headline = '', detail = '', choices = []}) {
+  renderPhase({eyebrow = '', headline = '', detail = '', why = '', choices = []}) {
     const stage = this.root.querySelector('#stage');
     const eyebrowEl = this.root.querySelector('#phase-eyebrow');
     eyebrowEl.textContent = eyebrow;
@@ -472,6 +524,7 @@ class IncidentCoachPanel {
     const detailEl = this.root.querySelector('#phase-detail');
     detailEl.textContent = detail;
     detailEl.hidden = !detail;
+    this.setReasoning(why);
     this.renderChoices(choices);
     if (this.phase !== 'recovery') stage.classList.remove('recovery');
     if (this.phase !== 'checkin') stage.classList.remove('checkin');
@@ -481,6 +534,25 @@ class IncidentCoachPanel {
     void stage.offsetWidth;
     stage.classList.add('phase-in');
     this.refit();
+  }
+
+  // Why the step is done, under its finding. Open unless the learner closed it or it doesn't fit.
+  setReasoning(text = '') {
+    this.keepPlace = false;
+    const why = this.root.querySelector('#phase-why');
+    this.root.querySelector('#phase-why-text').textContent = text;
+    why.hidden = !text;
+    if (text) why.open = this.reasoningOpen ?? true;
+  }
+
+  // Close the reasoning to make the card shorter. False when that wouldn't change anything, or the
+  // learner has said they want it as it is.
+  foldReasoning() {
+    const why = this.root.querySelector('#phase-why');
+    if (why.hidden || !why.open || this.reasoningOpen !== null) return false;
+    why.open = false;
+    this.refit();
+    return true;
   }
 
   // Buttons inside the stage card for a decision the card asks for: [{label, primary, onSelect}].
@@ -558,15 +630,15 @@ class IncidentCoachPanel {
     advance.title = pending ? 'The coach will continue when this action finishes' : 'Continue to the next part';
   }
 
-  // Kibana's expanded-document viewer opens as a flyout docked on the right. Return its on-screen
-  // rectangle while it's open (and big enough to matter), so placement can treat it as a keep-out
-  // region just like a highlighted control; null when there's no flyout to dodge.
+  // Kibana's flyouts dock over the right of the screen: the expanded document, APM's span details, a
+  // host's details, an alert's details, the panel inspector. What is in them is what a step is about,
+  // so return the widest open one's rectangle for placement to treat as a keep-out, like a highlighted
+  // control; null when there's no flyout to dodge.
   findFlyout() {
-    const el = document.querySelector("[data-test-subj='docViewerFlyout']");
-    if (!el) return null;
-    const rect = el.getBoundingClientRect();
-    if (rect.width < 40 || rect.height < 40) return null;
-    return rect;
+    const rects = [...document.querySelectorAll("[data-test-subj='docViewerFlyout'], .euiFlyout")]
+      .map(node => node.getBoundingClientRect())
+      .filter(rect => rect.width >= 40 && rect.height >= 40);
+    return rects.sort((left, right) => right.width - left.width)[0] || null;
   }
 
   // Kibana's open popovers — the time picker, a field's Top values, Add filter, combo-box option
@@ -577,14 +649,17 @@ class IncidentCoachPanel {
       .filter(rect => rect.width >= 40 && rect.height >= 40 && rect.bottom > 0 && rect.top < innerHeight && rect.right > 0 && rect.left < innerWidth);
   }
 
-  findEvidenceRect() {
-    if (!this.evidenceField) return null;
-    const header = [...document.querySelectorAll("[role='columnheader'], th")]
-      .find(node => node.textContent?.trim() === this.evidenceField);
-    if (!header) return null;
-    const rect = header.getBoundingClientRect();
-    if (!rect.width || rect.right <= 0 || rect.left >= innerWidth) return null;
-    return {left: rect.left - 24, right: rect.right + 24, top: rect.top - 24, bottom: innerHeight};
+  // A column being read runs from its header to the bottom of the view, so the card must stay off all
+  // of it: the column just added, and every result-table column a result card rings.
+  evidenceColumnRects() {
+    const headers = [...document.querySelectorAll("[role='columnheader'], th")];
+    const fields = [...new Set([this.evidenceField, ...(this.evidenceFields || [])].filter(Boolean))];
+    return fields.map(field => headers.find(node => node.textContent?.trim() === field)
+      || headers.find(node => node.textContent?.trim().includes(field)))
+      .filter(Boolean)
+      .map(header => header.getBoundingClientRect())
+      .filter(rect => rect.width && rect.right > 0 && rect.left < innerWidth)
+      .map(rect => ({left: rect.left - 24, right: rect.right + 24, top: rect.top - 24, bottom: innerHeight}));
   }
 
   clearEvidenceHighlights() {
@@ -689,7 +764,7 @@ class IncidentCoachPanel {
   // doc-viewer flyout (or fell off-screen). Only then glide to the least-disruptive clear corner.
   // Needless hops are jarring.
   placeAwayFrom(target) {
-    if (this.panel.hidden || this.dragging) return;
+    if (this.panel.hidden || this.dragging || this.keepPlace) return;
     // A null pos means the panel was just revealed: snap to the resting spot instead of gliding
     // there from the CSS default corner (the load-time jerk/reflow). Later moves stay animated.
     const firstPlacement = !this.pos;
@@ -725,13 +800,14 @@ class IncidentCoachPanel {
     if (targetRect && targetRect.width) {
       guards.push({left: targetRect.left - lead, right: targetRect.right + lead, top: targetRect.top - lead, bottom: targetRect.bottom + lead});
     }
-    if (queryBar) guards.push({left: queryBar.left, right: queryBar.right, top: queryBar.top, bottom: queryBar.bottom});
+    // When every corner covers something, what a step is about comes first: the query bar is the one
+    // keep-out the card may sit over, so it only decides between corners that cover the rest equally.
+    if (queryBar) guards.push({left: queryBar.left, right: queryBar.right, top: queryBar.top, bottom: queryBar.bottom, yields: true});
     const flyoutRect = this.findFlyout();
     if (flyoutRect) {
       guards.push({left: flyoutRect.left, right: flyoutRect.right, top: flyoutRect.top, bottom: flyoutRect.bottom});
     }
-    const evidenceRect = this.findEvidenceRect();
-    if (evidenceRect) guards.push(evidenceRect);
+    guards.push(...this.evidenceColumnRects());
     const pad = 16;
     for (const rect of this.evidenceTargetRects().filter(Boolean)) {
       guards.push({left: rect.left - pad, right: rect.right + pad, top: rect.top - pad, bottom: rect.bottom + pad});
@@ -739,22 +815,26 @@ class IncidentCoachPanel {
     for (const rect of this.findPopovers()) {
       guards.push({left: rect.left - pad, right: rect.right + pad, top: rect.top - pad, bottom: rect.bottom + pad});
     }
-    const overlap = position => {
+    // How much of each keep-out a position hides, as a share of that keep-out: hiding all of a thin
+    // row is far worse than clipping the edge of a large chart, though it covers fewer pixels.
+    const covered = (position, counted) => {
       const right = position.left + width;
       const bottom = position.top + height;
-      let area = 0;
-      for (const guard of guards) {
+      let share = 0;
+      for (const guard of guards.filter(counted)) {
         const w = Math.max(0, Math.min(right, guard.right) - Math.max(position.left, guard.left));
         const h = Math.max(0, Math.min(bottom, guard.bottom) - Math.max(position.top, guard.top));
-        area += w * h;
+        share += (w * h) / Math.max(1, (guard.right - guard.left) * (guard.bottom - guard.top));
       }
-      return area;
+      return share;
     };
+    const coveredEvidence = position => covered(position, guard => !guard.yields);
+    const coveredBar = position => covered(position, guard => guard.yields);
     // Sticky: keep the current placement when it isn't covering a keep-out and still fits.
     if (this.pos) {
       const fits = this.pos.left >= margin - 1 && this.pos.top >= topMargin - 1
         && this.pos.left <= maxLeft + 1 && this.pos.top <= maxTop + 1;
-      if (fits && overlap(this.pos) === 0) return;
+      if (fits && coveredEvidence(this.pos) === 0 && coveredBar(this.pos) === 0) return;
     } else if (!guards.length) {
       this.pos = {left: maxLeft, top: topMargin};
       this.applyPosition(firstPlacement);
@@ -765,13 +845,20 @@ class IncidentCoachPanel {
       : 0;
     const ranked = corners.map(position => ({
       position,
-      overlap: overlap(position),
+      evidence: coveredEvidence(position),
+      bar: coveredBar(position),
       move: this.pos ? Math.hypot(position.left - this.pos.left, position.top - this.pos.top) : 0,
       away: distTo(position),
     }));
-    // Fewest pixels over the keep-outs, then (moving) the shortest hop, else the corner farthest
-    // from the control.
-    ranked.sort((a, b) => a.overlap - b.overlap || (this.pos ? a.move - b.move : b.away - a.away));
+    // Least of what the step is about hidden, then least of the query bar, then (moving) the shortest
+    // hop, else the corner farthest from the control.
+    ranked.sort((a, b) => a.evidence - b.evidence || a.bar - b.bar || (this.pos ? a.move - b.move : b.away - a.away));
+    // Even the best corner covers what the step is about. That matters more than the reasoning beneath
+    // the finding, so try again with the shorter card; the learner can still open the reasoning.
+    if (ranked[0].evidence > 0 && this.foldReasoning()) {
+      this.placeAwayFrom(target);
+      return;
+    }
     this.pos = {left: Math.round(ranked[0].position.left), top: Math.round(ranked[0].position.top)};
     this.applyPosition(firstPlacement);
   }
@@ -867,6 +954,7 @@ class IncidentCoachPanel {
     const detail = this.root.querySelector('#phase-detail');
     detail.textContent = note;
     detail.hidden = !note;
+    this.setReasoning();
     this.renderChoices([]);
     // Replay the entrance animation from a clean state.
     stage.classList.remove('celebrate-in', 'phase-in');
@@ -906,6 +994,7 @@ class IncidentCoachPanel {
     this.host.hidden = true;
     this.pos = null;
     this.appliedPos = null;
+    this.reasoningOpen = null;
     clearTimeout(this.celebrateTimer);
     this.celebrating = false;
     this.advanceRequested = false;
@@ -918,9 +1007,10 @@ class IncidentCoachPanel {
     .panel { pointer-events: auto; position: fixed; z-index:3; top: 0; left: 0; width: min(468px, calc(100vw - 36px)); max-height: calc(100vh - 90px); overflow: auto; box-sizing: border-box; padding: 18px; border: 1px solid #b6c6d6; border-radius: 12px; background: #fff; box-shadow: 0 16px 46px #17212b40; transform: translate(18px, 72px); transition: transform var(--panel-move, .6s) cubic-bezier(.4, 0, .2, 1); will-change: transform; }
     [hidden] { display:none!important; }
     header { display:flex; align-items:center; gap:8px; cursor:grab; touch-action:none; user-select:none; } header.dragging { cursor:grabbing; } header strong { flex:1; } .live-dot { width:9px;height:9px;border-radius:50%;background:#1aa87a;box-shadow:0 0 0 4px #1aa87a22; }
-    h2 { margin: 14px 0 8px; font-size: 17px; text-transform: capitalize; } h3 { margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.045em;color:#3f5060; } p { line-height:1.45; } #mode { color:#536170; font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
-    #stage { padding:20px 22px;border:1px solid #bcd3e6;border-left:6px solid #006bb4;border-radius:11px;background:#f1f7fd;box-shadow:0 6px 20px #006bb416; } #stage.acting { border-left-color:#e0a200;background:#fff8e8;box-shadow:0 6px 20px #e0a2001f; } #stage.result { border-left-color:#12a56b;background:#f0f9f4;box-shadow:0 6px 20px #12a56b1f; } #stage.result .eyebrow { color:#0b7a4f; }
-    .eyebrow { margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#3f6480;font-weight:750; } #phase-headline { margin:0;font-size:20px;line-height:1.38;font-weight:600;letter-spacing:-.01em;color:#0f2231;white-space:pre-line; }
+    h2 { margin: 14px 0 8px; font-size: 17px; text-transform: capitalize; } h3 { margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.045em;color:#3f5060; } p { line-height:1.45; } .step-line { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:10px; } .progress[hidden] + .step-line { margin-top:12px; } .step-line h2 { margin:0; } #mode { flex:none; margin:0; color:#536170; font-size:12px; } #mode::first-letter { text-transform:uppercase; }
+    #stage { padding:16px 18px;border:1px solid #bcd3e6;border-left:6px solid #006bb4;border-radius:11px;background:#f1f7fd;box-shadow:0 6px 20px #006bb416; } #stage.acting { border-left-color:#e0a200;background:#fff8e8;box-shadow:0 6px 20px #e0a2001f; } #stage.result { border-left-color:#12a56b;background:#f0f9f4;box-shadow:0 6px 20px #12a56b1f; } #stage.result .eyebrow { color:#0b7a4f; } #stage.result #phase-headline { font-size:17px;line-height:1.42; } #stage.result #phase-detail { margin-top:6px;color:#22384a;text-wrap:pretty; }
+    #phase-why { margin-top:10px;padding-top:6px;border-top:1px solid #12a56b33; } #phase-why summary { display:flex;align-items:center;gap:7px;width:fit-content;min-height:24px;list-style:none;cursor:pointer;color:#0b7a4f;font-size:13px;font-weight:650; } #phase-why summary::-webkit-details-marker { display:none; } #phase-why summary::before { content:"";width:5px;height:5px;margin-left:1px;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(-45deg);transition:transform .15s; } #phase-why[open] summary::before { transform:translateY(-1px) rotate(45deg); } #phase-why summary:hover,#phase-why summary:focus-visible { outline:2px solid #006bb4;outline-offset:1px;border-radius:3px; } #phase-why-text { margin:4px 0 0;color:#3a4d5c;font-size:14px;line-height:1.5;text-wrap:pretty; }
+    .eyebrow { margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:#3f6480;font-weight:750; } #phase-headline { margin:0;font-size:20px;line-height:1.38;font-weight:600;letter-spacing:-.01em;color:#0f2231;white-space:pre-line; }
     #stage.phase-in { animation:phase-in .32s cubic-bezier(.22,1,.36,1); } @keyframes phase-in { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
     .countdown { margin-top:16px;height:7px;border-radius:6px;background:#cfe0ee;overflow:hidden; } .countdown span { display:block;height:100%;width:0;background:#006bb4;border-radius:6px; } #stage.acting .countdown { background:#efdaa6; } #stage.acting .countdown span { background:#d98c00; }
     .countdown.working span { width:34%!important;animation:cd-sweep 1.25s cubic-bezier(.55,0,.45,1) infinite; } @keyframes cd-sweep { 0%{transform:translateX(-115%)} 100%{transform:translateX(310%)} }
@@ -930,7 +1020,7 @@ class IncidentCoachPanel {
     #hint-card { margin-top:14px;padding:13px 16px 14px;border:1px solid #b8dcea;border-left:4px solid #0874a8;border-radius:9px;background:#f0f8fc;box-shadow:0 4px 14px #0874a812; }
     #hint-label { display:block;color:#08638d;font:700 11px/1.3 system-ui,sans-serif;letter-spacing:.09em;text-transform:uppercase; }
     #hint-text { margin:6px 0 0;color:#173d53;font:500 15px/1.5 'Segoe UI',system-ui,sans-serif;letter-spacing:-.005em;white-space:pre-line; }
-    .progress { height:4px;background:#dce4eb;margin:13px 0;border-radius:4px;overflow:hidden; }.progress span { display:block;height:100%;background:#006bb4;transition:width .3s; }
+    .progress { height:4px;background:#dce4eb;margin:12px 0 10px;border-radius:4px;overflow:hidden; }.progress span { display:block;height:100%;background:#006bb4;transition:width .3s; }
     label { display:block;font-weight:650;margin-top:10px; } input,select,textarea { display:block;width:100%;box-sizing:border-box;margin-top:3px;padding:7px;border:1px solid #9ba9b6;border-radius:4px;font:inherit; } textarea { min-height:58px; }
     #diagnosis button { margin-top:12px;background:#006bb4;color:#fff;border:0; } #status { min-height:18px;color:#147d5c; } #status:empty { display:none; }.error { color:#a32b1c!important; }
     #stage.success { border-left-color:#12a56b;background:#ecf8f2;box-shadow:0 6px 22px #12a56b24; } #stage.success .eyebrow { display:flex;align-items:center;gap:8px;color:#0b7a4f; } #stage.success #phase-headline { color:#0c3d2b; }

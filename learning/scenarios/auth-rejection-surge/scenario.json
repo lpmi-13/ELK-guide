@@ -18,8 +18,7 @@
         {"reason": "token_reuse", "client": "partner-api", "message": "sign-in rejected: replayed refresh token", "noise_reason_a": "account_locked", "noise_client_a": "admin", "noise_reason_b": "bad_password", "noise_client_b": "public-web", "corroboration_message": "partner api replayed a refresh token"},
         {"reason": "device_untrusted", "client": "desktop-app", "message": "sign-in rejected: device not trusted", "noise_reason_a": "session_expired", "noise_client_a": "mobile-web", "noise_reason_b": "bad_password", "noise_client_b": "public-web", "corroboration_message": "desktop app blocked an untrusted device"}
       ]
-    },
-    "window": {"choose": ["15m", "20m", "30m", "45m"]}
+    }
   },
   "provisioning": {
     "strategies": ["seeded-events", "saved-objects"],

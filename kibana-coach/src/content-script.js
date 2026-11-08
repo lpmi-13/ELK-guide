@@ -93,6 +93,9 @@ function startIncidentCoach() {
   let guidedFeedbackShown = false;
   // Guided dead-end recovery: set while the coach explains and undoes a search that left no results.
   let recoveryController = null;
+  // The scope step's "choose again" card, and the watch on a relative window that will slide.
+  let windowMiss = null;
+  let windowWatch = null;
   let deadEndSince = 0;
   let deadEndPoll = null;
   // The check-in card on screen ({stepId}), and the learner's latest query with its result count so
@@ -113,6 +116,10 @@ function startIncidentCoach() {
     document.addEventListener(type, () => stepClock.input(), {capture: true, passive: true});
   }
   const activeSessionKey = 'incident-coach:auto-connect';
+  // A step that opens another page tells its result there, where what it talks about is on screen.
+  const carriedResultKey = 'incident-coach:carried-result';
+  let carriedResult = null;
+  let heldCommand = null;
   const demonstrationSlowdown = 3;
   const demonstrationTimingScale = 10 * demonstrationSlowdown;
   const completedActionHoldMs = 1000;
@@ -138,18 +145,12 @@ function startIncidentCoach() {
   // reading beat runs at a time, so a single resolver is enough.
   let completeReadingBeat = null;
   let activeReadingBeat = null;
-  // An Advance pressed while the coach is acting waits for the action to finish. In a guided
-  // walkthrough it also completes the explanation that follows. Keep its signal scoped to the
-  // current action so it cannot affect a later command.
+  // An Advance pressed while the coach is acting waits for the action to finish. Keep its signal
+  // scoped to the current action so it cannot affect a later command.
   let advanceAfterAction = null;
 
   function readingBeatWait(milliseconds, signal) {
     if (signal?.aborted) return Promise.reject(new DOMException('Demonstration stopped', 'AbortError'));
-    if (advanceAfterAction === signal && coach.phase === 'learning') {
-      advanceAfterAction = null;
-      coach.setAdvancePending(false);
-      return Promise.resolve();
-    }
     return new Promise((resolve, reject) => {
       let remaining = milliseconds;
       let startedAt = 0;
@@ -184,8 +185,9 @@ function startIncidentCoach() {
     });
   }
 
-  // A demonstration step's last beat: ring what the action revealed and say what it shows, then wait
-  // for the learner — reading the result is where the inference happens, so it is never on a timer.
+  // A step's last beat, demonstrated or shown on request: ring what the action revealed and say what
+  // it shows, then wait for the learner — reading the result is where the inference happens, so it is
+  // never on a timer.
   // The step is only reported done afterwards, so the next step (or the debrief) can't cover it.
   // Popovers the step opened are closed on the way out so they don't pile up over the next step.
   async function showResult(command, signal) {
@@ -223,10 +225,11 @@ function startIncidentCoach() {
         // the step actually drives. Some steps (e.g. add_filter) deliberately point at an anchor the
         // registry does not hold, like the filter bar, so a missing anchor must never abort the run —
         // resolveAnchor falls back to no opening highlight and perform() highlights the real controls.
-        const target = await adapter.resolveAnchor(command.target, controller.signal);
+        const target = await adapter.resolveAnchor(command.target, controller.signal, command);
         // A step that starts by reading the page (where the histogram rises) rings that instead of
         // spotlighting the control, which would dim the very thing the line asks the learner to read.
         coach.showCommand(command, command.goal_focus ? null : target);
+        if (!command.goal_focus) coach.revealTarget?.(target);
         if (command.goal_focus) coach.showGoalFocus(await adapter.findEvidence({...command, evidence_focus: command.goal_focus}, controller.signal));
         const pause = goalPause(command.narration);
         coach.startCountdown(pause);
@@ -242,15 +245,15 @@ function startIncidentCoach() {
         coach.beginWalkthrough(walkthrough);
       }
       const action = await adapter.perform(command, coach, {timingScale, signal: controller.signal, readBeat, holdAction});
-      if (command.mode === 'demonstration' && action) await showResult(command, controller.signal);
-      const learning = walkthrough
-        ? {...walkthrough, evidence: [walkthrough.reasoning, walkthrough.evidence].filter(Boolean).join('\n\n')}
-        : command;
-      if (walkthrough && learning.evidence) {
-        // Guided "Show me" still explains the result, since its action starts immediately, and rings
-        // the same evidence the demonstration does.
-        coach.showLearning(learning, await adapter.findEvidence(walkthrough, controller.signal));
-        await readBeat(learning.evidence);
+      const leaving = Boolean(action?.navigate);
+      if (command.mode === 'demonstration' && action && !leaving) await showResult(command, controller.signal);
+      const learning = walkthrough || command;
+      if (leaving && (command.mode === 'demonstration' || learning.evidence)) {
+        sessionStorage.setItem(carriedResultKey, JSON.stringify(learning));
+      } else if (walkthrough && learning.evidence) {
+        // Guided "Show me" ends on the same result card as a demonstration, with the reasoning its
+        // immediate start skipped.
+        await showResult(learning, controller.signal);
       }
       coach.finishCommand(command);
       client.acknowledge(command, 'completed', action?.state_after || {});
@@ -274,6 +277,38 @@ function startIncidentCoach() {
       }
       if (walkthroughController === controller) walkthroughController = null;
     }
+  }
+
+  // The step reported from the previous page and opened this one: say what it shows now that it's on
+  // screen, before moving on. The service's next command waits for the learner, as it would on one page.
+  async function playCarriedResult() {
+    const command = carriedResult;
+    const controller = new AbortController();
+    executionController = controller;
+    const guided = command.mode === 'guided';
+    if (guided) walkthroughController = controller;
+    currentCommand = command;
+    try {
+      coach.showCommand(command, null);
+      if (guided) coach.beginWalkthrough(command);
+      coach.showTarget(null, 'Opening the page this step leads to…');
+      await showResult(command, controller.signal);
+      coach.finishCommand(command);
+    } catch (error) {
+      if (error.name === 'AbortError') return;
+      coach.toast(error.message, true);
+    } finally {
+      carriedResult = null;
+      sessionStorage.removeItem(carriedResultKey);
+      if (executionController === controller) {
+        coach.setAdvancePending(false);
+        executionController = null;
+      }
+      if (walkthroughController === controller) walkthroughController = null;
+    }
+    const next = heldCommand;
+    heldCommand = null;
+    if (next) client.onCommand(next);
   }
 
   function recoveryEligible(command = currentCommand) {
@@ -307,6 +342,12 @@ function startIncidentCoach() {
     if (minutes < 1) return `${Math.round(minutes * 60)} seconds`;
     const rounded = Math.round(minutes);
     return `${rounded} minute${rounded === 1 ? '' : 's'}`;
+  }
+
+  // A moment as Discover's times read it: 24-hour local time ("14:03").
+  function clockText(moment) {
+    const pad = number => String(number).padStart(2, '0');
+    return `${pad(moment.getHours())}:${pad(moment.getMinutes())}`;
   }
 
   // The earned filter is still in force: as an enabled pill, or named with its value in the query.
@@ -355,18 +396,33 @@ function startIncidentCoach() {
         restore: async () => adapter.restoreDiscoverState(state, {merge: true}),
       };
     }
-    if (code === 'window_excludes_incident') {
-      const offset = reason.incident_offset_minutes ?? coach.currentBriefing?.detected_offset_minutes;
+    if (code === 'window_excludes_incident' || code === 'window_slid_past_incident') {
+      // The service compares the window's start with the incident's moment in absolute time, and words
+      // the card in the learner's clock time.
+      const moment = new Date(reason.incident_reference_at);
+      const start = new Date(reason.window_start_at);
+      const known = !Number.isNaN(moment.getTime()) && !Number.isNaN(start.getTime());
+      const time = reason.restore_time || state?.time;
       return {
-        eyebrow: 'Incident outside the window — back on track',
-        headline: `The window now starts ${minutesText(reason.from_minutes)} ago, but the incident was already under way ${minutesText(offset)} ago, so part of it is outside the view.`,
-        detail: 'I’ll put back the window you set earlier. Or widen it yourself — I’ll step aside.',
+        eyebrow: code === 'window_slid_past_incident' ? 'Window moved on — back on track' : 'Incident outside the window — back on track',
+        headline: reason.headline || (known
+          ? `The window now starts at ${clockText(start)}, after the incident at ${clockText(moment)}, so part of it is outside the view.`
+          : `The window now starts ${minutesText(reason.from_minutes)} ago, after the incident ${minutesText(reason.incident_offset_minutes)} ago, so part of it is outside the view.`),
+        detail: reason.detail || 'I’ll put the window back. Or widen it yourself — I’ll step aside.',
+        working: 'Typing a fixed start into the date box, so the window stays put…',
+        restoredToast: 'Window restored — carry on with this step.',
         stillBroken: () => {
           const range = observer.readTimeRange();
           const minutes = observer.timeRangeMinutes(range.from, range.to);
-          return minutes != null && offset != null && minutes + 1 < offset;
+          return known && minutes != null && Date.now() - minutes * 60_000 > moment.getTime() + 60_000;
         },
-        restore: async () => adapter.restoreDiscoverState(state, {timeOnly: true}),
+        // Typed into the date box as Show me does, so it works on a dashboard too, and the learner
+        // sees how to set a fixed start.
+        restore: async signal => {
+          if (!time?.from) return false;
+          await adapter.perform({type: 'set_time_range', target: 'kibana.time_picker', value: {from: time.from, to: time.to || 'now'}}, coach, {signal});
+          return true;
+        },
       };
     }
     const problem = {
@@ -450,8 +506,9 @@ function startIncidentCoach() {
     const state = command.restore_state;
     let watch = null;
     let restored = false;
+    let problem = null;
     try {
-      const problem = await describeDeadEnd(state, reason);
+      problem = await describeDeadEnd(state, reason);
       try { client.reportRecovery(command.step_id, reason?.reason_code || 'empty_result', problem.diagnosis?.kind); } catch (_error) { /* offline */ }
       // The learner fixing it themselves during the explanation cancels the restore.
       watch = setInterval(() => {
@@ -466,10 +523,10 @@ function startIncidentCoach() {
         await readingBeatWait(pause, controller.signal);
       }
       clearInterval(watch);
-      coach.showRecoveryWorking();
+      coach.showRecoveryWorking(problem.working);
       // Mute the observer: the coach's own restore must not be reported as the learner's action.
       adapter.performing = true;
-      restored = await problem.restore();
+      restored = await problem.restore(controller.signal);
     } catch (error) {
       if (error.name !== 'AbortError') coach.toast(error.message, true);
     } finally {
@@ -479,9 +536,66 @@ function startIncidentCoach() {
       if (recoveryController === controller) recoveryController = null;
       if (currentCommand && client) {
         coach.showCommand(currentCommand, adapter.resolve(currentCommand.target));
-        if (restored) coach.toast('Search restored — carry on with this step.');
+        if (restored) coach.toast(problem?.restoredToast || 'Search restored — carry on with this step.');
       }
     }
+  }
+
+  // On the scope step, a window that doesn't reach the incident (often a relative one picked from a
+  // briefing read minutes ago): say so at once in the learner's clock time, and let them choose again.
+  // Nothing is put back; any new window, or Choose again, closes the card.
+  function explainWindowMiss(command, reason) {
+    dismissWindowMiss();
+    const controller = new AbortController();
+    windowMiss = controller;
+    recoveryController = controller;
+    checkIn = null;
+    try { client.reportRecovery(command.step_id, reason.reason_code); } catch (_error) { /* offline */ }
+    coach.showRecovery({
+      eyebrow: 'Outside the window — choose again',
+      headline: reason.headline || 'That window doesn’t reach back to the incident.',
+      detail: reason.detail || 'Choose a window that starts earlier.',
+      choices: [{id: 'retry', label: 'Choose again', primary: true, onSelect: () => {
+        dismissWindowMiss();
+        if (currentCommand) coach.showCommand(currentCommand, adapter.resolve(currentCommand.target));
+      }}],
+    });
+  }
+
+  function dismissWindowMiss() {
+    if (!windowMiss) return;
+    const controller = windowMiss;
+    windowMiss = null;
+    if (recoveryController === controller) recoveryController = null;
+    controller.abort();
+  }
+
+  // A relative window that reaches the incident now will slide past it: the service says when. Then
+  // ask it to confirm (it records the dead end), unless the window has changed in the meantime.
+  function watchWindow(watch) {
+    clearTimeout(windowWatch?.timer);
+    windowWatch = null;
+    const at = watch ? new Date(watch.slides_at).getTime() : Number.NaN;
+    // Beyond a day the session is long over (and setTimeout's range ends at about 24 days).
+    if (client?.mode !== 'guided' || Number.isNaN(at) || at - Date.now() > 86_400_000) return;
+    const entry = {from: watch.from, timer: null};
+    const check = () => {
+      if (windowWatch !== entry || guidedFeedbackShown) return;
+      // The coach's own restore changes the window without a report; that ends the watch too.
+      if (observer?.readTimeRange().from !== entry.from) {
+        windowWatch = null;
+        return;
+      }
+      if (!recoveryEligible()) {
+        entry.timer = setTimeout(check, 2000);
+        return;
+      }
+      windowWatch = null;
+      try { client.checkWindow(); } catch (_error) { /* offline: the next action is checked anyway */ }
+    };
+    // A moment's margin so the service, judging on its own clock, agrees it has slid.
+    entry.timer = setTimeout(check, Math.max(0, at - Date.now()) + 1500);
+    windowWatch = entry;
   }
 
   // The step clock ran out: a soft card with the step, the latest drift the service noticed, and
@@ -531,6 +645,10 @@ function startIncidentCoach() {
     client?.stop();
     observer?.stop();
     guidedFeedbackShown = false;
+    dismissWindowMiss();
+    clearTimeout(windowWatch?.timer);
+    windowWatch = null;
+    try { carriedResult = JSON.parse(sessionStorage.getItem(carriedResultKey) || 'null'); } catch (_error) { carriedResult = null; }
     await adapter.initialize();
     client = new IncidentSessionClient(config);
     client.stepClock = () => stepClock.stepId ? {step_id: stepClock.stepId, seconds_active: stepClock.seconds} : null;
@@ -561,16 +679,28 @@ function startIncidentCoach() {
       }
     };
     client.onHint = hint => coach.showHint(hint);
+    client.onWindowSlid = message => {
+      if (message.evaluation && recoveryEligible()) recoverFromDeadEnd(currentCommand, message.evaluation);
+    };
     client.onActionResult = result => {
       const {evaluation} = result;
+      // A new window replaces the one a "choose again" card was about, and any watch on the old one.
+      if (result.action?.type === 'time_range_changed') {
+        dismissWindowMiss();
+        watchWindow(result.window_watch);
+      }
       // The service found the learner's change left the step unanswerable. An empty search starts
       // recovering without waiting out the usual grace period; a lost filter or a window that misses
-      // the incident still shows results, so recover from it directly.
+      // the incident still shows results, so recover from it directly. On the scope step itself, a
+      // window that misses is explained and the learner chooses again.
       if (client.mode === 'guided' && (evaluation.outcome === 'dead_end' || evaluation.outcome === 'empty_result')) {
-        if ((evaluation.reason_code || 'empty_result') === 'empty_result') deadEndSince = 1;
+        const code = evaluation.reason_code || 'empty_result';
+        if (code === 'empty_result') deadEndSince = 1;
+        else if (code === 'window_misses_incident') { if (recoveryEligible()) explainWindowMiss(currentCommand, evaluation); }
         else if (recoveryEligible()) recoverFromDeadEnd(currentCommand, evaluation);
       }
       if (evaluation.outcome === 'accepted') {
+        dismissWindowMiss();
         const reason = String(evaluation.reason || '').replace(/^Completed:\s*/i, '').trim();
         // A bare value that happened to find the right documents still earns the step, with a note.
         let note = '';
@@ -594,6 +724,14 @@ function startIncidentCoach() {
       // Safety net: reveal Kibana here too, for any flow that reaches a command
       // without first showing a briefing.
       window.__coachBootOverlay?.release();
+      // A step's result carried over from the previous page plays first; whichever command the service
+      // sends meanwhile (it resends on reconnect) runs when the learner has read it.
+      if (carriedResult) {
+        const started = heldCommand !== null;
+        heldCommand = command;
+        if (!started) playCarriedResult();
+        return;
+      }
       // Resume re-sends the pending command. Its reading beat is already running (or paused), so
       // leave that execution and its countdown in place instead of starting the step over.
       // The same holds for a guided "Show me" walkthrough that is still playing.
@@ -643,14 +781,6 @@ function startIncidentCoach() {
       // report the coach's change first (e.g. the window it just set), or the next step would start
       // over the result the learner is still reading.
       if (executionController && currentCommand?.mode === 'demonstration') return;
-      // Tag a learner's window change with when the incident was noticed (from the briefing) so
-      // the service can accept any window that reaches back far enough to include it.
-      if (action.type === 'time_range_changed') {
-        const offset = coach.currentBriefing?.detected_offset_minutes;
-        if (offset != null && action.details && action.details.incident_offset_minutes == null) {
-          action.details = {...action.details, incident_offset_minutes: offset};
-        }
-      }
       client.sendAction(action, 'learner');
       if (action.type === 'query_submitted') {
         lastSearch = {sequence: client.sequence, query: action.details?.query || '', count: action.state_after?.result_count};
@@ -714,6 +844,9 @@ function startIncidentCoach() {
       observer.stop();
       client.forget();
       sessionStorage.removeItem(activeSessionKey);
+      sessionStorage.removeItem(carriedResultKey);
+      carriedResult = null;
+      heldCommand = null;
       coach.stop();
     };
     coach.onDiagnosis = async answer => {

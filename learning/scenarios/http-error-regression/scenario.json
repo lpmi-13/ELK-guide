@@ -20,8 +20,7 @@
         {"service": "catalog", "route_path": "/api/catalog/search", "signal_field": "url.path", "finding": "/api/catalog/search", "status": 503, "status_family": "HTTP 503", "error_type": "CatalogBackendUnavailable", "message": "catalog backend unavailable after release", "version": "1.9.2"},
         {"service": "auth", "route_path": "/api/auth/token", "signal_field": "service.name", "finding": "auth", "status": 500, "status_family": "HTTP 5xx", "error_type": "TokenSigningError", "message": "token signing failed after release", "version": "4.0.3"}
       ]
-    },
-    "window": {"choose": ["15m", "30m", "45m", "1h"]}
+    }
   },
   "provisioning": {
     "strategies": ["seeded-events", "saved-objects"],

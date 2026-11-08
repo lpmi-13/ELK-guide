@@ -12,14 +12,20 @@
   "$defs": {
     "evidence_focus": {
       "type": "object",
-      "description": "Demonstration only: what the \"What this shows\" beat rings once the step's action is done. histogram = chart and hit count; query = query bar and hit count; filter = the field/value pill and hit count; top_values = the field's Top values (the row for value, when given); document = the expanded event's rows for fields; columns = the table columns for fields. Omitted, the coach derives it from the command type.",
+      "description": "Demonstration only: what the \"What this shows\" beat rings once the step's action is done. histogram = chart and hit count; query = query bar and hit count; filter = the field/value pill and hit count; top_values = the field's Top values (the row for value, when given); document = the expanded event's rows for fields (open = open the first record first); columns = the table columns for fields; registered = the registry targets in names; esql_row = the ES|QL result row for value; panel_filter = the pill for value and the dashboard panels titled in panels; span_details = APM span details; entity = the reading for host or pod value, in metric; inventory_outlier = the metric selector and the inventory tile for value; alert_summary = the alert's title, status and Reason inside scope; request_line = the inspector request's line containing text. Omitted, the coach derives it from the command type.",
       "required": ["kind"],
       "additionalProperties": false,
       "properties": {
-        "kind": {"enum": ["histogram", "query", "filter", "top_values", "document", "columns"]},
+        "kind": {"enum": ["histogram", "query", "filter", "top_values", "document", "columns", "registered", "esql_row", "panel_filter", "span_details", "entity", "inventory_outlier", "alert_summary", "request_line", "table_row"]},
         "field": {"type": "string"},
         "value": {"type": ["string", "number"]},
-        "fields": {"type": "array", "items": {"type": "string"}}
+        "fields": {"type": "array", "items": {"type": "string"}},
+        "names": {"type": "array", "items": {"type": "string"}},
+        "panels": {"type": "array", "items": {"type": "string"}},
+        "metric": {"type": "string"},
+        "scope": {"type": "string"},
+        "text": {"type": "string"},
+        "open": {"type": "boolean"}
       }
     },
     "drifts": {

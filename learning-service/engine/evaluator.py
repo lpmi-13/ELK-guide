@@ -22,10 +22,15 @@ IGNORED_ACTIONS = {"hint_requested", "command_acknowledged", "step_demonstrated"
 # complete a step while Discover shows "No results".
 SEARCH_ACTIONS = {"query_submitted", "esql_submitted", "filter_added", "filter_changed"}
 
-# A window is accepted when its look-back reaches within this many minutes of the incident — when
-# it was first noticed, or when it began if the pack seeds a visible onset — so a 15-minute window
-# still covers an incident reported 13 minutes ago while a 10-minute one (which would miss it) does not.
+# A window is accepted when its start is no more than this many minutes after the incident's moment —
+# when it was first noticed, when a rollout began, or when the failures began if the pack seeds a
+# visible onset — so a window starting 14:01 still covers a report at 14:02:30 but not one at 14:00.
 TIME_WINDOW_TOLERANCE_MINUTES = 1.0
+
+# What a scope step's window has to reach, in order of precedence: the moment, how long before it the
+# coach starts its own window, and the clock step it rounds that start down to. A rise read off the
+# histogram is dated to the minute; a report or a rollout time is rounded to a five-minute mark.
+WINDOW_REFERENCES = (("onset", 1.5, 1), ("rollout", 1.0, 5), ("noticed", 1.0, 5))
 
 # A stated incident window is right when its start is this close to where the seeded rise begins
 # (and its end, if given, no earlier than this before the rise ends). A "last N minutes" answer may
@@ -115,16 +120,27 @@ def _number(value):
 
 
 def window_reaches_incident(details):
-    """Whether a window's look-back includes when the incident was noticed; None when unknown.
+    """Whether a window holds the incident's moment; None when unknown.
 
-    Either value missing (an unparseable or historical window) is unknown rather than a failure,
-    so detection never regresses to "the correct action does nothing".
+    The service puts both in absolute time when the window arrives (``judge_window``): the window's
+    start and the moment as ages on one clock, and a window that ends before the moment never holds
+    it. Either age missing (an unparseable window) is unknown rather than a failure, so detection
+    never regresses to "the correct action does nothing".
     """
+    end, moment = parse_instant(details.get("window_end_at")), parse_instant(details.get("incident_reference_at"))
+    if end is not None and moment is not None and end < moment:
+        return False
     look_back = _number(details.get("from_minutes"))
     incident_offset = _number(details.get("incident_offset_minutes"))
     if look_back is None or incident_offset is None:
         return None
     return look_back + TIME_WINDOW_TOLERANCE_MINUTES >= incident_offset
+
+
+def relative_window(action):
+    """Whether a window's start counts back from now ("now-15m"), so it moves as time passes."""
+    time_from = str(_details(action).get("from") or _after(action).get("time_from") or "").strip().strip("'\"")
+    return time_from.lower().startswith("now")
 
 
 def validate_time_range(session, action, _evidence, validator):
@@ -417,7 +433,11 @@ def lost_earned_filters(action, earned_state):
     return [earned for earned in earned_state.get("filters") or [] if not _holds_filter(filters, query, earned)]
 
 
-def _scope_complete(session):
+def scope_step(goal):
+    return bool(goal) and goal.get("reference_action", {}).get("command") == "set_time_range"
+
+
+def scope_complete(session):
     return any(
         goal["id"] in session.get("completed_goals", set()) and goal.get("reference_action", {}).get("command") == "set_time_range"
         for goal in playbook_goals(session)
@@ -428,10 +448,11 @@ def dead_end(session, action, earned_state=None):
     """Why the view can no longer answer the current step, or None.
 
     ``empty_result``: the search left nothing to read. ``lost_earned_state``: a filter a completed step
-    earned is gone. ``window_excludes_incident``: once the window was scoped, a new one no longer
-    reaches back to the incident — when it was noticed, or its onset when the pack seeds one (before
-    scoping, the scope step handles windows).
-    The last two judge the learner's own changes only; the coach's performed actions are trusted.
+    earned is gone. ``window_misses_incident`` (on the scope step) and ``window_excludes_incident``
+    (after it): the window doesn't reach back to the incident's reference moment — when it was
+    noticed, a rollout, or its onset when the pack seeds one. A relative window is judged as it stood
+    when it arrived, so one picked from a briefing read minutes ago can miss.
+    The last three judge the learner's own changes only; the coach's performed actions are trusted.
     """
     if returned_no_results(action):
         return {"reason_code": "empty_result", "reason": "That search returned no results, so it cannot establish a goal."}
@@ -442,13 +463,26 @@ def dead_end(session, action, earned_state=None):
         names = ", ".join(f"{item['field']}: {item['value']}" for item in lost)
         return {"reason_code": "lost_earned_state", "lost": lost,
                 "reason": f"The search no longer holds {names}, which an earlier step established."}
-    if action.get("type") == "time_range_changed" and _scope_complete(session) and window_reaches_incident(_details(action)) is False:
-        details = _details(action)
-        return {"reason_code": "window_excludes_incident",
-                "from_minutes": _number(details.get("from_minutes")),
-                "incident_offset_minutes": _number(details.get("incident_offset_minutes")),
-                "reason": "The window no longer reaches back to the incident."}
+    if action.get("type") == "time_range_changed" and window_reaches_incident(_details(action)) is False:
+        # On the scope step the learner chooses again; after it, the window that step earned comes back.
+        if scope_complete(session):
+            return window_miss("window_excludes_incident", action, "The window no longer reaches back to the incident.")
+        if scope_step(current_goal(session)):
+            return window_miss("window_misses_incident", action, "The window does not reach back to the incident.")
     return None
+
+
+def window_miss(reason_code, action, reason):
+    """A window that misses the incident, with what the service compared (see ``judge_window``)."""
+    details = _details(action)
+    return {"reason_code": reason_code, "reason": reason,
+            "from": details.get("from"), "relative": relative_window(action),
+            "from_minutes": _number(details.get("from_minutes")),
+            "incident_offset_minutes": _number(details.get("incident_offset_minutes")),
+            "window_start_at": details.get("window_start_at"),
+            "window_end_at": details.get("window_end_at"),
+            "incident_reference": details.get("incident_reference"),
+            "incident_reference_at": details.get("incident_reference_at")}
 
 
 def current_goal(session):
@@ -533,6 +567,61 @@ def incident_bounds(manifest):
     return created - timedelta(minutes=float(timing["onset"])), created - timedelta(minutes=float(timing.get("end", 0)))
 
 
+def incident_moments(manifest, noticed_minutes=None):
+    """The incident's named moments (UTC): each timing a pack declares in minutes before the run was
+    created ("onset", "end", "rollout", "first", "noticed"), plus when it was noticed if the pack
+    leaves that to the briefing. Seeding counts back from the same instant, so these match the data."""
+    created = _created_at(manifest)
+    if created is None:
+        return {}
+    timing = incident_timing(manifest)
+    moments = {key: created - timedelta(minutes=float(value)) for key, value in timing.items()
+               if not key.endswith("_seconds") and isinstance(value, (int, float)) and not isinstance(value, bool)}
+    if "noticed" not in moments and noticed_minutes is not None:
+        moments["noticed"] = created - timedelta(minutes=float(noticed_minutes))
+    return moments
+
+
+def window_reference(moments):
+    """The moment a scope step's window must reach, with the coach's lead and clock step, or None."""
+    for key, lead, step in WINDOW_REFERENCES:
+        if key in moments:
+            return {"key": key, "at": moments[key], "lead_minutes": lead, "step_minutes": step}
+    return None
+
+
+def recommended_window_start(moments):
+    """Where the coach starts its window (UTC): a little before the reference moment, rounded down to
+    a clock time a learner would type (14:00, or 14:03 for a rise read off the histogram)."""
+    reference = window_reference(moments)
+    if reference is None:
+        return None
+    start = (reference["at"] - timedelta(minutes=reference["lead_minutes"])).replace(second=0, microsecond=0)
+    return start - timedelta(minutes=start.minute % reference["step_minutes"])
+
+
+def parse_instant(value):
+    """An ISO date as an aware UTC datetime, or None (Kibana writes '2026-11-07T14:00:00.000Z')."""
+    text = str(value or "").strip().strip("'\"")
+    if not text or text.lower().startswith("now"):
+        return None
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def window_start(details, received_at):
+    """When a reported window starts (UTC): its own date, or "now-N" counted back from when it arrived."""
+    moment = parse_instant(details.get("from"))
+    if moment is not None:
+        return moment
+    match = re.fullmatch(r"now-(\d+(?:\.\d+)?)([smhdw])", str(details.get("from") or "").strip().strip("'\""))
+    minutes = float(match.group(1)) * {"s": 1 / 60, "m": 1, "h": 60, "d": 1440, "w": 10080}[match.group(2)] if match else _number(details.get("from_minutes"))
+    return None if minutes is None else received_at - timedelta(minutes=minutes)
+
+
 def incident_onset_age_minutes(manifest, now=None):
     """How many minutes ago a timed incident's rise began, measured now — it grows as the run ages,
     so a "last N minutes" window that held the onset when the run started can stop holding it."""
@@ -604,7 +693,9 @@ def _window_matches(text, context):
     manifest = context.get("manifest") or {}
     bounds = incident_bounds(manifest)
     if bounds is None:
-        return any(_mentions(text, item) for item in context.get("accepted", []))
+        # Without the run's timing, the stated window must name the expected one: both ends of a
+        # "14:05–14:12" range, however the sentence joins them.
+        return any(all(_mentions(text, part) for part in str(item).split("–")) for item in context.get("accepted", []))
     clocks = [int(hour) * 60 + int(minute) for hour, minute in _CLOCK_TIME.findall(str(text or ""))]
     offset = _number(context.get("utc_offset_minutes"))
     if clocks and offset is not None:
@@ -618,6 +709,23 @@ def _window_matches(text, context):
         age = incident_onset_age_minutes(manifest, context.get("now"))
         return minutes + TIME_WINDOW_TOLERANCE_MINUTES >= age and minutes <= age + ANSWER_WINDOW_SLACK_MINUTES
     return False
+
+
+_CLOCK_TOKEN = re.compile(r"\$\{incident\.([a-z]+)_clock\}")
+
+
+def _clock_matches(text, context):
+    """A stated time of one event ("14:02") is within the tolerance of when it happened, read in the
+    learner's local time as Discover shows it."""
+    moment = context.get("moment")
+    if moment is None:
+        return any(_mentions(text, item) for item in context.get("accepted", []))
+    offset = _number(context.get("utc_offset_minutes"))
+    clocks = [int(hour) * 60 + int(minute) for hour, minute in _CLOCK_TIME.findall(str(text or ""))]
+    if offset is None or not clocks:
+        return False
+    actual = _minute_of_day(moment - timedelta(minutes=offset))
+    return abs(_clock_gap(clocks[0], actual)) <= ANSWER_CLOCK_TOLERANCE_MINUTES
 
 
 def _answer_matches(actual, expected, field, context=None):
@@ -637,6 +745,8 @@ def _answer_matches(actual, expected, field, context=None):
         return {str(item).casefold() for item in actual_values} == {str(item).casefold() for item in expected_values}
     if kind == "window":
         return _window_matches(actual, context)
+    if kind == "clock":
+        return _clock_matches(actual, context)
     if kind == "statement":
         # A conclusion is right when it states the decisive facts, in the learner's own words.
         mentions = context.get("mentions") or {}
@@ -708,14 +818,20 @@ def _answer_graders(session, answer_schema, truth, answer):
     tolerances = {field["id"]: float(field.get("tolerance", 0)) for field in answer_schema.get("fields", [])}
     offset = _number(answer.get("client_utc_offset_minutes"))
 
+    moments = incident_moments(manifest, session.get("detected_offset_minutes"))
+    at = {field["id"]: field.get("at") for field in answer_schema.get("fields", [])}
+
     def base(key):
         expected = _lookup(truth, f"answers.{key}")
-        return {"accepted": _accepted(truth, key, expected), "manifest": manifest, "now": now, "utc_offset_minutes": offset}
+        return {"accepted": _accepted(truth, key, expected), "manifest": manifest, "now": now, "utc_offset_minutes": offset,
+                "moment": moments.get(at.get(key))}
 
     def mention(key):
         context = base(key)
         if kinds.get(key) == "window":
             return lambda text: _window_matches(text, context)
+        if kinds.get(key) == "clock":
+            return lambda text: _clock_matches(text, context)
         if kinds.get(key) == "number":
             return lambda text: any(_number_matches(text, item, tolerances[key]) for item in context["accepted"])
         return lambda text: any(_mentions(text, item) for item in context["accepted"])
@@ -731,7 +847,13 @@ def _answer_graders(session, answer_schema, truth, answer):
         if bounds and offset is not None:
             start, end = (moment - timedelta(minutes=offset) for moment in bounds)
             return f"{start:%H:%M}–{end:%H:%M}"
-        return str(expected if expected is not None else "")
+        moment = moments.get(field.get("at")) if field.get("kind") == "clock" else None
+        if moment is not None and offset is not None:
+            return f"{moment - timedelta(minutes=offset):%H:%M}"
+        # An expected answer can name the incident's moments ("between ${incident.onset_clock} and …").
+        local = (lambda instant: f"{instant - timedelta(minutes=offset):%H:%M}") if offset is not None else (lambda instant: f"{instant:%H:%M} UTC")
+        return _CLOCK_TOKEN.sub(lambda match: local(moments[match.group(1)]) if match.group(1) in moments else match.group(0),
+                                str(expected if expected is not None else ""))
 
     return {"context": context, "display": display}
 
@@ -851,6 +973,8 @@ DEAD_END_LABELS = {
     "empty_result": "search with no results",
     "lost_earned_state": "removed an earned filter",
     "window_excludes_incident": "window missed the incident",
+    "window_misses_incident": "window missed the incident",
+    "window_slid_past_incident": "window slid past the incident",
 }
 
 
@@ -884,13 +1008,15 @@ def step_detail(log):
 
 
 def step_detours(session):
-    """Per-step dead ends and drift, for a challenge debrief (no clock, no live feedback)."""
+    """Per-step dead ends and drift, for a challenge debrief (no clock, no live feedback). A dead end
+    the service could explain (a window that missed the incident) carries that explanation as a note."""
     detours = []
     for goal in playbook_goals(session):
         log = (session.get("step_log") or {}).get(goal["id"]) or {}
         dead_ends, drift = dead_end_labels(log), list(log.get("drift") or [])
+        notes = list(dict.fromkeys(entry["note"] for entry in log.get("dead_ends") or [] if entry.get("note")))
         if dead_ends or drift:
-            detours.append({"id": goal["id"], "title": goal.get("title", goal["id"]), "dead_ends": dead_ends, "drift": drift})
+            detours.append({"id": goal["id"], "title": goal.get("title", goal["id"]), "dead_ends": dead_ends, "notes": notes, "drift": drift})
     return detours
 
 

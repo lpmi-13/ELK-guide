@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "id": "discover-time-window",
-  "version": 4,
+  "version": 5,
   "title": "Find the incident window",
   "type": "analysis",
   "classification": "core",
@@ -24,11 +24,6 @@
         {"noticed": 8, "onset": 11, "end": 5, "noticed_seconds": 480, "onset_seconds": 660, "end_seconds": 300},
         {"noticed": 10, "onset": 12, "end": 6, "noticed_seconds": 600, "onset_seconds": 720, "end_seconds": 360},
         {"noticed": 7, "onset": 10, "end": 4, "noticed_seconds": 420, "onset_seconds": 600, "end_seconds": 240}
-      ]
-    },
-    "window": {
-      "choose": [
-        {"value": "15m", "label": "last 15 minutes"}
       ]
     }
   },
@@ -66,9 +61,9 @@
   "starting_view": {"app": "discover", "saved_object": "incident-investigation", "path": "/app/discover#/view/incident-investigation?_g=(time:(from:now-1h,to:now))"},
   "truth": {
     "answers": {
-      "finding": "${param.window.label}",
+      "finding": "${incident.onset_clock}–${incident.end_clock}",
       "scope": "${param.incident.service} traffic",
-      "conclusion": "Errors from ${param.incident.service} spiked during the ${param.window.label}.",
+      "conclusion": "Errors from ${param.incident.service} spiked between ${incident.onset_clock} and ${incident.end_clock}.",
       "status": "${param.incident.status}",
       "route": "${param.incident.route}"
     },

@@ -116,6 +116,37 @@ class PackRuleTests(unittest.TestCase):
                             checked += 1
         self.assertGreater(checked, 30)
 
+    def test_a_column_checks_the_evidence_only_on_the_field_the_step_names(self):
+        """Adding any column used to count as checking the evidence (url.path passed the deployment
+        pack's "add the version field"). Now only the pack's key field does; another column is drift
+        that names what was added."""
+        checked = 0
+        for entry in CATALOG:
+            session = self.session(entry, 5)
+            goals = session["playbook"]["goals"]
+            index = next((i for i, goal in enumerate(goals) if goal["id"] == "inspect"), None)
+            routes = [route for route in goals[index]["accepts"] if "column_added" in route["action"]] if index is not None else []
+            if not routes:
+                continue
+            check = next(v for v in routes[0]["validators"] if v["kind"] == "detail_equals")
+            fields = [self.server.substitute(value, session) for value in check.get("values") or [check["value"]]]
+            evidence = {"assertions": {item["id"]: True for item in session["manifest"]["scenario"]["truth"]["assertions"]}}
+            trial = lambda: {**session, "completed_goals": {goal["id"] for goal in goals[:index]}}
+            with self.subTest(pack=entry["id"], fields=fields):
+                for field in fields:
+                    self.assertRegex(field, r"^[\w.@]+$")
+                    right = self.server.evaluate_action(trial(), {"type": "column_added", "actor": "learner", "details": {"field": field}}, evidence)
+                    self.assertIn("inspect", right["goals_progressed"])
+                other = "agent.name"
+                wrong = self.server.evaluate_action(trial(), {"type": "column_added", "actor": "learner", "details": {"field": other}}, evidence)
+                self.assertNotIn("inspect", wrong["goals_progressed"])
+                self.assertEqual(wrong["outcome"], "drift")
+                self.assertIn(other, wrong["note"])
+                for field in fields:
+                    self.assertIn(field, wrong["note"])
+                checked += 1
+        self.assertGreaterEqual(checked, 7)
+
     def test_no_pack_asks_for_internal_evidence_ids(self):
         for path in [*(ROOT / "learning/scenarios").glob("*/*.json"), *(ROOT / "learning/templates").glob("*/*.json")]:
             with self.subTest(path=path.name):
@@ -124,13 +155,21 @@ class PackRuleTests(unittest.TestCase):
                 self.assertNotIn("evidence references", text)
 
     def test_dashboards_scope_a_window_from_when_the_problem_was_noticed(self):
+        """A dashboard's window starts at a fixed time: the five-minute mark at least a minute before
+        the report, so every panel covers it however long the learner takes."""
+        from datetime import datetime, timedelta
         for entry in [item for item in CATALOG if item["surface"] == "dashboard"]:
             session = self.session(entry, 6)
             scope = session["playbook"]["goals"][0]
-            expected = f"now-{self.server.recommended_window_minutes(session['detected_offset_minutes'])}m"
+            created = datetime.fromisoformat(session["manifest"]["created_at"])
+            noticed = created - timedelta(minutes=session["detected_offset_minutes"])
+            start = datetime.fromisoformat(self.server.substitute(scope["reference_action"]["arguments"], session)["from"].replace("Z", "+00:00"))
             with self.subTest(pack=entry["id"]):
                 self.assertEqual(scope["reference_action"]["command"], "set_time_range")
-                self.assertEqual(self.server.substitute(scope["reference_action"]["arguments"], session)["from"], expected)
+                self.assertEqual(start.minute % 5, 0)
+                self.assertEqual(start.second, 0)
+                self.assertGreaterEqual((noticed - start).total_seconds(), 60)
+                self.assertLess((noticed - start).total_seconds(), 6 * 60)
 
 
 class NonMvpAnswerTests(unittest.TestCase):
@@ -282,9 +321,21 @@ class ViewScopedEvidenceTests(unittest.TestCase):
             self.assertTrue(evidence["view_scoped"])
             self.assertFalse(evidence["assertions"]["signal"])
             self.assertIn({"match_phrase": {"url.path": "/somewhere-else"}}, json.loads(json.dumps(calls[0]))["query"]["bool"]["filter"][1]["bool"]["filter"])
+            # A view may hold less than the run's minimum and still show the evidence: the coach's own
+            # "last 5 minutes" holds about half of a 10-minute incident.
+            with mock.patch.object(self.server, "http_json", return_value=(200, {"hits": {"total": {"value": 3}}})):
+                evidence = self.server.action_evidence(session, {"type": "document_expanded", "details": {}})
+            self.assertTrue(evidence["view_scoped"])
+            self.assertTrue(evidence["assertions"]["signal"])
             # A query the translator can't read is checked against the whole run instead.
             session["view"]["query"] = "url.*: x"
             evidence = self.server.action_evidence(session, {"type": "document_expanded", "details": {}})
+            self.assertFalse(evidence["view_scoped"])
+            self.assertTrue(evidence["assertions"]["signal"])
+            # Show me is the coach performing the reference route, so it isn't judged by the view: a
+            # record just outside the coach's own window must not refuse the step and leave no card up.
+            session["view"]["query"] = 'url.path: "/somewhere-else"'
+            evidence = self.server.action_evidence(session, {"type": "column_added", "actor": "tutorial", "details": {}})
             self.assertFalse(evidence["view_scoped"])
             self.assertTrue(evidence["assertions"]["signal"])
 

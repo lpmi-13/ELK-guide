@@ -2,6 +2,17 @@ globalThis.KibanaApplicationAdapters ||= [];
 globalThis.KibanaApplicationAdapters.push({
   name: 'infrastructure',
   commands: new Set(['select_inventory_type', 'select_infrastructure_entity', 'filter_infrastructure_entities', 'group_infrastructure_entities', 'select_metric', 'compare_metric_period', 'navigate_from_metrics_to_logs']),
+
+  // A step about one host or pod opens on that one, not the first tile. The logs pivot opens on the Logs
+  // tab while the host's details are up; a pod's menu closes between steps, so that opens on the pod.
+  async anchor(command, host, signal) {
+    this.dismissTour();
+    const value = command.value || {};
+    if (command.type === 'select_infrastructure_entity') return host.waitForNaming(command.target, value.value, signal);
+    if (command.type === 'navigate_from_metrics_to_logs') return host.resolve(command.target) || host.waitForNaming('kibana.infrastructure_entity', value.value, signal);
+    return null;
+  },
+
   async perform(command, host, coach, {timingScale = 1, signal} = {}) {
     const value = command.value || {};
     const narration = command.narration || 'Use the highlighted infrastructure control.';
@@ -14,6 +25,14 @@ globalThis.KibanaApplicationAdapters.push({
       await host.pointAt(opener, coach, timingScale, signal, narration, {activate: true, hold: false});
       const option = await this.option(command.type === 'select_inventory_type' ? 'kibana.inventory_option' : 'kibana.metric_option', choice, host, signal);
       await host.pointAt(option, coach, timingScale, signal, `Choose ${choice}.`, {activate: true});
+      // The pods view opens under an "Install Kubernetes Integration" card, which pushes the inventory
+      // the step is about below the fold. Dismiss it as a learner would (verified 9.5.2).
+      if (command.type === 'select_inventory_type') {
+        const dismiss = () => document.querySelector("[data-test-subj='infraKubernetesDashboardCardHideThisButton']");
+        const deadline = Date.now() + 2500;
+        while (!dismiss() && /pods/i.test(choice) && Date.now() < deadline) await host.wait(100, signal);
+        dismiss()?.click();
+      }
       const type = command.type === 'select_inventory_type' ? 'inventory_type_selected' : 'metric_selected';
       return {type, details: {value: choice}, state_after: {app: 'metrics'}};
     }
@@ -24,7 +43,8 @@ globalThis.KibanaApplicationAdapters.push({
       const entity = host.targetNaming('kibana.infrastructure_entity', value.value, await host.waitFor('kibana.infrastructure_entity', 20000, signal));
       await host.pointAt(entity, coach, timingScale, signal, `Open ${value.value} again.`, {activate: true, hold: false});
     }
-    const target = host.targetNaming(command.target, named, await host.waitFor(command.target, 20000, signal));
+    const fallback = await host.waitFor(command.target, 20000, signal);
+    const target = await host.waitForNaming(command.target, named, signal) || fallback;
     // A host opens a details flyout whose Logs tab stays here; a pod opens a menu whose "Kubernetes Pod
     // logs" link leaves for Discover (verified 9.5.2), so the step reports first and the coach follows it.
     if (command.type === 'navigate_from_metrics_to_logs' && target.matches?.('a[href]')) {

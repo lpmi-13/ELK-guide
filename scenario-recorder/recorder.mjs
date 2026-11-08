@@ -70,7 +70,10 @@ async function perform(page, command) {
     return {type: 'time_range_changed', details: command.value, state_after: {time_from: command.value.from}};
   }
   if (['enter_query', 'enter_kql', 'enter_esql', 'add_filter'].includes(command.type)) {
-    const query = resolve(page, command.type === 'enter_esql' ? 'kibana.esql_editor' : 'kibana.query_bar');
+    // The registry's kibana.esql_editor is the visible editor; filling needs Monaco's own input inside it.
+    const query = command.type === 'enter_esql'
+      ? page.locator("[data-test-subj='ESQLEditor'] textarea, textarea[data-test-subj='ESQLEditor']").first()
+      : resolve(page, 'kibana.query_bar');
     let value = command.value;
     let actionType = 'query_submitted';
     let details = {query: value};

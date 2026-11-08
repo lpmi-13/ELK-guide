@@ -17,13 +17,29 @@ class IncidentBriefing {
     return element;
   }
 
-  localTime(minutesAgo) {
-    const observedAt = new Date(Date.now() - Number(minutesAgo || 0) * 60_000);
-    try {
-      return new Intl.DateTimeFormat(undefined, {hour: '2-digit', minute: '2-digit'}).format(observedAt);
-    } catch (_error) {
-      return observedAt.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+  // A moment as Discover's own times read it: 24-hour local time ("14:03").
+  clock(moment) {
+    const pad = number => String(number).padStart(2, '0');
+    return `${pad(moment.getHours())}:${pad(moment.getMinutes())}`;
+  }
+
+  // How long ago a moment was, counted when the briefing opens, so a report read late still adds up.
+  ago(moment) {
+    const minutes = Math.round((Date.now() - moment.getTime()) / 60_000);
+    if (minutes < 1) return 'just now';
+    return minutes === 1 ? '1 minute ago' : `${minutes} minutes ago`;
+  }
+
+  // Each moment the report names, as a clock time beside how long ago it was. The service sends the
+  // moments themselves, so the time stays right however long after the run began the briefing is read.
+  timedFacts(briefing) {
+    const noticed = briefing.noticed_at ? new Date(briefing.noticed_at) : new Date(Date.now() - Number(briefing.detected_offset_minutes || 0) * 60_000);
+    const facts = [`Noticed at ${this.clock(noticed)} (${this.ago(noticed)}).`];
+    for (const fact of briefing.timed_facts || []) {
+      const moment = new Date(fact.at);
+      if (!Number.isNaN(moment.getTime())) facts.push(String(fact.text).replace('{time}', this.clock(moment)).replace('{ago}', this.ago(moment)));
     }
+    return facts;
   }
 
   modeCopy(mode) {
@@ -73,7 +89,7 @@ class IncidentBriefing {
     const triageRequest = (briefing.signals || []).find(signal => /triage request/i.test(signal.label));
     const facts = [
       briefing.summary,
-      `Noticed ${briefing.detected_offset_minutes} minutes ago, at ${this.localTime(briefing.detected_offset_minutes)} local time.`,
+      ...this.timedFacts(briefing),
       briefing.impact,
       ...(triageRequest ? [`${String(triageRequest.value).replace(/\.\s*$/, '')}.`] : []),
     ];

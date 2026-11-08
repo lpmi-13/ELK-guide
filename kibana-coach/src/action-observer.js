@@ -14,6 +14,7 @@ class KibanaActionObserver {
     // click — dragging a selection on the date histogram, or browser back/forward — which the
     // click handler alone would miss.
     this.lastTimeSignature = this.timeSignature();
+    this.lastSort = this.sortSignature();
     this.rebaselineFilters();
     this.timePoll = setInterval(() => {
       if (this.adapter.performing) {
@@ -27,6 +28,7 @@ class KibanaActionObserver {
         return;
       }
       this.captureTimeRange(false);
+      this.captureSort();
       this.captureFilterRemoval();
       this.captureApmTrace();
     }, 700);
@@ -36,6 +38,7 @@ class KibanaActionObserver {
   // restored search) is not later reported by the poll as the learner's.
   rebaseline() {
     this.lastTimeSignature = this.timeSignature();
+    this.lastSort = this.sortSignature();
     this.rebaselineFilters();
     this.lastTraceId = this.apmTraceInView();
   }
@@ -232,15 +235,18 @@ class KibanaActionObserver {
       // (e.g. service.name.keyword); the scenario truth names the base field, so
       // normalize. The Add-filter popover already uses the base field name.
       const field = (keyToken ? keyToken[1] : withoutNot.split(':')[0].trim()).replace(/\.(keyword|text)$/, '');
-      const value = (valueToken ? valueToken[1] : withoutNot.split(':').slice(1).join(':').trim()).replace(/^"|"$/g, '');
+      // The test subject drops a value's spaces ("filter-value-failedtransactions"); the pill's text keeps them.
+      const fromText = withoutNot.split(':').slice(1).join(':').trim();
+      const spaced = valueToken && fromText.replace(/\s+/g, '') === valueToken[1] ? fromText : null;
+      const value = (spaced ?? (valueToken ? valueToken[1] : fromText)).replace(/^"|"$/g, '');
       const negate = /(^|\s)filter-negated(\s|$)/.test(subject) || /^NOT\s+/i.test(text);
       const disabled = /(^|\s)filter-disabled(\s|$)/.test(subject);
       return disabled ? {field, value, negate, disabled} : {field, value, negate};
     }).filter(filter => filter.field);
   }
 
-  // Best-effort field name for a column toggle. The inspect goal accepts column_added /
-  // column_removed without validating the field, so an empty result still progresses it.
+  // The field name of a column toggle (`fieldToggle-<field>`, `fieldPopoverHeader_addField-<field>`).
+  // Steps check it: a column completes "check the evidence" only on the field the step names.
   fieldFromSubject(subject, target) {
     const suffix = subject.match(/[-_]([\w.@]+)$/);
     if (suffix && !/^(button|column|field|add|remove)$/i.test(suffix[1])) return suffix[1];
@@ -324,6 +330,36 @@ class KibanaActionObserver {
       if (!Number.isNaN(end) && Date.now() - end > 5 * 60000) return null; // window ends in the past
     }
     return Math.round(minutes * 100) / 100;
+  }
+
+  // Discover's table sort from the `_a` app state in the URL (verified 9.5.2: the @timestamp header's
+  // "Sort Old-New" gives `sort:!(!('@timestamp',asc))`), however it was chosen: a column header's menu,
+  // the toolbar's "Sort fields" popover, or browser back. The first entry is the sort that orders rows.
+  readSort() {
+    const href = (typeof location !== 'undefined' && location.href) || '';
+    let text = href;
+    try { text = decodeURIComponent(href); } catch (_error) { /* malformed escape */ }
+    const match = text.match(/sort:!\(!\(([^,]+),(asc|desc)\)/);
+    if (!match) return null;
+    return {field: match[1].replace(/^['"]|['"]$/g, ''), direction: match[2]};
+  }
+
+  sortSignature() {
+    const sort = this.readSort();
+    return sort ? `${sort.field}|${sort.direction}` : '';
+  }
+
+  // Report a change of sort as sort_changed. Only a change between two known states counts, so the
+  // view's own default sort, read as the page loads, is never reported as the learner's.
+  captureSort() {
+    const signature = this.sortSignature();
+    const previous = this.lastSort;
+    this.lastSort = signature;
+    if (!signature || signature === previous || previous === undefined) return;
+    const sort = this.readSort();
+    // Discover writing its own default (newest first) into a URL that had no sort is not a choice.
+    if (!previous && sort.field === '@timestamp' && sort.direction === 'desc') return;
+    this.report({type: 'sort_changed', details: {field: sort.field, direction: sort.direction}, state_after: {sort: [[sort.field, sort.direction]]}});
   }
 
   // Report the applied window as time_range_changed carrying its real from/to and look-back. `force`

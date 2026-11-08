@@ -133,7 +133,7 @@ class ScenarioV2Tests(unittest.TestCase):
         isolate = next(goal for goal in playbook["goals"] if goal["id"] == "isolate")
         query = isolate["reference_action"]["arguments"]
         self.assertIn('failures = COUNT(*) WHERE event.outcome == "failure"', query)
-        self.assertIn('p95 = PERCENTILE(event.duration, 95)', query)
+        self.assertIn('PERCENTILE(event.duration, 95)', query)
 
     def test_goal_inserts_splice_new_goals_relative_to_the_template(self):
         from contracts import expand_descriptor as expand

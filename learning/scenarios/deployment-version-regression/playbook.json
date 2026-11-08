@@ -4,7 +4,6 @@
   "extends": "discover.json",
   "variables": {
     "title": "Deployment-version investigation",
-    "window": "${param.window}",
     "field": "service.version",
     "query": "service.name: ${param.incident.service} and service.version: *",
     "finding_phrase": "${truth.finding}"
@@ -13,32 +12,131 @@
     "demonstration_summary": {
       "title": "${var.title} complete",
       "checks": [
-        {"title": "Scope", "detail": "Set a time window that includes the reported incident."},
-        {"title": "Busiest service", "detail": "Found ${param.incident.service} carrying most of the window's requests."},
-        {"title": "Mixed outcomes", "detail": "Filtered ${param.incident.service} across versions and found HTTP ${param.incident.status} alongside 200 responses."},
-        {"title": "Version comparison", "detail": "Compared service.version with HTTP status: ${param.incident.bad_version} failed while ${param.incident.good_version} stayed healthy."}
+        {
+          "title": "Scope",
+          "detail": "Started the window at ${incident.window_start_clock}, before the rollout at ${incident.rollout_clock}, so it stayed put while we worked."
+        },
+        {
+          "title": "Busiest service",
+          "detail": "Found ${param.incident.service} carrying most of the window's requests."
+        },
+        {
+          "title": "Mixed outcomes",
+          "detail": "Filtered ${param.incident.service} across versions and found HTTP ${param.incident.status} alongside 200 responses."
+        },
+        {
+          "title": "Version comparison",
+          "detail": "Compared service.version with HTTP status: ${param.incident.bad_version} failed while ${param.incident.good_version} stayed healthy."
+        },
+        {
+          "title": "First appearance",
+          "detail": "Sorted oldest first: ${param.incident.bad_version} first appeared at ${incident.first_clock}, and its first request failed."
+        }
       ],
       "answer": {
         "finding": "${truth.finding}",
         "scope": "${truth.scope}",
+        "first_seen": "${truth.first_seen}",
         "conclusion": "${truth.conclusion}",
         "evidence": "HTTP ${param.incident.status} on ${param.incident.bad_version} versus 200 on ${param.incident.good_version} corroborates the version regression."
       }
     }
   },
   "goal_overrides": {
+    "scope": {
+      "concept": "The window has to reach back before the rollout. A fixed start stays put while you investigate; “the last 15 minutes” moves with the clock.",
+      "narration": "The new release began rolling out at ${incident.rollout_clock} (${incident.rollout_ago}). Set the window to start a little before then, so the rollout and the traffic just before it are in view.",
+      "reasoning": "Starting just before the rollout puts the old release's healthy traffic beside the new one's, and a fixed start keeps both in view however long you take.",
+      "evidence": "The histogram should start a little before the rollout.",
+      "demonstration": {
+        "narration": "The rollout began at ${incident.rollout_clock}. I'll type a fixed start of ${incident.window_start_clock}, the five-minute mark before it, so the rollout and the traffic just before it stay in view however long we take.",
+        "reasoning": "",
+        "evidence": "The window now starts at ${incident.window_start_clock}, before the rollout at ${incident.rollout_clock}. Because the start is a fixed time, the first requests on the new release can't slide out of view while we investigate."
+      },
+      "accepts": [
+        {
+          "action": "time_range_changed",
+          "validators": [
+            {
+              "kind": "time_range_contains",
+              "any_valid": true
+            }
+          ]
+        }
+      ],
+      "drifts": [
+        {
+          "action": [
+            "query_submitted",
+            "filter_added"
+          ],
+          "validators": [],
+          "note": "You started searching before setting the time window; this step is about choosing when to look."
+        }
+      ],
+      "hints": [
+        "The briefing says when the rollout began; the window has to start before that. A fixed start stays put, where the last 15 minutes moves on with the clock.",
+        "Click the date box at the top of Discover and type a start date and time followed by “to now”.",
+        "Start the window at ${incident.window_start_clock}: type “${incident.window_start_typed} to now”. Show me can do it for you."
+      ]
+    },
     "isolate": {
       "narration": "Search for the service that stood out in service.name's Top values, across all of its versions, and read the HTTP status codes in the results.",
       "demonstration": {
         "narration": "I'll keep all versions of ${param.incident.service} together and compare HTTP statuses to see whether failures line up with a release.",
         "reasoning": "The service and version filter removes unrelated traffic, but it does not select errors.\n\nRead http.response.status_code in the filtered results to see whether requests succeeded or failed before comparing versions.",
         "evidence": "The filtered ${param.incident.service} results show HTTP ${param.incident.status} alongside 200 in http.response.status_code.\n\nWe still need to compare those outcomes with service.version before attributing the failures.",
-        "learning_focus": ["http.response.status_code"]
+        "evidence_focus": {
+          "kind": "columns",
+          "fields": [
+            "http.response.status_code"
+          ]
+        },
+        "learning_focus": [
+          "http.response.status_code"
+        ]
       },
-      "requires": ["survey"],
+      "requires": [
+        "survey"
+      ],
       "accepts": [
-        {"action": ["query_submitted", "filter_added", "filter_changed"], "validators": [{"kind": "query_contains", "fields": ["service.name"], "value": "${param.incident.service}"}, {"kind": "result_assertion", "assertion": "signal"}]},
-        {"action": ["filter_added", "filter_changed"], "validators": [{"kind": "filter_contains", "field": "service.name", "value": "${param.incident.service}"}, {"kind": "result_assertion", "assertion": "signal"}]}
+        {
+          "action": [
+            "query_submitted",
+            "filter_added",
+            "filter_changed"
+          ],
+          "validators": [
+            {
+              "kind": "query_contains",
+              "fields": [
+                "service.name"
+              ],
+              "value": "${param.incident.service}"
+            },
+            {
+              "kind": "result_assertion",
+              "assertion": "signal"
+            }
+          ]
+        },
+        {
+          "action": [
+            "filter_added",
+            "filter_changed"
+          ],
+          "validators": [
+            {
+              "kind": "filter_contains",
+              "field": "service.name",
+              "value": "${param.incident.service}"
+            },
+            {
+              "kind": "result_assertion",
+              "assertion": "signal"
+            }
+          ]
+        }
       ],
       "hints": [
         "Narrow the view to the service the Top values showed, keeping every version of it.",
@@ -46,7 +144,28 @@
         "Query service.name: ${param.incident.service} and service.version: *; Show me can enter it."
       ],
       "drifts": [
-        {"action": ["filter_added", "filter_changed"], "validators": [{"kind": "filter_field", "field": "service.name"}, {"kind": "value_not", "value": "${param.incident.service}"}, {"kind": "detail_equals", "field": "negate", "value": false}], "note": "You filtered on the service ${action.value}; check that it's the service that stood out in service.name's Top values."}
+        {
+          "action": [
+            "filter_added",
+            "filter_changed"
+          ],
+          "validators": [
+            {
+              "kind": "filter_field",
+              "field": "service.name"
+            },
+            {
+              "kind": "value_not",
+              "value": "${param.incident.service}"
+            },
+            {
+              "kind": "detail_equals",
+              "field": "negate",
+              "value": false
+            }
+          ],
+          "note": "You filtered on the service ${action.value}; check that it's the service that stood out in service.name's Top values."
+        }
       ]
     },
     "inspect": {
@@ -54,14 +173,35 @@
       "demonstration": {
         "narration": "I'll add service.version beside HTTP status to see which version returns ${param.incident.status} and which returns 200.",
         "reasoning": "A version label by itself does not establish a failure. The HTTP status code tells us whether each request failed or succeeded.\n\nReading service.version and http.response.status_code on the same rows lets us determine which version owns each outcome.",
-        "evidence": "The highlighted columns pair ${param.incident.bad_version} with HTTP ${param.incident.status} and ${param.incident.good_version} with HTTP 200.\n\nThose status codes are the corroborating evidence that the new version is bad, rather than the version number alone: ${truth.conclusion}",
-        "learning_focus": ["service.version", "http.response.status_code"]
+        "evidence": "The highlighted columns pair ${param.incident.bad_version} with HTTP ${param.incident.status} and ${param.incident.good_version} with HTTP 200.\n\nThose status codes are the corroborating evidence that the new version is bad, rather than the version number alone. Next, when did it first appear?",
+        "learning_focus": [
+          "service.version",
+          "http.response.status_code"
+        ]
       },
-      "reference_action": {"command": "add_column", "target": "kibana.field_list", "arguments": {"field": "${var.field}"}},
+      "reference_action": {
+        "command": "add_column",
+        "target": "kibana.field_list",
+        "arguments": {
+          "field": "${var.field}"
+        }
+      },
       "hints": [
         "Compare HTTP response status codes with the version on the same requests.",
         "Add service.version as a column and check which version has server errors versus 200 responses.",
         "Add the ${var.field} column; Show me can add the reference column."
+      ]
+    },
+    "submit": {
+      "requires": [
+        "isolate",
+        "inspect",
+        "first"
+      ],
+      "hints": [
+        "Sum up what the evidence shows, including when the new version first failed.",
+        "Use the coach's answer form: the version, the service, the time of its first failure as Discover shows it, and the comparison.",
+        "Submit the version, service, first failure and conclusion; Show me shows the reference summary."
       ]
     }
   },
@@ -79,22 +219,165 @@
           "narration": "The report doesn't name the unhealthy service. I'll check service.name Top values to see which service most of this window's requests belong to.",
           "reasoning": "Filtering on a guessed service would assume the answer. Top values count every request in the window, so the next filter comes from the data.",
           "evidence": "The highlighted row, ${param.incident.service}, carries most of the window's requests, well ahead of the other services. That concentration during the rollout is where to compare versions.",
-          "evidence_focus": {"kind": "top_values", "field": "service.name", "value": "${param.incident.service}"}
+          "evidence_focus": {
+            "kind": "top_values",
+            "field": "service.name",
+            "value": "${param.incident.service}"
+          }
         },
-        "requires": ["scope"],
-        "accepts": [
-          {"action": ["field_statistics_opened", "field_inspected"], "validators": [{"kind": "detail_equals", "field": "field", "value": "service.name"}]},
-          {"action": ["column_added"], "validators": [{"kind": "detail_equals", "field": "field", "value": "service.name"}]}
+        "requires": [
+          "scope"
         ],
-        "reference_action": {"command": "open_field_statistics", "target": "kibana.field_list", "arguments": {"field": "service.name"}},
+        "accepts": [
+          {
+            "action": [
+              "field_statistics_opened",
+              "field_inspected"
+            ],
+            "validators": [
+              {
+                "kind": "detail_equals",
+                "field": "field",
+                "value": "service.name"
+              }
+            ]
+          },
+          {
+            "action": [
+              "column_added"
+            ],
+            "validators": [
+              {
+                "kind": "detail_equals",
+                "field": "field",
+                "value": "service.name"
+              }
+            ]
+          }
+        ],
+        "reference_action": {
+          "command": "open_field_statistics",
+          "target": "kibana.field_list",
+          "arguments": {
+            "field": "service.name"
+          }
+        },
         "hints": [
           "Let the data show which service the incident window is about, instead of assuming one.",
           "Open the service.name field in the sidebar and read its Top values (or add it as a column).",
           "Open service.name and read its Top values; Show me can open the reference field."
         ],
         "drifts": [
-          {"action": ["field_statistics_opened", "field_inspected"], "validators": [{"kind": "detail_not", "field": "field", "value": "service.name"}], "note": "You opened ${action.field}; this step is about which service the window is about."},
-          {"action": ["filter_added", "query_submitted"], "validators": [], "note": "You filtered before reading service.name's Top values, so the filter rests on a guess."}
+          {
+            "action": [
+              "field_statistics_opened",
+              "field_inspected"
+            ],
+            "validators": [
+              {
+                "kind": "detail_not",
+                "field": "field",
+                "value": "service.name"
+              }
+            ],
+            "note": "You opened ${action.field}; this step is about which service the window is about."
+          },
+          {
+            "action": [
+              "filter_added",
+              "query_submitted"
+            ],
+            "validators": [],
+            "note": "You filtered before reading service.name's Top values, so the filter rests on a guess."
+          }
+        ]
+      }
+    },
+    {
+      "after": "inspect",
+      "goal": {
+        "id": "first",
+        "title": "Find when the new version first appeared",
+        "concept": "Sorting oldest first puts the start of a change at the top of the table; newest first buries it at the bottom.",
+        "narration": "Sort the results oldest first, then read down service.version to the first request on the new version and note its time.",
+        "reasoning": "The brief asks when the regression first appeared. Discover lists the newest requests first, so the earliest failure is at the far end of the list until you sort the other way.",
+        "evidence": "The rows run forward from just before the rollout: the old version first, then the new version's first request.",
+        "demonstration": {
+          "narration": "I'll sort @timestamp oldest first, so the table reads forward from just before the rollout.",
+          "reasoning": "Discover lists the newest requests first, which puts the start of a regression at the bottom of a long list. Sorted oldest first, the rows read forward in time from the start of the window.",
+          "evidence": "The first request on ${truth.finding} came at ${incident.first_clock}, and it failed with HTTP ${param.incident.status}. The rows above it are ${param.incident.good_version}, so this is the regression's first appearance, shortly after the rollout at ${incident.rollout_clock}.\n\n${truth.conclusion}",
+          "evidence_focus": {
+            "kind": "table_row",
+            "field": "service.version",
+            "value": "${param.incident.bad_version}"
+          }
+        },
+        "requires": [
+          "inspect"
+        ],
+        "accepts": [
+          {
+            "action": [
+              "sort_changed"
+            ],
+            "validators": [
+              {
+                "kind": "detail_equals",
+                "field": "field",
+                "value": "@timestamp"
+              },
+              {
+                "kind": "detail_equals",
+                "field": "direction",
+                "value": "asc"
+              },
+              {
+                "kind": "result_assertion",
+                "assertion": "first_appearance"
+              }
+            ]
+          }
+        ],
+        "reference_action": {
+          "command": "sort_column",
+          "target": "kibana.sort_column",
+          "arguments": {
+            "field": "@timestamp",
+            "direction": "asc"
+          }
+        },
+        "hints": [
+          "Discover lists the newest requests first; the first appearance is at the other end.",
+          "Open the @timestamp column's header menu and choose Sort Old-New, then read down service.version.",
+          "Sort @timestamp Old-New and read the first new-version row; Show me can sort it for you."
+        ],
+        "drifts": [
+          {
+            "action": [
+              "sort_changed"
+            ],
+            "validators": [
+              {
+                "kind": "detail_equals",
+                "field": "direction",
+                "value": "desc"
+              }
+            ],
+            "note": "That sorts newest first; the first appearance is at the oldest end."
+          },
+          {
+            "action": [
+              "sort_changed"
+            ],
+            "validators": [
+              {
+                "kind": "detail_not",
+                "field": "field",
+                "value": "@timestamp"
+              }
+            ],
+            "note": "You sorted by ${action.field}; the first appearance is about time, so sort @timestamp."
+          }
         ]
       }
     }

@@ -83,7 +83,7 @@ def action_for(goal, scenario):
         elif kind == "selected_value":
             details[validator.get("field") or "value"] = truth_value(validator, scenario)
         elif kind == "detail_equals":
-            value = validator.get("value")
+            value = validator.get("value", (validator.get("values") or [None])[0])
             truth_key = validator.get("value_from_truth") or validator.get("values_from_truth")
             if truth_key:
                 value = scenario["truth"]

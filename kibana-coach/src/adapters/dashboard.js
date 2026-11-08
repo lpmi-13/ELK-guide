@@ -23,6 +23,38 @@ globalThis.KibanaApplicationAdapters ||= [];
 globalThis.KibanaApplicationAdapters.push({
   name: 'dashboard',
   commands: new Set(['set_dashboard_control', 'interact_with_panel_value', 'open_panel_drilldown', 'inspect_panel', 'view_panel_underlying_data']),
+
+  panelAction(command) {
+    return command.type === 'inspect_panel' ? 'embeddablePanelAction-openInspector' : 'embeddablePanelAction-ACTION_OPEN_IN_DISCOVER';
+  },
+
+  // A step opens on the panel it names and, for a panel action, on that action itself (shown, since it
+  // otherwise only appears while the pointer is over the panel).
+  async anchor(command, host, signal) {
+    if (command.type === 'interact_with_panel_value') return this.panel(command.value?.panel, host, signal);
+    if (command.type !== 'inspect_panel' && command.type !== 'view_panel_underlying_data') return null;
+    const panel = await this.panel(command.value?.panel, host, signal);
+    this.showPanelActions(panel);
+    return panel?.querySelector(`[data-test-subj='${this.panelAction(command)}']`) || null;
+  },
+
+  // A panel's actions are `visibility:hidden; opacity:0` until it is hovered (verified 9.5.2:
+  // `.embPanel__hoverActions`), and a highlight around them would be an empty box. The coach's pointer
+  // isn't a real one, so hold them open while it points at them.
+  showPanelActions(panel) {
+    const bar = panel?.querySelector('.embPanel__hoverActions');
+    if (!bar) return;
+    bar.style.setProperty('visibility', 'visible', 'important');
+    bar.style.setProperty('opacity', '1', 'important');
+    bar.style.setProperty('pointer-events', 'auto', 'important');
+  },
+
+  hidePanelActions(panel) {
+    const bar = panel?.querySelector('.embPanel__hoverActions');
+    if (!bar) return;
+    for (const property of ['visibility', 'opacity', 'pointer-events']) bar.style.removeProperty(property);
+  },
+
   async perform(command, host, coach, {timingScale = 1, signal} = {}) {
     const value = command.value || {};
     const narration = command.narration || 'Interact with the supplied dashboard in view mode.';
@@ -32,10 +64,11 @@ globalThis.KibanaApplicationAdapters.push({
     }
     if (command.type === 'inspect_panel' || command.type === 'view_panel_underlying_data') {
       const panel = await this.panel(value.panel, host, signal);
-      const subject = command.type === 'inspect_panel' ? 'embeddablePanelAction-openInspector' : 'embeddablePanelAction-ACTION_OPEN_IN_DISCOVER';
-      const action = panel?.querySelector(`[data-test-subj='${subject}']`) || await host.waitFor(command.target, 20000, signal);
+      const action = panel?.querySelector(`[data-test-subj='${this.panelAction(command)}']`) || await host.waitFor(command.target, 20000, signal);
+      this.showPanelActions(panel);
       if (command.type === 'inspect_panel') {
         await host.pointAt(action, coach, timingScale, signal, narration, {activate: true});
+        this.hidePanelActions(panel);
         await this.showRequests(host, signal);
         return {type: 'panel_inspected', details: {panel: value.panel}, state_after: {app: 'dashboard'}};
       }
@@ -46,6 +79,7 @@ globalThis.KibanaApplicationAdapters.push({
         while (!deferred.url && Date.now() < deadline) await host.wait(100, signal);
       } finally {
         globalThis.__coachDeferredNavigation = null;
+        this.hidePanelActions(panel);
       }
       return {type: 'panel_underlying_data_opened', details: {panel: value.panel}, state_after: {app: 'dashboard'}, navigate: deferred.url};
     }
@@ -90,8 +124,9 @@ globalThis.KibanaApplicationAdapters.push({
     while (!document.querySelector(`[data-test-subj*='filter-value-${CSS.escape(String(value))}']`) && Date.now() < pillDeadline) await host.wait(100, signal);
   },
 
-  // Open the inspector's Requests view, which shows the query behind the panel's number (verified 9.5.2:
-  // inspectorViewChooser → inspectorViewChooserRequests). The Data view only repeats the chart's buckets.
+  // Open the inspector's Requests view on its Request tab, which shows the query behind the panel's number
+  // (verified 9.5.2: inspectorViewChooser → inspectorViewChooserRequests → inspectorRequestDetailRequest).
+  // The Data view only repeats the chart's buckets, and the Statistics tab only gives a hit count.
   async showRequests(host, signal) {
     const chooser = await host.waitFor('kibana.inspector_view_chooser', 8000, signal).catch(() => null);
     if (!chooser) return;
@@ -100,5 +135,9 @@ globalThis.KibanaApplicationAdapters.push({
     const deadline = Date.now() + 3000;
     while (!option() && Date.now() < deadline) await host.wait(100, signal);
     option()?.click();
+    const request = () => document.querySelector("[data-test-subj='inspectorRequestDetailRequest']");
+    const tabDeadline = Date.now() + 3000;
+    while (!request() && Date.now() < tabDeadline) await host.wait(100, signal);
+    request()?.click();
   },
 });

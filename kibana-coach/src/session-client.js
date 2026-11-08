@@ -28,7 +28,8 @@ class IncidentSessionClient {
 
   openSocket() {
     const socketUrl = this.server.replace(/^http/, 'ws');
-    this.socket = new WebSocket(`${socketUrl}/api/sessions/${this.sessionId}/events?token=${encodeURIComponent(this.token)}`);
+    // The browser's UTC offset lets the service write clock times ("noticed at 14:03") as Discover shows them.
+    this.socket = new WebSocket(`${socketUrl}/api/sessions/${this.sessionId}/events?token=${encodeURIComponent(this.token)}&utc_offset=${new Date().getTimezoneOffset()}`);
     this.socket.onopen = () => {
       this.onStatus?.('');
       // The service drops a socket that says nothing for a minute, and a learner reading the page or
@@ -54,6 +55,7 @@ class IncidentSessionClient {
     else if (message.message_type === 'hint') this.onHint?.(message);
     else if (message.message_type === 'action_result') this.onActionResult?.(message);
     else if (message.message_type === 'check_in') this.onCheckIn?.(message);
+    else if (message.message_type === 'window_slid') this.onWindowSlid?.(message);
     else if (message.message_type === 'complete') {
       this.onStatus?.('Investigation goals complete.');
       this.onComplete?.();
@@ -92,6 +94,8 @@ class IncidentSessionClient {
 
   requestHint() { this.send({message_type: 'hint'}); }
   requestCheckIn(stepId) { this.send({message_type: 'check_in', step_id: stepId}); }
+  // Ask whether the learner's relative window has moved past the incident yet (see window_watch).
+  checkWindow() { this.send({message_type: 'window_check'}); }
   reportRecovery(stepId, reasonCode, diagnosis) { this.send({message_type: 'recovery_shown', step_id: stepId, reason_code: reasonCode, diagnosis: diagnosis || null}); }
   acknowledgeBriefing(briefing) { this.send({message_type: 'briefing_ack', briefing_id: briefing.briefing_id}); }
   acknowledge(command, status, observedState = {}) { this.send({message_type: 'ack', command_id: command.command_id, status, observed_state: observedState}); }

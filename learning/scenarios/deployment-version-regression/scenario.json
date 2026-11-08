@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "id": "deployment-version-regression",
-  "version": 3,
+  "version": 4,
   "title": "Deployment version regression",
   "type": "investigation",
   "classification": "core",
@@ -19,7 +19,13 @@
         {"service": "auth", "bad_version": "4.1.0", "good_version": "4.0.7", "status": 500}
       ]
     },
-    "window": {"choose": ["20m", "30m", "45m", "1h"]}
+    "timing": {
+      "choose": [
+        {"rollout": 14, "first": 12.5, "noticed": 8, "first_seconds": 750, "signal_oldest_seconds": 730, "before_rollout_seconds": 870},
+        {"rollout": 16, "first": 14.5, "noticed": 9, "first_seconds": 870, "signal_oldest_seconds": 850, "before_rollout_seconds": 990},
+        {"rollout": 18, "first": 16, "noticed": 10, "first_seconds": 960, "signal_oldest_seconds": 940, "before_rollout_seconds": 1110}
+      ]
+    }
   },
   "provisioning": {
     "strategies": ["seeded-events", "saved-objects"],
@@ -27,6 +33,7 @@
       "signal_count": 35,
       "noise_count": 100,
       "noise_exclude_services": ["${param.incident.service}"],
+      "signal_window_seconds": [10, "${param.timing.signal_oldest_seconds}"],
       "signal": {
         "service": {"name": "${param.incident.service}", "version": "${param.incident.bad_version}"},
         "event": {"outcome": "failure"},
@@ -39,9 +46,10 @@
       ],
       "companions": [
         {
-          "count": 26,
+          "count": 38,
           "offset_seconds": 12,
-          "interval_seconds": 23,
+          "interval_seconds": 26,
+          "trace": "own",
           "event": {
             "service": {"name": "${param.incident.service}", "version": "${param.incident.good_version}"},
             "event": {"outcome": "success"},
@@ -50,14 +58,27 @@
           }
         },
         {
-          "count": 2,
-          "offset_seconds": 601,
+          "count": 5,
+          "offset_seconds": "${param.timing.before_rollout_seconds}",
+          "interval_seconds": 45,
+          "trace": "own",
+          "event": {
+            "service": {"name": "${param.incident.service}", "version": "${param.incident.good_version}"},
+            "event": {"outcome": "success"},
+            "http": {"response": {"status_code": 200}},
+            "message": "healthy request on previous version ${param.incident.good_version}"
+          }
+        },
+        {
+          "count": 1,
+          "offset_seconds": "${param.timing.first_seconds}",
+          "trace": "own",
           "event": {
             "service": {"name": "${param.incident.service}", "version": "${param.incident.bad_version}"},
             "event": {"outcome": "failure"},
             "http": {"response": {"status_code": "${param.incident.status}"}},
             "transaction": {"result": "HTTP 5xx"},
-            "message": "first unhealthy request from version ${param.incident.bad_version}"
+            "message": "request failed on newly deployed ${param.incident.service} ${param.incident.bad_version}"
           }
         }
       ]
@@ -71,12 +92,14 @@
     "answers": {
       "finding": "${param.incident.bad_version}",
       "scope": "${param.incident.service}",
-      "conclusion": "${param.incident.service} version ${param.incident.bad_version} returned HTTP ${param.incident.status} while ${param.incident.good_version} returned 200, identifying the new version as the regression."
+      "conclusion": "${param.incident.service} version ${param.incident.bad_version} returned HTTP ${param.incident.status} while ${param.incident.good_version} returned 200, identifying the new version as the regression.",
+      "first_seen": "${incident.first_clock}"
     },
     "accept": {"finding": ["v${param.incident.bad_version}"]},
     "assertions": [
       {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "request failed on newly deployed ${param.incident.service} ${param.incident.bad_version}"}}},
-      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "first unhealthy request from version ${param.incident.bad_version}"}}}
+      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"bool": {"filter": [{"term": {"service.name.keyword": "${param.incident.service}"}}, {"term": {"service.version.keyword": "${param.incident.good_version}"}}, {"term": {"http.response.status_code": 200}}]}}},
+      {"id": "first_appearance", "kind": "es_count", "minimum": 1, "query": {"bool": {"filter": [{"term": {"service.version.keyword": "${param.incident.bad_version}"}}, {"range": {"@timestamp": {"lte": "${incident.first_at}||+5s"}}}]}}}
     ]
   },
   "answer_schema": {
@@ -84,6 +107,7 @@
     "fields": [
       {"id": "finding", "label": "Affected version", "kind": "string", "weight": 2},
       {"id": "scope", "label": "Service", "kind": "string", "weight": 1},
+      {"id": "first_seen", "label": "First failure", "kind": "clock", "at": "first", "weight": 1, "placeholder": "The time Discover shows for it (HH:MM)"},
       {"id": "conclusion", "label": "Comparison conclusion", "kind": "statement", "mentions": ["finding", "scope"], "weight": 1},
       {"id": "evidence", "label": "Version and HTTP status evidence", "kind": "text", "scored": false}
     ]

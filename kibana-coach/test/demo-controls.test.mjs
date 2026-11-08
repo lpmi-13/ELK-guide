@@ -59,6 +59,8 @@ test('the coach can be dragged and stays clear of a newly added column', () => {
   panel.findFlyout = () => null;
   panel.applyPosition = () => {};
   panel.pos = {left: 18, top: 72};
+  panel.evidenceFields = [];
+  panel.evidenceTargets = [];
 
   panel.startDrag({button: 0, pointerId: 1, clientX: 40, clientY: 100, target: {closest: () => null}, preventDefault() {}});
   panel.moveDrag({pointerId: 1, clientX: 1442, clientY: 500});
@@ -91,6 +93,30 @@ test('learning highlights the HTTP status and version columns in the visible tab
   assert.ok(highlights.every(highlight => highlight.removed));
 });
 
+test('the coach keeps off every ringed result column, and off any flyout, not just the document viewer', () => {
+  const column = field => ({textContent: field, getBoundingClientRect: () => ({left: 1200, right: 1400, top: 430, width: 200})});
+  const flyout = {getBoundingClientRect: () => ({left: 720, top: 96, right: 1440, bottom: 900, width: 720, height: 804})};
+  let flyouts = [];
+  const document = {querySelectorAll: selector => selector.includes('columnheader') ? [column('http.response.status_code')] : selector.includes('euiFlyout') ? flyouts : []};
+  const Panel = loadClass('../src/ui/coach-panel.js', 'IncidentCoachPanel',
+    ['innerWidth', 'innerHeight', 'document'], [1440, 900, document]);
+  const panel = Object.create(Panel.prototype);
+  panel.panel = {hidden: false, style: {}, getBoundingClientRect: () => ({left: 954, top: 400, width: 468, height: 390})};
+  panel.applyPosition = () => {};
+  panel.pos = {left: 954, top: 400};
+  panel.evidenceTargets = [];
+  panel.evidenceFields = ['http.response.status_code'];
+  panel.placeAwayFrom(null);
+  assert.equal(panel.pos.left, 18);
+
+  panel.evidenceFields = [];
+  flyouts = [flyout];
+  assert.equal(panel.findFlyout().left, 720);
+  panel.pos = {left: 954, top: 400};
+  panel.placeAwayFrom(null);
+  assert.equal(panel.pos.left, 18);
+});
+
 test('hints stay with their step and Advance moves through a success card', () => {
   const Panel = loadClass('../src/ui/coach-panel.js', 'IncidentCoachPanel',
     ['requestAnimationFrame'], [callback => callback()]);
@@ -98,10 +124,11 @@ test('hints stay with their step and Advance moves through a success card', () =
   const nodes = Object.fromEntries([
     '#hint-card', '#hint-label', '#hint-text', '#mode', '#objective', '#pause',
     '#demonstrate', '#incident-info', '#advance', '#hint', '#diagnosis', '#review-feedback',
-    '#phase-eyebrow', '#phase-headline', '#phase-detail',
-  ].map(selector => [selector, {hidden: false, textContent: '', style: {}}]));
+    '#phase-eyebrow', '#phase-headline', '#phase-detail', '#phase-why', '#phase-why-text',
+  ].map(selector => [selector, {hidden: false, textContent: '', style: {}, classList: {add() {}, remove() {}}}]));
   nodes['#stage-actions'] = {hidden: true, replaceChildren() {}};
   nodes['#stage'] = {hidden: false, offsetWidth: 300, classList: {add() {}, remove() {}}};
+  nodes['.progress'] = {hidden: false};
   nodes['.progress span'] = {style: {}};
   panel.root = {querySelector: selector => nodes[selector]};
   panel.host = {hidden: true};
@@ -145,4 +172,116 @@ test('hints stay with their step and Advance moves through a success card', () =
   assert.equal(panel.advanceCelebration(), true);
   assert.equal(nodes['#objective'].textContent, 'endpoints');
   assert.equal(panel.advanceCelebration(), false);
+});
+
+test('a result card folds its reasoning when no corner clears the evidence, and a learner\'s choice stands', () => {
+  const Panel = loadClass('../src/ui/coach-panel.js', 'IncidentCoachPanel', [], []);
+  const panel = Object.create(Panel.prototype);
+  const why = {hidden: true, open: true};
+  const text = {textContent: ''};
+  panel.root = {querySelector: selector => ({'#phase-why': why, '#phase-why-text': text})[selector]};
+  let refits = 0;
+  panel.refit = () => { refits += 1; };
+  panel.reasoningOpen = null;
+
+  // No reasoning on this card (a demonstration, or a step without one): nothing to show or fold.
+  panel.setReasoning('');
+  assert.equal(why.hidden, true);
+  assert.equal(panel.foldReasoning(), false);
+
+  panel.setReasoning('Why the step is done.');
+  assert.equal(why.hidden, false);
+  assert.equal(why.open, true);
+  assert.equal(text.textContent, 'Why the step is done.');
+  assert.equal(panel.foldReasoning(), true);
+  assert.equal(why.open, false);
+  assert.equal(refits, 1);
+  assert.equal(panel.foldReasoning(), false); // Already folded, so placement can't retry forever.
+
+  // The next card starts open again.
+  panel.setReasoning('The next step.');
+  assert.equal(why.open, true);
+
+  // A learner who opened it keeps it open, even where it covers something: they asked to read it.
+  panel.reasoningOpen = true;
+  assert.equal(panel.foldReasoning(), false);
+  assert.equal(why.open, true);
+
+  // A learner who closed it keeps it closed on later cards.
+  panel.reasoningOpen = false;
+  panel.setReasoning('A later step.');
+  assert.equal(why.open, false);
+
+  // Using the toggle holds the card still for that beat; the next beat is placed normally again.
+  panel.keepPlace = true;
+  panel.dragging = null;
+  panel.panel = {hidden: false};
+  panel.placeAwayFrom(null); // Would throw on this bare stub if it went on to place the card.
+  panel.setReasoning('The beat after that.');
+  assert.equal(panel.keepPlace, false);
+});
+
+test('a result card leads with its first sentence and sets the rest quieter', () => {
+  const Panel = loadClass('../src/ui/coach-panel.js', 'IncidentCoachPanel', [], []);
+  assert.deepEqual(Panel.splitFinding('Every entity is coloured by CPU. checkout-03 reads far above its peers.'),
+    ['Every entity is coloured by CPU.', 'checkout-03 reads far above its peers.']);
+  // A paragraph break is a sentence break too, and the rest keeps its own.
+  assert.deepEqual(Panel.splitFinding('Columns pair 2.4.1 with HTTP 500.\n\nThat is the regression. It started here.'),
+    ['Columns pair 2.4.1 with HTTP 500.', 'That is the regression. It started here.']);
+  // Dots inside versions, field names and paths don't end a sentence.
+  assert.deepEqual(Panel.splitFinding('Read http.response.status_code on /api/v1.2 for version 2.4.1.'),
+    ['Read http.response.status_code on /api/v1.2 for version 2.4.1.', '']);
+});
+
+function placementPanel({height, rings}) {
+  const bar = {getBoundingClientRect: () => ({left: 0, right: 1440, top: 146, bottom: 281, width: 1440, height: 135})};
+  const document = {querySelectorAll: selector => (selector.includes('globalQueryBar') ? [bar] : [])};
+  const Panel = loadClass('../src/ui/coach-panel.js', 'IncidentCoachPanel', ['document', 'innerWidth', 'innerHeight'], [document, 1440, 900]);
+  const panel = Object.create(Panel.prototype);
+  panel.size = height;
+  panel.panel = {hidden: false, getBoundingClientRect: () => ({width: 468, height: panel.size})};
+  panel.findFlyout = () => null;
+  panel.findPopovers = () => [];
+  panel.evidenceColumnRects = () => [];
+  panel.evidenceTargetRects = () => rings;
+  panel.applyPosition = () => {};
+  panel.folds = 0;
+  panel.foldReasoning = () => false;
+  return panel;
+}
+
+test('the card moves off a thin ringed row even if that puts it over the query bar', () => {
+  // A short card fits in the bottom corner, where it covers fewer pixels of the row than the top corner
+  // does of the bar, but it hides the row's name. What the step is about comes first.
+  const panel = placementPanel({height: 315, rings: [{left: 321, right: 1423, top: 559, bottom: 583}]});
+  panel.pos = {left: 18, top: 567};
+  panel.foldReasoning = () => { panel.folds += 1; return false; };
+  panel.placeAwayFrom(null);
+  assert.deepEqual({...panel.pos}, {left: 18, top: 72});
+  // Only the query bar is left under the card, which is no reason to hide the reasoning.
+  assert.equal(panel.folds, 0);
+});
+
+test('a small ring counts for as much as a large one when no corner is clear', () => {
+  // A wide chart along the top and a small count under it: clipping the chart's edge beats hiding the count.
+  const panel = placementPanel({height: 360, rings: [
+    {left: 302, right: 1440, top: 236, bottom: 562},
+    {left: 316, right: 460, top: 600, bottom: 632},
+  ]});
+  panel.pos = {left: 18, top: 522};
+  panel.placeAwayFrom(null);
+  assert.equal(panel.pos.left, 954);
+});
+
+test('the reasoning folds when that is what clears the evidence, and the shorter card is then placed', () => {
+  const panel = placementPanel({height: 463, rings: [{left: 321, right: 1423, top: 530, bottom: 554}]});
+  panel.pos = {left: 18, top: 419};
+  panel.foldReasoning = () => {
+    if (panel.size !== 463) return false;
+    panel.size = 356;
+    return true;
+  };
+  panel.placeAwayFrom(null);
+  assert.equal(panel.size, 356);
+  assert.deepEqual({...panel.pos}, {left: 18, top: 72});
 });

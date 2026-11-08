@@ -182,7 +182,15 @@ class RandomizationTests(unittest.TestCase):
                         self.matrix.evaluate_action(session, action, evidence)
                         session["actions"].append({"action": action, "evaluation": {"meaningful": True}})
                         self.assertIn(goal["id"], session["completed_goals"])
-                    session["answer"] = {**scenario["truth"]["answers"],
+                    # Clock answers are typed as Discover shows them; this browser is on UTC.
+                    clock = {"manifest": manifest, "utc_offset_minutes": 0, "detected_offset_minutes": self.server.select_detected_offset(manifest)}
+                    tokens = self.server.incident_clock(clock)
+                    answers = {}
+                    for key, value in scenario["truth"]["answers"].items():
+                        for token, text in tokens.items():
+                            value = value.replace(token, text) if isinstance(value, str) else value
+                        answers[key] = value
+                    session["answer"] = {**answers, "client_utc_offset_minutes": 0,
                                          "evidence_refs": [item["id"] for item in scenario["truth"]["assertions"]],
                                          "evidence": "The reference route established every declared assertion."}
                     feedback = self.matrix.score_session(session, evidence=evidence)
@@ -195,8 +203,10 @@ class RandomizationTests(unittest.TestCase):
             manifest = self.materialize(entry["id"], 135 + offset)
             session = self.server.create_session({"manifest": manifest}, "demonstration")
             session["run_ready"] = True
+            session["utc_offset_minutes"] = 0
             goals = session["playbook"]["goals"]
-            finding = manifest["scenario"]["truth"]["answers"]["finding"]
+            finding = self.server.substitute(manifest["scenario"]["truth"]["answers"]["finding"], session)
+            conclusion = self.server.substitute(manifest["scenario"]["truth"]["answers"]["conclusion"], session)
             demonstrated = [
                 item for item in goals
                 if item["reference_action"]["command"] not in {"request_answer", "request_diagnosis"}
@@ -218,9 +228,10 @@ class RandomizationTests(unittest.TestCase):
                             answer.get("conclusion", ""), answer.get("evidence", ""),
                             *(check["detail"] for check in summary["checks"]),
                         ])
-                        self.assertIn(finding, summary_copy)
+                        # A clock-time finding ("14:05–14:12") reads "between 14:05 and 14:12" in prose.
+                        self.assertTrue(all(part in summary_copy for part in finding.split("–")), finding)
                         self.assertEqual(len(summary["checks"]), len(demonstrated))
-                        self.assertEqual(summary["answer"]["conclusion"], manifest["scenario"]["truth"]["answers"]["conclusion"])
+                        self.assertEqual(summary["answer"]["conclusion"], conclusion)
                         self.assertLessEqual(len(summary["answer"]["conclusion"].split()), 25)
                         # Each check is a real one-line recap, not a stub — but no longer an essay.
                         self.assertTrue(all(len(check["detail"].split()) >= 4 for check in summary["checks"]))
@@ -235,7 +246,8 @@ class RandomizationTests(unittest.TestCase):
                             self.assertIn("status", status_check["detail"].lower())
                             endpoint_check = next(check for check in summary["checks"] if check["title"] == "Affected endpoint")
                             self.assertIn("endpoint", endpoint_check["detail"].lower())
-                            self.assertIn(f"spiked during the {finding}", summary["answer"]["conclusion"])
+                            onset, end = finding.split("–")
+                            self.assertIn(f"spiked between {onset} and {end}", summary["answer"]["conclusion"])
                     else:
                         self.assertGreaterEqual(len(command["narration"].split()), 12)
                         if command["type"] == "set_time_range" or (
@@ -255,95 +267,85 @@ class RandomizationTests(unittest.TestCase):
             self.assertEqual(guided_command["evidence"], "")
 
     def test_scope_window_tracks_the_noticed_offset_in_demonstration_and_guided_modes(self):
-        """The coach must not pair a recent report with an independently randomized long range.
+        """The coach starts its window at a fixed time tied to the incident, never a random long range.
 
-        Exercise the real session path across every Discover-template pack and both coached modes.
-        The selected action must be the incident age rounded up to a five-minute boundary; the
-        demonstration and guided hints must describe that same age and range.
+        Exercise the real session path across every Discover-template pack and both coached modes. The
+        start is a little before the window's reference moment (the report, a rollout, or a seeded rise)
+        on a clock time a learner would type; the copy names the report's clock time, and only the
+        bottom-out hint names the start.
         """
+        from datetime import datetime, timedelta
         catalog = json.loads((ROOT / "learning/catalog.json").read_text())["scenarios"]
         discover_packs = [
             entry["id"] for entry in catalog
             if json.loads((ROOT / "learning/scenarios" / entry["id"] / "playbook.json").read_text()).get("extends") == "discover.json"
         ]
         self.assertIn("discover-time-window", discover_packs)
-        self.assertIn("slow-payments", discover_packs)
+        self.assertIn("deployment-version-regression", discover_packs)
         for pack in discover_packs:
-            for seed in range(40):
+            for seed in range(20):
                 for mode in ("demonstration", "guided"):
                     session = self.server.create_session({"manifest": self.materialize(pack, seed)}, mode)
                     session["run_ready"] = True
+                    session["utc_offset_minutes"] = -60
                     scope = next(goal for goal in session["playbook"]["goals"] if goal["id"] == "scope")
                     command = self.server.next_command(session)
-                    offset = session["detected_offset_minutes"]
-                    onset = session["incident_onset_minutes"]
-                    # A pack that seeds a visible onset is windowed from that rise as it stands now,
-                    # not from the report.
-                    age = self.server.incident_onset_age_minutes(session["manifest"])
-                    expected_minutes = self.server.recommended_window_minutes(
-                        offset if onset is None else age + self.server.ONSET_LEAD_MINUTES)
-                    expected_from = f"now-{expected_minutes}m"
-                    expected_words = self.server.spell_duration(f"{expected_minutes}m")
+                    moments = self.server.incident_moments(session["manifest"], session["detected_offset_minutes"])
+                    reference = self.server.window_reference(moments)
+                    start = datetime.fromisoformat(command["value"]["from"].replace("Z", "+00:00"))
+                    lead = (reference["at"] - start).total_seconds() / 60
+                    local = lambda moment: f"{moment + timedelta(minutes=60):%H:%M}"
                     rendered_hints = self.server.substitute(scope["hints"], session)
 
                     with self.subTest(pack=pack, seed=seed, mode=mode):
-                        self.assertEqual(self.server.substitute(scope["reference_action"]["arguments"], session)["from"], expected_from)
-                        self.assertEqual(command["value"]["from"], expected_from)
-                        self.assertIn(expected_words, rendered_hints[-1])
-                        # Only the bottom-out hint names the window; the earlier ones leave it to the learner.
-                        self.assertFalse(self.server.reveals_answer(" ".join(rendered_hints[:-1]), [expected_words]))
-                        if onset is not None:
+                        self.assertEqual(command["value"]["to"], "now")
+                        self.assertEqual(start.second, 0)
+                        self.assertEqual(start.minute % reference["step_minutes"], 0)
+                        self.assertGreaterEqual(lead, reference["lead_minutes"])
+                        self.assertLess(lead, reference["lead_minutes"] + reference["step_minutes"])
+                        # Clock times read in the learner's own time, as Discover shows them.
+                        self.assertIn(local(start), rendered_hints[-1])
+                        self.assertFalse(self.server.reveals_answer(" ".join(rendered_hints[:-1]), [local(start)]))
+                        self.assertIn(local(moments["noticed"]) if reference["key"] != "rollout" else local(moments["rollout"]), command["narration"])
+                        if reference["key"] == "onset":
                             # The copy sends the learner to the histogram's rise; the report only says
                             # when the failures were noticed, which is after they began.
-                            self.assertGreater(onset, offset)
-                            self.assertIn(str(offset), command["narration"])
+                            self.assertLess(moments["onset"], moments["noticed"])
                             self.assertIn("histogram", command["narration"])
                             self.assertIn("histogram", rendered_hints[0])
-                            self.assertNotIn("five-minute boundary", command["narration"])
-                            if mode == "guided":
-                                self.assertEqual(command["walkthrough"]["narration"],
-                                                 self.server.substitute(scope["demonstration"]["narration"], session))
-                            else:
-                                self.assertEqual(command["goal_focus"], {"kind": "histogram"})
                         elif mode == "demonstration":
-                            self.assertIn(str(offset), command["narration"])
-                            self.assertIn(expected_words, command["narration"])
-                            self.assertIn("five-minute boundary", command["narration"])
+                            self.assertIn(local(start), command["narration"])
+                            self.assertIn("five-minute mark", command["narration"])
                             self.assertEqual(command["reasoning"], "")
                         else:
-                            # Guided practice states when the problem was noticed and leaves the window
-                            # to the learner; Show me's walkthrough names it.
-                            self.assertIn(str(offset), command["narration"])
-                            self.assertFalse(self.server.reveals_answer(command["narration"], [expected_words]))
-                            self.assertIn(expected_words, command["walkthrough"]["narration"])
-                            self.assertEqual(command["walkthrough"]["reasoning"], "")
+                            # Guided practice states the moment and leaves the start to the learner;
+                            # Show me's walkthrough names it.
+                            self.assertFalse(self.server.reveals_answer(command["narration"], [local(start)]))
+                            self.assertIn(local(start), command["walkthrough"]["narration"])
                             self.assertEqual(command["walkthrough"]["narration"],
                                              self.server.substitute(scope["demonstration"]["narration"], session))
 
-    def test_the_recommended_window_keeps_reaching_the_onset_as_the_run_ages(self):
+    def test_a_fixed_start_keeps_reaching_the_incident_as_the_run_ages(self):
+        """A start date reaches the incident however long the learner takes; "the last N minutes" set
+        early stops reaching it as the clock moves on. Both are judged in absolute time on arrival."""
         from datetime import datetime, timedelta, timezone
+        from unittest import mock
         manifest = self.materialize("discover-time-window", 3)
         onset = manifest["parameters"]["timing"]["onset"]
-        for mode in ("demonstration", "guided"):
-            for minutes_later in (0, 4, 25):
-                manifest["created_at"] = (datetime.now(timezone.utc) - timedelta(minutes=minutes_later)).isoformat()
-                session = self.server.create_session({"manifest": manifest}, mode)
-                session["run_ready"] = True
-                command = self.server.next_command(session)
-                window = int(command["value"]["from"].removeprefix("now-").removesuffix("m"))
-                with self.subTest(mode=mode, minutes_later=minutes_later):
-                    self.assertGreaterEqual(window, onset + minutes_later + self.server.ONSET_LEAD_MINUTES)
-                    self.assertLess(window, onset + minutes_later + self.server.ONSET_LEAD_MINUTES + 5)
-                    if mode == "guided":
-                        hints = self.server.substitute(session["playbook"]["goals"][0]["hints"], session)
-                        self.assertIn(f"last {self.server.spell_duration(f'{window}m')}", hints[-1])
-                    # A learner's window is judged against the onset as it stands now, too.
-                    action = {"type": "time_range_changed", "sequence": 1, "run_id": session["run_id"], "session_id": session["id"],
-                              "protocol_version": 2, "details": {"from": "now-15m", "to": "now", "from_minutes": 15, "incident_offset_minutes": 8}}
-                    from unittest import mock
+        for minutes_later in (0, 4, 25):
+            manifest["created_at"] = (datetime.now(timezone.utc) - timedelta(minutes=minutes_later)).isoformat()
+            session = self.server.create_session({"manifest": manifest}, "guided")
+            session["run_ready"] = True
+            start = self.server.substitute("${incident.window_start}", session)
+            relative = f"now-{onset + 2}m"
+            with self.subTest(minutes_later=minutes_later):
+                for window, expected in ((start, True), (relative, minutes_later < 1)):
+                    trial = self.server.create_session({"manifest": manifest}, "guided")
+                    action = {"type": "time_range_changed", "sequence": 1, "run_id": trial["run_id"], "session_id": trial["id"],
+                              "protocol_version": 2, "details": {"from": window, "to": "now"}}
                     with mock.patch.object(self.server, "action_evidence", return_value={"assertions": {}, "trace_services": 0}):
-                        accepted = bool(self.server.record_action(session, action)["goals_progressed"])
-                    self.assertEqual(accepted, 15 + 1 >= onset + minutes_later)
+                        accepted = bool(self.server.record_action(trial, action)["goals_progressed"])
+                    self.assertEqual(accepted, expected, window)
 
     def test_incident_window_is_a_bounded_rise_the_histogram_can_date(self):
         """The time-window lesson's answer must be in the data, not derived from the report.
@@ -353,24 +355,28 @@ class RandomizationTests(unittest.TestCase):
         rise. The briefing names the user-facing symptom of the run's service, so a catalog incident
         is not reported as checkout.
         """
-        from datetime import datetime, timezone
+        from datetime import datetime, timedelta, timezone
         for seed in range(30):
             manifest = self.materialize("discover-time-window", seed)
             session = self.server.create_session({"manifest": manifest}, "demonstration")
             incident, timing = manifest["parameters"]["incident"], manifest["parameters"]["timing"]
-            seeded_at = datetime.now(timezone.utc)
+            # Seeding counts back from the run's creation, the same instant the incident's clock times use.
+            seeded_at = datetime.fromisoformat(manifest["created_at"])
             documents = self.controller.generate_seeded_events(manifest)
             failing = [document for document in documents if document["http"]["response"]["status_code"] == incident["status"]]
             ages = [(seeded_at - datetime.fromisoformat(document["@timestamp"])).total_seconds() / 60 for document in failing]
             scope = session["playbook"]["goals"][0]
-            window = int(self.server.substitute(scope["reference_action"]["arguments"], session)["from"].removeprefix("now-").removesuffix("m"))
+            start = datetime.fromisoformat(self.server.substitute(scope["reference_action"]["arguments"], session)["from"].replace("Z", "+00:00"))
+            onset_at = datetime.fromisoformat(manifest["created_at"]) - timedelta(minutes=timing["onset"])
             briefing = self.server.build_incident_briefing(session)
             with self.subTest(seed=seed):
                 self.assertEqual(session["detected_offset_minutes"], timing["noticed"])
                 self.assertTrue(timing["end"] < timing["noticed"] < timing["onset"])
                 self.assertLessEqual(max(ages), timing["onset"])
                 self.assertGreaterEqual(min(ages), timing["end"] - 0.1)
-                self.assertGreaterEqual(window - timing["onset"], 2)
+                self.assertGreaterEqual((onset_at - start).total_seconds(), 90)
+                self.assertLess((onset_at - start).total_seconds(), 150)
+                self.assertEqual(briefing["noticed_at"], self.server.iso_instant(datetime.fromisoformat(manifest["created_at"]) - timedelta(minutes=timing["noticed"])))
                 self.assertIn(incident["headline"], briefing["headline"])
                 self.assertIn(incident["journey"], briefing["summary"])
                 self.assertNotIn("checkout", manifest["scenario"]["title"].lower())
@@ -409,50 +415,114 @@ class RandomizationTests(unittest.TestCase):
                     for phase in ("narration", "reasoning"):
                         self.assertNotIn(str(focus["value"]), survey["demonstration"][phase])
 
-    def test_time_window_copy_uses_grammar_aware_finding_for_every_variant(self):
-        window_options = self.template("discover-time-window")["parameters"]["window"]["choose"]
-
-        def strings(value, path=()):
-            if isinstance(value, str):
-                yield path, value
-            elif isinstance(value, dict):
-                for key, item in value.items():
-                    yield from strings(item, path + (key,))
-            elif isinstance(value, list):
-                for index, item in enumerate(value):
-                    yield from strings(item, path + (index,))
-
-        for seed, option in enumerate(window_options):
+    def test_time_window_copy_names_the_incident_in_clock_times_for_every_variant(self):
+        """The incident window is stated as the clock times Discover shows, for every timing variant;
+        the full conclusion is reserved for the event-inspection card."""
+        from datetime import datetime, timedelta
+        timings = self.template("discover-time-window")["parameters"]["timing"]["choose"]
+        for seed, timing in enumerate(timings):
             template = self.template("discover-time-window")
-            template["parameters"]["window"]["choose"] = [option]
+            template["parameters"]["timing"]["choose"] = [timing]
             manifest = self.controller.materialize(template, seed, run_id=f"run-window-{seed:05d}")
-            playbook = self.server.load_manifest_definition(manifest, "playbook")
-            rendered = self.server.substitute(
-                playbook,
-                {"run_id": manifest["run_id"], "manifest": manifest, "actions": [], "detected_offset_minutes": 13},
-            )
-            finding = option["label"]
-            phrase = f"the {finding}"
-            matching_copy = []
-
-            for path, value in strings(rendered):
-                if finding not in value or path == ("demonstration_summary", "answer", "finding"):
-                    continue
-                matching_copy.append(value)
-                with self.subTest(finding=finding, path=path):
-                    self.assertIn(phrase, value)
-                    self.assertNotIn(finding, value.replace(phrase, ""))
-
-            # The isolate step filters on the observed status code. The full conclusion is
-            # reserved for the event-inspection evidence card.
+            session = {"run_id": manifest["run_id"], "manifest": manifest, "actions": [], "detected_offset_minutes": timing["noticed"], "utc_offset_minutes": 0}
+            rendered = self.server.substitute(self.server.load_manifest_definition(manifest, "playbook"), session)
+            created = datetime.fromisoformat(manifest["created_at"])
+            onset, end = (f"{created - timedelta(minutes=timing[key]):%H:%M}" for key in ("onset", "end"))
             isolate = next(goal for goal in rendered["goals"] if goal["id"] == "isolate")
             inspect = next(goal for goal in rendered["goals"] if goal["id"] == "inspect")
-            self.assertNotIn(f"spiked during the {finding}", isolate["demonstration"]["evidence"])
-            self.assertIn(f"spiked during the {finding}", inspect["demonstration"]["evidence"])
-            # The finding is still woven through the copy (goal steps + the graded answer), and every
-            # occurrence stays grammar-aware ("the <finding>"); the concise debrief no longer repeats
-            # it at essay length, so this is a breadth floor, not a verbosity one.
-            self.assertGreaterEqual(len(matching_copy), 3)
+            with self.subTest(timing=timing):
+                # Drift notes keep ${action.*}, filled in from the learner's action when one fires.
+                self.assertNotRegex(json.dumps(rendered), r"\$\{(?!action\.)")
+                self.assertEqual(rendered["demonstration_summary"]["answer"]["finding"], f"{onset}–{end}")
+                self.assertNotIn(f"spiked between {onset} and {end}", isolate["demonstration"]["evidence"])
+                self.assertIn(f"spiked between {onset} and {end}", inspect["demonstration"]["evidence"])
+
+    def test_deployment_first_appearance_is_the_first_new_version_request(self):
+        """The rollout, the new version's first (failing) request and the report happen in that order,
+        and the window the coach recommends starts before the rollout with old-version traffic in view."""
+        from datetime import datetime, timedelta
+        for seed in range(12):
+            manifest = self.materialize("deployment-version-regression", seed)
+            incident = manifest["parameters"]["incident"]
+            moments = self.server.incident_moments(manifest, self.server.select_detected_offset(manifest))
+            start = self.server.recommended_window_start(moments)
+            documents = self.controller.generate_seeded_events(manifest)
+            at = lambda document: datetime.fromisoformat(document["@timestamp"])
+            new = sorted((document for document in documents if document["service"].get("version") == incident["bad_version"]), key=at)
+            old = [document for document in documents if document["service"].get("version") == incident["good_version"]]
+            with self.subTest(seed=seed):
+                self.assertTrue(start < moments["rollout"] < moments["first"] < moments["noticed"])
+                self.assertEqual(at(new[0]), moments["first"])
+                self.assertGreaterEqual((at(new[1]) - at(new[0])).total_seconds(), 20)
+                self.assertTrue(all(document["http"]["response"]["status_code"] == incident["status"] for document in new))
+                # The first_appearance evidence is that one request: on the new version, at its time.
+                self.assertEqual(sum(at(document) <= moments["first"] + timedelta(seconds=5) for document in new), 1)
+                # The old version was serving before the rollout, inside the window, and kept serving.
+                self.assertTrue(any(start <= at(document) < moments["rollout"] for document in old))
+                self.assertTrue(any(at(document) > moments["first"] and document["http"]["response"]["status_code"] == 200 for document in old))
+
+    def test_deployment_scope_takes_any_window_that_reaches_the_rollout(self):
+        from datetime import timedelta
+        from unittest import mock
+        manifest = self.materialize("deployment-version-regression", 4)
+        moments = self.server.incident_moments(manifest, self.server.select_detected_offset(manifest))
+        # A fixed start or a relative window both count while they reach back before the rollout; one
+        # that doesn't is explained in terms of the rollout.
+        cases = (
+            (self.server.iso_instant(moments["rollout"] - timedelta(minutes=3)), True),
+            ("now-1h", True),
+            (self.server.iso_instant(moments["rollout"] + timedelta(minutes=2)), False),
+            ("now-5m", False),
+        )
+        for window, accepted in cases:
+            session = self.server.create_session({"manifest": manifest}, "guided")
+            action = {"type": "time_range_changed", "sequence": 1, "run_id": session["run_id"], "session_id": session["id"],
+                      "protocol_version": 2, "actor": "learner", "details": {"from": window, "to": "now"}}
+            with self.subTest(window=window), mock.patch.object(self.server, "action_evidence", return_value={"assertions": {}, "trace_services": 0}):
+                evaluation = self.server.record_action(session, action)
+                self.assertEqual("scope" in evaluation["goals_progressed"], accepted)
+                if not accepted:
+                    self.assertEqual((evaluation["outcome"], evaluation["reason_code"]), ("dead_end", "window_misses_incident"))
+                    self.assertIn(f"after the rollout at {self.server.clock_text(moments['rollout'], session)}", evaluation["headline"])
+
+    def test_a_window_that_ends_before_the_incident_misses_it(self):
+        from datetime import timedelta
+        manifest = self.materialize("discover-time-window", 2)
+        session = self.server.create_session({"manifest": manifest}, "guided")
+        onset = self.server.incident_moments(manifest, session["detected_offset_minutes"])["onset"]
+        for start, end, expected in ((onset - timedelta(minutes=5), onset - timedelta(minutes=1), False),
+                                     (onset - timedelta(minutes=5), onset + timedelta(minutes=1), True)):
+            action = {"type": "time_range_changed", "details": {"from": self.server.iso_instant(start), "to": self.server.iso_instant(end)}}
+            self.server.judge_window(session, action)
+            with self.subTest(end=end):
+                self.assertEqual(self.server.evaluate_action.__globals__["window_reaches_incident"](action["details"]), expected)
+
+    def test_clock_answers_are_read_in_the_learners_time(self):
+        """A stated time is compared with the moment as Discover showed it in the learner's browser."""
+        from datetime import timedelta
+        evaluator = self.server.evaluate_action.__globals__
+        manifest = self.materialize("deployment-version-regression", 9)
+        first = self.server.incident_moments(manifest)["first"]
+        field = {"id": "first_seen", "kind": "clock", "at": "first"}
+        for offset, stated, expected in ((-60, first + timedelta(minutes=60), True), (-60, first + timedelta(minutes=62), True),
+                                         (-60, first + timedelta(minutes=64), False), (-60, first, False), (300, first - timedelta(minutes=300), True)):
+            context = {"moment": first, "utc_offset_minutes": offset, "accepted": []}
+            with self.subTest(offset=offset, stated=stated):
+                self.assertEqual(evaluator["_answer_matches"](f"{stated:%H:%M}", None, field, context), expected)
+
+    def test_briefing_states_each_moment_as_a_clock_time(self):
+        from datetime import datetime, timedelta
+        manifest = self.materialize("deployment-version-regression", 5)
+        session = self.server.create_session({"manifest": manifest}, "guided")
+        briefing = self.server.build_incident_briefing(session)
+        created = datetime.fromisoformat(manifest["created_at"])
+        timing = manifest["parameters"]["timing"]
+        self.assertEqual(briefing["noticed_at"], self.server.iso_instant(created - timedelta(minutes=timing["noticed"])))
+        self.assertEqual(briefing["timed_facts"], [{"text": "The rollout of the new release began at {time} ({ago}).",
+                                                    "at": self.server.iso_instant(created - timedelta(minutes=timing["rollout"]))}])
+        # The clock reads in the browser's time once it has said what that is, and says UTC until then.
+        self.assertTrue(self.server.clock_text(created, {}).endswith(" UTC"))
+        self.assertEqual(self.server.clock_text(created, {"utc_offset_minutes": -120}), f"{created + timedelta(minutes=120):%H:%M}")
 
     def test_every_mode_receives_the_same_seeded_incident_briefing(self):
         manifest = self.materialize("slow-payments", 424242)

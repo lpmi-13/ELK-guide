@@ -28,20 +28,26 @@ function makeClock() {
   };
 }
 
-async function makeDemo() {
+async function makeDemo({carried = null} = {}) {
   const clock = makeClock();
-  const calls = {countdowns: [], resumes: [], commands: 0, actions: 0, messages: [], phases: [], learning: null, pending: [], updatedTargets: [], checkIns: [], hints: 0};
+  const calls = {countdowns: [], resumes: [], commands: 0, actions: 0, messages: [], phases: [], learning: null, pending: [], updatedTargets: [], checkIns: [], hints: 0,
+    recoveries: [], celebrations: [], performed: [], range: {from: 'now-15m', to: 'now'}};
   let coach;
   let client;
   let adapter;
   class Coach {
-    constructor() { coach = this; this.paused = false; }
+    constructor() { coach = this; this.paused = false; this.briefing = {active: false}; }
+    showRecovery(card) { this.phase = 'recovery'; calls.recoveries.push(card); }
+    showRecoveryWorking(headline) { calls.working = headline; }
+    celebrate(reason) { calls.celebrations.push(reason); }
+    showTarget(_target, activity) { this.phase = 'action'; calls.phases.push(activity); }
+    showResult(command, evidence) { this.phase = 'learning'; calls.phases.push('result'); calls.result = {command, evidence}; }
+    waitForAdvance() { return new Promise(resolve => { calls.continueResult = resolve; }); }
     setPaused(paused) { this.paused = paused; this.onPause?.(paused); }
     showCommand() { calls.commands++; }
     startCountdown(duration) { calls.countdowns.push(duration); }
     stopCountdown() {}
     resumeCountdown(remaining) { calls.resumes.push(remaining); }
-    showLearning(command) { this.phase = 'learning'; calls.phases.push('learning'); calls.learning = command; }
     setAdvancePending(pending) { this.advancePending = pending; calls.pending.push(pending); }
     beginWalkthrough() { this.phase = 'action'; calls.phases.push('action'); }
     beginActionPhase() { this.phase = 'action'; }
@@ -57,7 +63,9 @@ async function makeDemo() {
     async initialize() {}
     resolve() { return {}; }
     async resolveAnchor() { return null; }
-    async perform() { calls.actions++; return null; }
+    async perform(command) { calls.actions++; calls.performed.push(command); return null; }
+    async findEvidence() { return {targets: [], columns: []}; }
+    closeTransientPopovers() {}
   }
   class Client {
     constructor() { client = this; }
@@ -66,8 +74,15 @@ async function makeDemo() {
     sendAction(action) { calls.messages.push({...action, step_clock: this.stepClock?.()}); }
     requestCheckIn(step_id) { calls.messages.push({message_type: 'check_in', step_id}); }
     acknowledge() {}
+    reportRecovery(step_id, reason_code) { calls.messages.push({message_type: 'recovery_shown', step_id, reason_code}); }
+    checkWindow() { calls.messages.push({message_type: 'window_check'}); }
   }
-  class Observer { start() {} stop() {} }
+  class Observer {
+    static noResultsShown() { return false; }
+    start() {} stop() {} rebaseline() {}
+    readTimeRange() { return calls.range; }
+    timeRangeMinutes() { return 15; }
+  }
   const source = fs.readFileSync(new URL('../src/content-script.js', import.meta.url), 'utf8');
   const document = {
     readyState: 'complete',
@@ -76,7 +91,13 @@ async function makeDemo() {
     documentElement: {append() {}},
     addEventListener() {},
   };
-  const storage = {getItem: () => JSON.stringify({session: 'test'})};
+  const stored = new Map([['incident-coach:auto-connect', JSON.stringify({session: 'test'})]]);
+  if (carried) stored.set('incident-coach:carried-result', JSON.stringify(carried));
+  const storage = {
+    getItem: key => stored.get(key) ?? null,
+    setItem: (key, value) => stored.set(key, value),
+    removeItem: key => stored.delete(key),
+  };
   const window = {};
   const run = new Function('document', 'window', 'sessionStorage', 'IncidentCoachPanel',
     'KibanaAdapter', 'IncidentSessionClient', 'KibanaActionObserver',
@@ -85,7 +106,7 @@ async function makeDemo() {
     clock.setTimeout.bind(clock), clock.clearTimeout.bind(clock), clock.performance);
   await Promise.resolve();
   await Promise.resolve();
-  return {clock, calls, get coach() { return coach; }, get client() { return client; }, get adapter() { return adapter; }};
+  return {clock, calls, stored, get coach() { return coach; }, get client() { return client; }, get adapter() { return adapter; }};
 }
 
 test('guided steps render before waiting for an unavailable Kibana anchor', async () => {
@@ -120,19 +141,19 @@ test('pause freezes a reading beat; resume continues its remaining time without 
   };
   await demo.client.onCommand(command);
   await Promise.resolve();
-  assert.equal(demo.calls.countdowns[0], 16500);
+  assert.equal(demo.calls.countdowns[0], 5000);
 
-  demo.clock.advance(5000);
+  demo.clock.advance(2000);
   demo.coach.setPaused(true);
   demo.clock.advance(20000);
   assert.equal(demo.calls.actions, 0);
 
   demo.coach.setPaused(false);
-  assert.deepEqual(demo.calls.resumes, [11500]);
+  assert.deepEqual(demo.calls.resumes, [3000]);
   await demo.client.onCommand(command); // The service re-sends its pending command on resume.
   assert.equal(demo.calls.commands, 1);
   assert.equal(demo.calls.countdowns.length, 1);
-  demo.clock.advance(11499);
+  demo.clock.advance(2999);
   await Promise.resolve();
   assert.equal(demo.calls.actions, 0);
   demo.clock.advance(1);
@@ -155,7 +176,7 @@ test('the demonstration moves from a motivated opening card straight to the acti
   demo.coach.onAdvance();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(demo.calls.actions, 1);
-  assert.deepEqual(demo.calls.countdowns, [16500]);
+  assert.deepEqual(demo.calls.countdowns, [5000]);
   assert.deepEqual(demo.calls.phases, []);
 });
 
@@ -180,7 +201,7 @@ test('a completed demonstration action keeps its one-second hold, then advances 
   await Promise.resolve();
   await Promise.resolve();
   assert.equal(demo.calls.actions, 1);
-  assert.deepEqual(demo.calls.countdowns.slice(0, 2), [16500, 1000]);
+  assert.deepEqual(demo.calls.countdowns.slice(0, 2), [5000, 1000]);
   assert.deepEqual(demo.calls.phases, []);
 
   demo.clock.advance(500);
@@ -196,7 +217,7 @@ test('a completed demonstration action keeps its one-second hold, then advances 
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(demo.calls.phases, []);
   assert.equal(finished, 1);
-  assert.deepEqual(demo.calls.countdowns, [16500, 1000]);
+  assert.deepEqual(demo.calls.countdowns, [5000, 1000]);
 });
 
 test('Advance during a moving demonstration action continues after the action finishes', async () => {
@@ -228,12 +249,12 @@ test('Advance during a moving demonstration action continues after the action fi
   finishControl();
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(finished, 0);
-  assert.deepEqual(demo.calls.countdowns.slice(0, 2), [16500, 1000]);
+  assert.deepEqual(demo.calls.countdowns.slice(0, 2), [5000, 1000]);
 
   demo.clock.advance(1000); // The control's own hold finishes before the queued Advance applies.
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(demo.calls.phases, []);
-  assert.deepEqual(demo.calls.countdowns, [16500, 1000]);
+  assert.deepEqual(demo.calls.countdowns, [5000, 1000]);
   assert.equal(finished, 1);
   assert.equal(demo.coach.advancePending, false);
 });
@@ -256,7 +277,7 @@ test('repeated Advance clicks during an action hold wait for that hold to finish
   demo.coach.onAdvance();
   await Promise.resolve();
   await Promise.resolve();
-  assert.deepEqual(demo.calls.countdowns.slice(0, 2), [16500, 1000]);
+  assert.deepEqual(demo.calls.countdowns.slice(0, 2), [5000, 1000]);
 
   demo.coach.onAdvance();
   demo.coach.onAdvance();
@@ -310,17 +331,22 @@ test('guided Show me starts the action on the click and explains the result afte
   assert.equal(demo.calls.actions, 1);
   assert.deepEqual(demo.calls.countdowns, []);
 
-  await Promise.resolve();
-  assert.deepEqual(demo.calls.phases, ['action', 'learning']);
-  assert.equal(demo.calls.learning.evidence,
-    'This includes the incident.\n\nThe histogram now shows the range.');
-  assert.equal(demo.calls.countdowns.length, 1);
-  demo.clock.advance(demo.calls.countdowns[0]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(demo.calls.phases, ['action', 'result']);
+  // The finding and the reasoning stay separate, so the card can set one under the other.
+  assert.equal(demo.calls.result.command.evidence, 'The histogram now shows the range.');
+  assert.equal(demo.calls.result.command.reasoning, 'This includes the incident.');
+  // Reading the result is never on a timer: nothing moves on until the learner continues.
+  assert.deepEqual(demo.calls.countdowns, []);
+  demo.clock.advance(60000);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(demo.calls.messages, []);
+  demo.calls.continueResult();
   await showing;
   assert.deepEqual(demo.calls.messages.map(message => message.type), ['step_demonstrated']);
 });
 
-test('Advance during guided Show me continues when its action finishes', async () => {
+test('Advance during guided Show me hurries the action, not the result card', async () => {
   const demo = await makeDemo();
   let finishControl;
   demo.adapter.perform = async () => new Promise(resolve => { finishControl = resolve; });
@@ -338,11 +364,13 @@ test('Advance during guided Show me continues when its action finishes', async (
   demo.coach.onAdvance();
   assert.deepEqual(demo.calls.pending, [true]);
   finishControl(null);
-  await showing;
-  assert.deepEqual(demo.calls.phases, ['action', 'learning']);
-  assert.equal(demo.calls.countdowns.length, 1);
-  assert.deepEqual(demo.calls.messages.map(message => message.type), ['step_demonstrated']);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(demo.calls.phases, ['action', 'result']);
   assert.equal(demo.coach.advancePending, false);
+  assert.deepEqual(demo.calls.messages, []);
+  demo.calls.continueResult();
+  await showing;
+  assert.deepEqual(demo.calls.messages.map(message => message.type), ['step_demonstrated']);
 });
 
 test('the countdown bar continues from its frozen width for the remaining duration', () => {
@@ -406,4 +434,106 @@ test('a guided step that runs over its budget gets a gentle check-in that costs 
   demo.calls.checkIns[1].choices[1].onSelect();
   assert.equal(demo.calls.hints, 1);
   assert.equal(demo.calls.checkIns[1].drift, '');
+});
+
+test('a step that opens another page keeps its result for that page instead of telling it here', async () => {
+  const demo = await makeDemo();
+  const command = {command_id: 'pivot', step_id: 'inspect', mode: 'demonstration', type: 'view_panel_underlying_data', target: 'panel',
+    narration: 'Open the records', evidence: 'The records match the chart.'};
+  demo.adapter.perform = async () => ({type: 'panel_underlying_data_opened', details: {}, navigate: '/app/r?l=DISCOVER'});
+  demo.coach.advanceCelebration = () => false;
+  demo.coach.advanceInfo = () => false;
+  demo.adapter.advanceTyping = () => false;
+  demo.coach.finishCommand = () => {};
+  await demo.client.onCommand(command);
+  await Promise.resolve();
+  demo.coach.onAdvance();
+  await new Promise(resolve => setImmediate(resolve));
+  // Nothing claims to show the records while the dashboard is still on screen.
+  assert.equal(demo.calls.result, undefined);
+  assert.equal(JSON.parse(demo.stored.get('incident-coach:carried-result')).evidence, 'The records match the chart.');
+  assert.equal(demo.calls.messages.at(-1).type, 'panel_underlying_data_opened');
+});
+
+test('the page a step opened tells its result, then runs whatever the service sent meanwhile', async () => {
+  const carried = {command_id: 'pivot', step_id: 'inspect', mode: 'demonstration', type: 'view_panel_underlying_data', evidence: 'The records match the chart.'};
+  const demo = await makeDemo({carried});
+  let finished = 0;
+  demo.coach.finishCommand = () => { finished++; };
+  const next = {command_id: 'submit', step_id: 'submit', mode: 'guided', target: 'coach.answer', narration: 'Next'};
+  await demo.client.onCommand(next);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(demo.calls.result.command.command_id, 'pivot');
+  assert.equal(demo.calls.commands, 1); // the carried step's own header, not the next command yet
+  await demo.client.onCommand(next); // a resend must not start a second result beat
+  assert.equal(demo.calls.commands, 1);
+  demo.calls.continueResult();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(finished, 1);
+  assert.equal(demo.stored.has('incident-coach:carried-result'), false);
+  assert.equal(demo.calls.commands, 2); // now the next command
+});
+
+const settle = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
+
+test('a guided window that misses the incident on the scope step is explained at once; the learner chooses again', async () => {
+  const demo = await makeDemo();
+  demo.client.mode = 'guided';
+  await demo.client.onCommand({command_id: 'guided-scope', step_id: 'scope', mode: 'guided', type: 'set_time_range',
+    target: 'kibana.time_picker', narration: 'Set the window', restore_state: {}});
+  const miss = {outcome: 'dead_end', reason_code: 'window_misses_incident',
+    headline: 'Your window, the last 10 minutes, starts at 04:12, after the report at 04:10.',
+    detail: 'The report came in 12 minutes ago: time kept moving while you read.'};
+  demo.client.onActionResult({action: {type: 'time_range_changed'}, evaluation: miss});
+  const card = demo.calls.recoveries.at(-1);
+  assert.equal(card.eyebrow, 'Outside the window — choose again');
+  assert.equal(card.headline, miss.headline);
+  assert.equal(card.detail, miss.detail);
+  assert.deepEqual(card.choices.map(choice => choice.label), ['Choose again']);
+  assert.deepEqual(demo.calls.messages.at(-1), {message_type: 'recovery_shown', step_id: 'scope', reason_code: 'window_misses_incident'});
+  // Nothing is put back: the learner picks the window.
+  assert.equal(demo.calls.actions, 0);
+  const commands = demo.calls.commands;
+  card.choices[0].onSelect();
+  assert.equal(demo.calls.commands, commands + 1);
+  // Another miss, straight after, gets its own card; a window that reaches completes the step.
+  demo.client.onActionResult({action: {type: 'time_range_changed'}, evaluation: miss});
+  demo.client.onActionResult({action: {type: 'time_range_changed'}, evaluation: miss});
+  assert.equal(demo.calls.recoveries.length, 3);
+  demo.client.onActionResult({action: {type: 'time_range_changed'}, evaluation: {outcome: 'accepted', goals_progressed: ['scope'], reason: 'Completed: Set the time window'}});
+  assert.deepEqual(demo.calls.celebrations, ['Set the time window']);
+});
+
+test('a guided relative window is checked when it is due to slide; a confirmed slide types a fixed start back', async () => {
+  const demo = await makeDemo();
+  demo.client.mode = 'guided';
+  await demo.client.onCommand({command_id: 'guided-isolate', step_id: 'isolate', mode: 'guided', type: 'add_filter',
+    target: 'kibana.filter_bar', narration: 'Filter', restore_state: {time: {from: '2026-11-08T04:00:00.000Z', to: 'now'}}});
+  const checks = () => demo.calls.messages.filter(message => message.message_type === 'window_check').length;
+  const watch = {from: 'now-15m', slides_at: new Date(Date.now() + 60_000).toISOString()};
+  demo.client.onActionResult({action: {type: 'time_range_changed'}, evaluation: {outcome: 'observed'}, window_watch: watch});
+  demo.clock.advance(59_000);
+  assert.equal(checks(), 0);
+  demo.clock.advance(3_000);
+  assert.equal(checks(), 1);
+  // A window changed in the meantime (the watch is for the old one) is not checked.
+  demo.client.onActionResult({action: {type: 'time_range_changed'}, evaluation: {outcome: 'observed'}, window_watch: {...watch, slides_at: new Date(Date.now() + 1_000).toISOString()}});
+  demo.calls.range = {from: '2026-11-08T04:00:00.000Z', to: 'now'};
+  demo.clock.advance(5_000);
+  assert.equal(checks(), 1);
+  // The service confirms: the card says what happened, and the coach types the fixed start in.
+  demo.calls.range = {from: 'now-15m', to: 'now'};
+  demo.client.onWindowSlid({message_type: 'window_slid', evaluation: {outcome: 'dead_end', reason_code: 'window_slid_past_incident',
+    headline: 'Your window, the last 15 minutes, now starts at 04:04, after the rollout at 04:03.',
+    detail: 'A window counted back from now moves with the clock. I’ll set a fixed start of 04:00 so it stays put.',
+    incident_reference_at: new Date(Date.now() - 17 * 60_000).toISOString(), window_start_at: new Date(Date.now() - 15 * 60_000).toISOString(),
+    restore_time: {from: '2026-11-08T04:00:00.000Z', to: 'now'}}});
+  await settle();
+  const card = demo.calls.recoveries.at(-1);
+  assert.equal(card.eyebrow, 'Window moved on — back on track');
+  assert.equal(card.headline, 'Your window, the last 15 minutes, now starts at 04:04, after the rollout at 04:03.');
+  demo.clock.advance(16_000);
+  await settle();
+  assert.deepEqual(demo.calls.performed.at(-1), {type: 'set_time_range', target: 'kibana.time_picker', value: {from: '2026-11-08T04:00:00.000Z', to: 'now'}});
+  assert.match(demo.calls.working, /fixed start/);
 });

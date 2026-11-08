@@ -12,7 +12,7 @@ import struct
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -20,7 +20,7 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qs, quote, urlparse
 from urllib.request import Request, urlopen
 
-from engine.evaluator import IGNORED_ACTIONS, answer_phrases, current_goal, evaluate_action, guided_feedback, incident_onset_age_minutes, incident_timing, playbook_goals, reveals_answer, score_session
+from engine.evaluator import IGNORED_ACTIONS, TIME_WINDOW_TOLERANCE_MINUTES, answer_phrases, current_goal, evaluate_action, guided_feedback, incident_moments, incident_timing, parse_instant, playbook_goals, recommended_window_start, relative_window, reveals_answer, score_session, scope_complete, window_miss, window_reaches_incident, window_reference, window_start
 from engine.contracts import assert_catalog_valid, insert_goals
 from engine.kql import view_query
 
@@ -77,9 +77,6 @@ def now_iso():
 
 
 PARAM_TOKEN = re.compile(r"\$\{param\.([A-Za-z0-9_.]+)\}")
-# How far before a seeded incident's onset (as it stands when the window is used) the recommended
-# window opens at least, so the rise never sits on the histogram's left edge.
-ONSET_LEAD_MINUTES = 1.5
 
 
 def _param_lookup(parameters, dotted):
@@ -126,21 +123,6 @@ def load_definition(folder, identifier):
         return json.load(stream)
 
 
-def spell_duration(value):
-    """Render a compact window such as ``15m`` or ``1h`` as prose (``15 minutes``, ``1 hour``).
-
-    Coach copy spells the duration out in full; only the literal value the picker itself takes
-    (``now-15m``) stays compact. Numbers are kept (matching Kibana's own "Last 15 minutes" /
-    "Last 1 hour" quick ranges); unrecognized values pass through unchanged.
-    """
-    match = re.fullmatch(r"\s*(\d+)\s*([mh])\s*", str(value))
-    if not match:
-        return str(value)
-    amount = int(match.group(1))
-    noun = "minute" if match.group(2) == "m" else "hour"
-    return f"{amount} {noun}" if amount == 1 else f"{amount} {noun}s"
-
-
 def load_manifest_definition(manifest, kind):
     parameters = manifest.get("parameters", {})
     identifier = manifest[kind]
@@ -154,19 +136,6 @@ def load_manifest_definition(manifest, kind):
                 with template_path.open(encoding="utf-8") as stream:
                     template = json.load(stream)
                 variables = definition.get("variables", {})
-                # Session creation may derive a tighter Discover window from the incident age.
-                # Let that runtime value override both parameter-backed and fixed playbook defaults
-                # so demonstration, guided hints, and "Show me" all use the same range.
-                if definition.get("extends") == "discover.json" and "window" in parameters:
-                    runtime_window = parameters["window"]
-                    if isinstance(runtime_window, dict):
-                        runtime_window = runtime_window.get("value", variables.get("window"))
-                    variables = {**variables, "window": runtime_window}
-                # Offer a spelled-out companion to any compact window variable so coach copy can
-                # read "the last 15 minutes" while the picker action keeps "now-15m".
-                if "window" in variables and "window_spelled" not in variables:
-                    resolved_window = resolve_parameters(variables["window"], parameters)
-                    variables = {**variables, "window_spelled": spell_duration(resolved_window)}
 
                 def expand(value):
                     if isinstance(value, str):
@@ -230,10 +199,9 @@ def emit(session, action, evaluation=None, evidence=None):
 
 def create_session(run_response, mode):
     manifest = run_response["manifest"]
-    # Decide when the incident was noticed, then tie the recommended window to it before the
-    # playbook is expanded so the coach's copy, its reference action, and the graded truth all match.
+    # Decide when the incident was noticed. Its clock time, the window the coach recommends and the
+    # graded truth all derive from that one moment (see incident_clock).
     detected_offset_minutes = select_detected_offset(manifest)
-    apply_incident_window(manifest, detected_offset_minutes)
     playbook = load_manifest_definition(manifest, "playbook")
     rubric = load_manifest_definition(manifest, "rubric")
     session_id = f"session-{uuid.uuid4().hex[:12]}"
@@ -347,18 +315,11 @@ def substitute(value, session):
         "${expected_route}": expected.get("route", ""),
         "${minimum_duration_ns}": expected.get("minimum_duration_ns", 0),
         "${trace_id}": trace_id,
-        # The "Noticed N minutes ago" fact the intake modal shows. Exposed here so demonstration
-        # copy can name the same number as the briefing when it justifies the investigation window.
         "${detected_offset_minutes}": session.get("detected_offset_minutes", ""),
+        **incident_clock(session),
     }
-    window = current_incident_window_minutes(session)
-    if window is not None:
-        # A timed incident's recommended window, worked out when the copy or action is used: the onset
-        # recedes as the run ages, so a range fixed when the session began would stop reaching it.
-        replacements["${incident.window}"] = f"{window}m"
-        replacements["${incident.window_spelled}"] = spell_duration(f"{window}m")
-    for key, item in truth.get("answers", {}).items():
-        replacements[f"${{truth.{key}}}"] = item
+    # Truth answers go first, so a clock token inside one ("${incident.first_clock}") is resolved too.
+    replacements = {**{f"${{truth.{key}}}": item for key, item in truth.get("answers", {}).items()}, **replacements}
     if isinstance(value, str):
         for source, replacement in replacements.items():
             value = value.replace(source, str(replacement))
@@ -401,64 +362,231 @@ def select_detected_offset(manifest):
     return stable_briefing_choice(values, {"manifest": manifest}, "observed_minutes_ago")
 
 
-def current_incident_window_minutes(session):
-    """The window that opens just before a timed incident's onset as of now, or None if untimed."""
-    age = incident_onset_age_minutes(session.get("manifest", {}))
-    return None if age is None else recommended_window_minutes(age + ONSET_LEAD_MINUTES)
+def clock_text(moment, session):
+    """A moment as the learner's clock shows it ("14:03"), as Discover's times do. The coach reports the
+    browser's UTC offset when it connects; until it has, the time is given in UTC and says so."""
+    offset = session.get("utc_offset_minutes")
+    if offset is None:
+        return f"{moment:%H:%M} UTC"
+    return f"{moment - timedelta(minutes=offset):%H:%M}"
 
 
-def recommended_window_minutes(offset_minutes):
-    """Round the noticed-offset up to the next 5-minute mark (6->10, 13->15, 26->30).
+def typed_start(moment, session):
+    """A start a learner can type into Kibana's date picker as is ("Nov 7 14:00"); a bare time is not
+    accepted there (verified 9.5.2: "14:00 to now" leaves the window unchanged)."""
+    local = moment - timedelta(minutes=session.get("utc_offset_minutes") or 0)
+    return f"{local:%b} {local.day} {local:%H:%M}"
 
-    Rounding up (never down) keeps the window reaching back past the moment the incident was
-    noticed, which is exactly what the evaluator requires (see ``TIME_WINDOW_TOLERANCE_MINUTES``),
-    while snapping to a clean 5-minute value a learner would actually type into the time picker.
+
+def ago_text(moment, now=None):
+    """How long ago a moment was, as the briefing says it: "12 minutes ago"."""
+    minutes = round(((now or datetime.now(timezone.utc)) - moment).total_seconds() / 60)
+    if minutes < 1:
+        return "just now"
+    return "1 minute ago" if minutes == 1 else f"{minutes} minutes ago"
+
+
+def iso_instant(moment):
+    """A UTC moment the way Kibana writes a time range's absolute ends ('2026-11-07T14:00:00.000Z')."""
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{moment.microsecond // 1000:03d}Z"
+
+
+def incident_clock(session):
+    """Copy tokens for the incident's moments, worked out when the copy is used.
+
+    Each named moment (``noticed``, and a pack's ``onset``, ``end``, ``rollout``, ``first``) gives
+    ``${incident.<name>_clock}`` ("14:03", the learner's local time) and ``${incident.<name>_ago}``
+    ("12 minutes ago", as of now), and ``${incident.<name>_at}`` is the instant itself for an evidence
+    query. The recommended window starts at ``${incident.window_start}`` (the
+    instant the coach sets), read as ``${incident.window_start_clock}`` and typed as
+    ``${incident.window_start_typed}``. Because the start is a fixed time, it reaches the incident
+    however long the learner takes, where "the last 15 minutes" slid off it.
     """
-    return max(5, math.ceil(offset_minutes / 5) * 5)
+    moments = incident_moments(session.get("manifest", {}), session.get("detected_offset_minutes"))
+    tokens = {}
+    for key, moment in moments.items():
+        tokens[f"${{incident.{key}_at}}"] = iso_instant(moment)
+        tokens[f"${{incident.{key}_clock}}"] = clock_text(moment, session)
+        tokens[f"${{incident.{key}_ago}}"] = ago_text(moment)
+    start = recommended_window_start(moments)
+    if start is not None:
+        tokens["${incident.window_start}"] = iso_instant(start)
+        tokens["${incident.window_start_clock}"] = clock_text(start, session)
+        tokens["${incident.window_start_typed}"] = typed_start(start, session)
+    return tokens
 
 
-# Starting apps whose scope step is the time picker (Discover, and dashboards, whose panels share it).
-TIME_PICKER_APPS = {"discover", "dashboard", "dashboards"}
+def judged_window(session, details, now=None):
+    """A window in absolute time: when it starts and the moment it must reach, as instants on the
+    service's clock, and their ages now. A start date stays put; a "now-15m" start is counted back
+    from ``now``. The evaluator reads the ages; the instants say which moments were compared."""
+    now = now or datetime.now(timezone.utc)
+    details = dict(details or {})
+    start = window_start(details, now)
+    end = parse_instant(details.get("to"))
+    reference = window_reference(incident_moments(session["manifest"], session.get("detected_offset_minutes")))
+    if start is not None:
+        details["window_start_at"] = iso_instant(start)
+        details["from_minutes"] = round((now - start).total_seconds() / 60, 2)
+    if end is not None:
+        details["window_end_at"] = iso_instant(end)
+    if reference is not None:
+        details["incident_reference"] = reference["key"]
+        details["incident_reference_at"] = iso_instant(reference["at"])
+        details["incident_offset_minutes"] = round((now - reference["at"]).total_seconds() / 60, 2)
+    return details
 
 
-def apply_incident_window(manifest, offset_minutes):
-    """Align this run's window (coach copy, reference action, and graded truth) with the offset.
+def judge_window(session, action, now=None):
+    """Put a window change in absolute time before it is judged, as of when it arrived."""
+    action["details"] = judged_window(session, action.get("details"), now)
 
-    Every Discover and dashboard scenario feeds a compact window into the shared scope step. Derive that runtime
-    value from the same incident age shown in the briefing instead of leaving it as an independent
-    random choice (for example, "noticed 12 minutes ago" paired with "last 1 hour"). Both compact
-    string windows and the labelled value used by the dedicated time-window lesson are supported.
-    The latter also appears in its already-resolved truth, so update that copy as well. Re-deriving
-    from the same offset is idempotent. A pack that seeds a visible onset is windowed from that onset.
+
+# How feedback names the moment a window has to reach: as a noun, and as a sentence opening.
+WINDOW_MOMENTS = {
+    "noticed": ("the report", "The report came in"),
+    "rollout": ("the rollout", "The rollout began"),
+    "onset": ("the rise in failures", "The failures began rising"),
+}
+RELATIVE_UNITS = {"s": "second", "m": "minute", "h": "hour", "d": "day", "w": "week", "M": "month", "y": "year"}
+
+
+def relative_window_name(time_from):
+    """A start counted back from now as Kibana's picker names it ("now-15m" is "the last 15 minutes"),
+    or None for any other start."""
+    match = re.fullmatch(r"now-(\d+)([smhdwMy])(?:/[smhdwMy])?", str(time_from or "").strip())
+    if not match:
+        return None
+    amount, unit = int(match.group(1)), RELATIVE_UNITS[match.group(2)]
+    return f"the last {unit}" if amount == 1 else f"the last {amount} {unit}s"
+
+
+def minutes_text(minutes):
+    minutes = round(float(minutes))
+    return "1 minute" if minutes == 1 else f"{minutes} minutes"
+
+
+def window_feedback(session, reason):
+    """What a window that misses the incident says, in the learner's own clock time.
+
+    ``headline`` and ``detail`` are the guided coach's card; ``note`` is the challenge debrief's line,
+    shown only at the end. Three cases: a scope step's window that doesn't reach the moment
+    (``window_misses_incident``; a relative window picked from a briefing read minutes ago, say), a
+    later change that leaves it out (``window_excludes_incident``), and a relative window that has
+    since moved past it (``window_slid_past_incident``). The latter two put back a fixed start,
+    ``restore_time``. On a scope step whose moment is the onset, finding the rise is the lesson, so
+    the card doesn't date it.
     """
-    scenario = manifest.get("scenario", {})
-    if scenario.get("starting_view", {}).get("app") not in TIME_PICKER_APPS or offset_minutes is None:
-        return
-    parameters = manifest.get("parameters") or {}
-    window = parameters.get("window")
-    if window is not None and not isinstance(window, (str, dict)):
-        return
-    # When the pack seeds a visible onset, the window must open a little before that rise (not just
-    # before the report), so its start isn't on the histogram's edge and a few minutes' delay before
-    # the scope step can't push the first failures out of it.
-    onset = incident_timing(manifest).get("onset")
-    minutes = recommended_window_minutes(onset + ONSET_LEAD_MINUTES if onset is not None else offset_minutes)
-    new_value = f"{minutes}m"
-    new_label = f"last {spell_duration(new_value)}"
-    old_label = None
-    if isinstance(window, dict):
-        if "value" not in window or "label" not in window:
-            return
-        old_label = window["label"]
-        parameters["window"] = {**window, "value": new_value, "label": new_label}
-    else:
-        parameters["window"] = new_value
-    manifest["parameters"] = parameters
-    if old_label and old_label != new_label:
-        answers = scenario.get("truth", {}).get("answers", {})
-        for key, value in answers.items():
-            if isinstance(value, str):
-                answers[key] = value.replace(old_label, new_label)
+    code = reason.get("reason_code")
+    moment = parse_instant(reason.get("incident_reference_at"))
+    start, end = parse_instant(reason.get("window_start_at")), parse_instant(reason.get("window_end_at"))
+    if moment is None:
+        return {}
+    name, opening = WINDOW_MOMENTS.get(reason.get("incident_reference"), ("the incident", "The incident began"))
+    clock = clock_text(moment, session)
+    dated = "" if code == "window_misses_incident" and reason.get("incident_reference") == "onset" else f" at {clock}"
+    relative = relative_window_name(reason.get("from")) if reason.get("relative") else None
+    window = f"Your window, {relative}," if relative else "Your window"
+    restart = recommended_window_start(incident_moments(session["manifest"], session.get("detected_offset_minutes")))
+    feedback = {}
+    if code != "window_misses_incident" and restart is not None:
+        feedback["restore_time"] = {"from": iso_instant(restart), "to": "now"}
+    put_back = f"I'll set the window to start at {clock_text(restart, session)}, before it." if restart is not None else "I'll put the window back."
+    if end is not None and end < moment:
+        feedback["headline"] = f"Your window ends at {clock_text(end, session)}, before {name}{dated}."
+        feedback["detail"] = ("End it at now, or later." if code == "window_misses_incident"
+                              else f"{put_back} Or change it yourself — I'll step aside.")
+        feedback["note"] = f"Your window ended at {clock_text(end, session)}, before {name} at {clock}."
+        return feedback
+    started = clock_text(start, session) if start is not None else None
+    if code == "window_slid_past_incident":
+        fixed = clock_text(restart, session) if restart is not None else None
+        feedback["headline"] = f"{window} now starts at {started}, after {name} at {clock}."
+        # Kibana re-reads "now" when the search runs, so the screen still shows the last search's window.
+        feedback["detail"] = (f"A window counted back from now moves with the clock, so your next search leaves {name} out. "
+                              + (f"I'll set a fixed start of {fixed} so it stays put." if fixed else "I'll put the window back.")
+                              + " Or change it yourself — I'll step aside.")
+        feedback["note"] = (f"{window} moved with the clock and slid past {name} at {clock} while you investigated."
+                            + (f" A fixed start, such as {fixed}, would have kept it in view." if fixed else ""))
+        return feedback
+    feedback["headline"] = f"{window} starts at {started}, after {name}{dated}."
+    elapsed = minutes_text(reason["incident_offset_minutes"]) if reason.get("incident_offset_minutes") is not None else None
+    # Say time moved on only when it did: the same window would have reached the moment when the
+    # learner finished reading the briefing.
+    read_at = parse_instant(session.get("briefing_read_at"))
+    look_back = reason.get("from_minutes")
+    drifted = bool(relative and read_at and look_back is not None
+                   and float(look_back) + TIME_WINDOW_TOLERANCE_MINUTES >= (read_at - moment).total_seconds() / 60)
+    moved = ": time kept moving while you read" if drifted else ""
+    if code == "window_misses_incident":
+        if relative and dated and elapsed:
+            feedback["detail"] = (f"{opening} {elapsed} ago{moved}. "
+                                  f"Choose a longer window, or type a start before {clock} so it stays put.")
+        elif dated:
+            feedback["detail"] = f"Start it before {clock}."
+        else:
+            feedback["detail"] = "Find where the histogram rises, and start the window before it."
+        if relative and elapsed:
+            feedback["note"] = (f"{window} started at {started} when you chose it, after {name} at {clock}, {elapsed} earlier by then{moved}. "
+                                f"A longer window, or a fixed start before {clock}, would have reached it.")
+        else:
+            feedback["note"] = f"Your window started at {started}, after {name} at {clock}. A start before {clock} would have reached it."
+        return feedback
+    feedback["detail"] = f"{put_back} Or widen it yourself — I'll step aside."
+    feedback["note"] = f"You changed the window to start at {started}, after {name} at {clock}, so the evidence was out of view."
+    return feedback
+
+
+def practice_remaining(session):
+    """Whether any investigation step (not the answer) is still open, so the view still matters."""
+    return any(goal["id"] not in session["completed_goals"]
+               and goal.get("reference_action", {}).get("command") not in {"request_diagnosis", "request_answer"}
+               for goal in playbook_goals(session))
+
+
+def slid_window(session, now=None):
+    """The learner's relative window, judged now, once it no longer reaches the incident: it moved with
+    the clock after it was set. Reported once per window (``slid_window``)."""
+    view = session.get("view") or {}
+    time_from = view.get("time_from")
+    if not str(time_from or "").strip().lower().startswith("now"):
+        return None
+    if session.get("slid_window") == time_from:
+        return None
+    details = judged_window(session, {"from": time_from, "to": view.get("time_to")}, now)
+    if window_reaches_incident(details) is not False:
+        return None
+    return window_miss("window_slid_past_incident", {"details": details}, "The window has moved past the incident.")
+
+
+def window_watch(session, action):
+    """When a guided learner's relative window will slide past the incident, so the coach can say so
+    then rather than at their next action. None for a fixed start, or once the view no longer matters."""
+    if session["mode"] != "guided" or action.get("type") != "time_range_changed" or not relative_window(action):
+        return None
+    details = action.get("details") or {}
+    moment, look_back = parse_instant(details.get("incident_reference_at")), details.get("from_minutes")
+    if moment is None or look_back is None or window_reaches_incident(details) is not True:
+        return None
+    if not scope_complete(session) or not practice_remaining(session):
+        return None
+    return {"from": details.get("from"), "slides_at": iso_instant(moment + timedelta(minutes=float(look_back) + TIME_WINDOW_TOLERANCE_MINUTES))}
+
+
+def window_check_reply(session):
+    """The coach's watch on a relative window went off: if it has slid past the incident, record the dead
+    end and say what happened (the coach puts back a fixed start)."""
+    if session["mode"] != "guided" or not scope_complete(session) or not practice_remaining(session):
+        return None
+    slid = slid_window(session)
+    if not slid:
+        return None
+    session["slid_window"] = slid["from"]
+    goal = current_goal(session)
+    evaluation = {"outcome": "dead_end", "goals_progressed": [], "meaningful": False, "step_id": goal["id"] if goal else None,
+                  **slid, **window_feedback(session, slid)}
+    log_dead_end(session, evaluation)
+    return {"message_type": "window_slid", "evaluation": evaluation}
 
 
 def build_incident_briefing(session):
@@ -487,6 +615,11 @@ def build_incident_briefing(session):
     if observed_minutes_ago is None:
         observed_minutes_ago = stable_briefing_choice(profile["observed_minutes_ago"], session, "observed_minutes_ago")
     profile.pop("observed_minutes_ago", None)
+    # The briefing states each moment as a clock time beside how long ago it was, so the report stays
+    # true however long it is read (the coach formats both in the learner's own time).
+    moments = incident_moments(session["manifest"], observed_minutes_ago)
+    timed_facts = [{"text": fact["text"], "at": iso_instant(moments[fact["at"]])}
+                   for fact in profile.pop("timed_facts", []) if fact.get("at") in moments]
     source = dict(definitions["sources"][channel_key])
     source["key"] = channel_key
     source["detail"] = source["detail"].replace("${owner}", profile["owner"]).replace("${channel_slug}", scenario["id"])
@@ -499,6 +632,8 @@ def build_incident_briefing(session):
         "mode": session["mode"],
         "duration_ms": 30_000,
         "detected_offset_minutes": observed_minutes_ago,
+        "noticed_at": iso_instant(moments["noticed"]) if "noticed" in moments else None,
+        "timed_facts": timed_facts,
         "source": source,
         "graphic": "/incident-coach/assets/assets/incident-signal.webp",
         **profile,
@@ -665,8 +800,14 @@ def next_hint(session):
     session["hint_level"][step["id"]] = level + 1
     session["assistance"]["hints"] += 1
     text = substitute(hints[level], session)
-    truth = session["manifest"]["scenario"].get("truth", {})
-    if reveals_answer(text, answer_phrases(truth, substitute(step.get("reference_action", {}).get("arguments"), session))):
+    truth = substitute(session["manifest"]["scenario"].get("truth", {}), session)
+    arguments = substitute(step.get("reference_action", {}).get("arguments"), session)
+    phrases = answer_phrases(truth, arguments)
+    # A window's answer is its start time, which hint copy reads as a clock time.
+    start = parse_instant(arguments.get("from")) if isinstance(arguments, dict) else None
+    if start is not None:
+        phrases += [clock_text(start, session), typed_start(start, session)]
+    if reveals_answer(text, phrases):
         session["hint_revealed"][step["id"]] = True
     return {"message_type": "hint", "step_id": step["id"], "level": level + 1, "text": text}
 
@@ -760,10 +901,11 @@ def action_evidence(session, action):
     details = action.get("details") or {}
     trace_id = details.get("trace_id") or (action.get("state_after") or {}).get("trace_id")
     view = session.get("view")
-    # A demonstration is the coach performing the reference route, which it is trusted to do; the
+    # A demonstration is the coach performing the reference route, which it is trusted to do, and so
+    # is a guided "Show me" (refusing it would leave the learner with no coach on screen); the
     # learner's view only matters where the learner's own work is judged.
     learner_judged = session["mode"] != "demonstration"
-    scope = view_query(view) if view and learner_judged else None
+    scope = view_query(view) if view and learner_judged and action.get("actor") != "tutorial" else None
     if action.get("type") == "esql_submitted" and learner_judged:
         evidence["esql_result"] = esql_result(session, details.get("query") or (view or {}).get("query"), view)
     for assertion in session["manifest"]["scenario"].get("truth", {}).get("assertions", []):
@@ -777,13 +919,19 @@ def action_evidence(session, action):
                 value = elastic_search(query, index).get("aggregations", {}).get("value", {}).get("value", 0)
             else:
                 value = None
+                # A pack's minimum says how much the whole run holds. A learner's window can rightly
+                # hold less (the last 5 minutes of a 10-minute incident), so inside a view the question
+                # is only whether the evidence is on their screen at all.
+                minimum = assertion.get("minimum", 1)
                 if scope is not None:
                     status, result = http_json(f"{ELASTICSEARCH_URL}/{index}/_search?allow_no_indices=true", "POST",
                                                {"size": 0, "query": {"bool": {"filter": [assertion_query, scope]}}})
                     if status < 400:
-                        value, evidence["view_scoped"] = hit_total(result), True
+                        value, evidence["view_scoped"], minimum = hit_total(result), True, 1
                 if value is None:
                     value = hit_total(elastic_search(query, index))
+                evidence["assertions"][assertion["id"]] = value >= minimum
+                continue
             evidence["assertions"][assertion["id"]] = value >= assertion.get("minimum", 1)
         elif kind == "trace_from_action" and trace_id:
             trace_filter = [{"match_phrase": {"trace.id": str(trace_id)}}]
@@ -829,6 +977,14 @@ def record_check_in_answer(session, details):
     check_ins = step_log(session, details.get("step_id", ""))["check_ins"]
     if check_ins and check_ins[-1].get("choice") is None:
         check_ins[-1]["choice"] = details.get("choice")
+
+
+def log_dead_end(session, evaluation):
+    """Keep a dead end in its step's record, with the explanation a challenge debrief shows."""
+    entry = {"reason_code": evaluation["reason_code"], "at": now_iso()}
+    if evaluation.get("note"):
+        entry["note"] = evaluation["note"]
+    step_log(session, evaluation["step_id"])["dead_ends"].append(entry)
 
 
 def record_recovery(session, message):
@@ -877,12 +1033,9 @@ def record_action(session, action):
     if action.get("type") == "step_demonstrated":
         session["assistance"]["demonstrated_steps"] += 1
     record_step_clock(session, action.get("step_clock"))
-    onset_age = incident_onset_age_minutes(session["manifest"])
-    if action.get("type") == "time_range_changed" and onset_age is not None:
-        # The coach tags a window with when the incident was noticed. When the pack seeded a visible
-        # onset, the window has to reach back to that rise instead — which the learner reads off the
-        # histogram rather than the report — as it stands now, however long the learner has taken.
-        action["details"] = {**(action.get("details") or {}), "incident_offset_minutes": round(onset_age, 1)}
+    if action.get("type") == "time_range_changed":
+        judge_window(session, action)
+        session.pop("slid_window", None)
     if action.get("type") == "check_in_answered":
         record_check_in_answer(session, action.get("details") or {})
     if action.get("type") not in IGNORED_ACTIONS:
@@ -890,8 +1043,19 @@ def record_action(session, action):
     evidence = action_evidence(session, action)
     earned = restore_state(session) if session["mode"] in {"guided", "challenge"} else None
     evaluation = evaluate_action(session, action, evidence, earned_state=earned)
+    # An action that found nothing while a relative window had moved past the incident: say why.
+    if (evaluation["outcome"] == "observed" and action.get("actor") != "tutorial"
+            and action.get("type") not in IGNORED_ACTIONS | {"time_range_changed"}
+            and scope_complete(session) and practice_remaining(session)):
+        slid = slid_window(session)
+        if slid:
+            session["slid_window"] = slid["from"]
+            goal = current_goal(session)
+            evaluation = {"outcome": "dead_end", "goals_progressed": [], "meaningful": False, "step_id": goal["id"] if goal else None, **slid}
+    if str(evaluation.get("reason_code") or "").startswith("window_"):
+        evaluation.update(window_feedback(session, evaluation))
     if evaluation["outcome"] == "dead_end" and evaluation.get("step_id"):
-        step_log(session, evaluation["step_id"])["dead_ends"].append({"reason_code": evaluation["reason_code"], "at": now_iso()})
+        log_dead_end(session, evaluation)
     elif evaluation["outcome"] == "drift":
         record_drift(session, evaluation["step_id"], evaluation["note"])
     for goal_id in evaluation["goals_progressed"]:
@@ -1115,6 +1279,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         connection = self.connection
         connection.settimeout(60)
+        # The browser's UTC offset (minutes, as getTimezoneOffset gives it), so clock times in the coach's
+        # copy read as Discover shows them.
+        try:
+            offset = int((query.get("utc_offset") or [""])[0])
+            if -840 <= offset <= 840:
+                session["utc_offset_minutes"] = offset
+        except ValueError:
+            pass
         if not wait_run_ready(session):
             send_frame(connection, json.dumps({"message_type": "failed", "error": "run evidence did not become ready"}))
             return
@@ -1141,6 +1313,8 @@ class Handler(BaseHTTPRequestHandler):
                     evaluation = record_action(session, message["action"])
                     reply = {"message_type": "action_result", "evaluation": learner_evaluation(session, evaluation), "session": learner_session(session),
                              "action": {"type": message["action"].get("type"), "sequence": message["action"].get("sequence")}}
+                    if message["action"].get("type") == "time_range_changed":
+                        reply["window_watch"] = window_watch(session, message["action"])
                     send_frame(connection, json.dumps(reply))
                     # A challenge's answer form is already open; re-sending it would reset what the learner typed.
                     if evaluation["goals_progressed"] and not session["paused"] and session["mode"] != "challenge":
@@ -1155,12 +1329,19 @@ class Handler(BaseHTTPRequestHandler):
                         send_frame(connection, json.dumps(reply))
                 elif message_type == "recovery_shown":
                     record_recovery(session, message)
+                elif message_type == "window_check":
+                    reply = window_check_reply(session)
+                    if reply:
+                        send_frame(connection, json.dumps(reply))
                 elif message_type == "ack":
                     send_frame(connection, json.dumps({"message_type": "acknowledged", "command_id": message.get("command_id")}))
                 elif message_type == "briefing_ack":
                     if session["briefing_acknowledged"]:
                         continue
                     session["briefing_acknowledged"] = True
+                    # When the learner finished reading it: a window that reached the moment then, but
+                    # not when it was set, missed it because time kept moving.
+                    session["briefing_read_at"] = now_iso()
                     transition_run(session, "INVESTIGATING")
                     command = next_command(session)
                     send_frame(connection, json.dumps(command or {"message_type": "complete", "session_id": session_id}))

@@ -29,6 +29,54 @@ async function waitForSelector(selectors, timeout, signal) {
 globalThis.KibanaApplicationAdapters.push({
   name: 'discover',
   commands: new Set(['select_data_view', 'enter_kql', 'switch_query_language', 'enter_esql', 'edit_filter', 'remove_filter', 'disable_filter', 'add_column', 'remove_column', 'sort_column', 'expand_document', 'inspect_field', 'open_field_statistics', 'open_surrounding_documents']),
+
+  // Sort the table by one column from its header's menu (verified 9.5.2: the menu button
+  // `dataGridHeaderCellActionButton-<field>` shows on hover, and a date column offers "Sort Old-New"
+  // and "Sort New-Old"; numbers read Low-High, text A-Z). The URL's `_a` state then holds the sort.
+  async sortColumn(command, host, coach, timingScale, signal) {
+    const field = command.value?.field || '@timestamp';
+    const direction = command.value?.direction === 'desc' ? 'desc' : 'asc';
+    const result = {type: 'sort_changed', details: {field, direction}, state_after: {sort: [[field, direction]]}};
+    const escaped = cssEscape(field);
+    const header = await waitForSelector(`[data-test-subj='dataGridHeaderCell-${escaped}']`, 20000, signal);
+    const current = decodeURIComponent(location.href).match(/sort:!\(!\(([^,]+),(asc|desc)\)/);
+    if (current && current[1].replace(/^['"]|['"]$/g, '') === field && current[2] === direction) {
+      await host.pointAt(header, coach, timingScale, signal, `The table is already sorted by ${field}, so there's nothing to change here.`, {showClick: false});
+      return result;
+    }
+    const order = direction === 'asc' ? /^Sort (Old-New|Low-High|A-Z)$/i : /^Sort (New-Old|High-Low|Z-A)$/i;
+    const option = () => [...document.querySelectorAll('button')].find(node => order.test(node.textContent.trim()) && node.getClientRects().length);
+    await host.pointAt(header, coach, timingScale, signal, `Open the ${field} column's menu.`, {hold: false});
+    header.querySelector(`[data-test-subj='dataGridHeaderCellActionButton-${escaped}']`)?.click();
+    const deadline = Date.now() + 3000;
+    while (!option() && Date.now() < deadline) await host.wait(100, signal);
+    if (!option()) throw new Error(`The ${field} column menu did not open. Try this step again.`);
+    await host.pointAt(option(), coach, timingScale, signal, `Choose “${option().textContent.trim()}”.`, {activate: true});
+    return result;
+  },
+
+  // The expand toggle on the first result from `service` (verified 9.5.2: grid cells carry their column
+  // and row index, and the row's toggle sits beside them). Null when no such row is on the page.
+  expandToggleFor(service) {
+    const cell = [...document.querySelectorAll("[data-gridcell-column-id='service.name']")].find(node => node.textContent.includes(service));
+    const row = cell?.getAttribute('data-gridcell-row-index');
+    return row == null ? null : document.querySelector(`[data-gridcell-row-index='${row}'] [data-test-subj='docTableExpandToggleColumn']`);
+  },
+
+  // What a step's opening card points at: the field or result row it is about, not the whole field list.
+  async anchor(command, host, signal) {
+    if (command.type === 'expand_document' && command.value?.service) return this.expandToggleFor(command.value.service);
+    if (command.type === 'inspect_field' && command.target === 'kibana.esql_first_result') {
+      return host.waitForNaming('kibana.esql_first_result', command.value?.value, signal);
+    }
+    if (command.type === 'sort_column') return waitForSelector(`[data-test-subj='dataGridHeaderCell-${cssEscape(command.value?.field || '@timestamp')}']`, 8000, signal);
+    if (['open_field_statistics', 'inspect_field', 'add_column', 'remove_column'].includes(command.type) && command.value?.field) {
+      const escaped = cssEscape(command.value.field);
+      return waitForSelector([`[data-test-subj='field-${escaped}-showDetails']`, `[data-test-subj='dscFieldListPanelField-${escaped}']`], 8000, signal);
+    }
+    return null;
+  },
+
   async perform(command, host, coach, {timingScale = 1, signal} = {}) {
     if (command.type === 'enter_esql' && document.querySelector("[data-test-subj='ESQLEditor'] .monaco-editor")) {
       const value = typeof command.value === 'string' ? command.value : command.value?.query || '';
@@ -36,6 +84,9 @@ globalThis.KibanaApplicationAdapters.push({
       await host.pointAt(editor, coach, timingScale, signal, 'Write the ES|QL pipeline here, then run it.', {showClick: false});
       if (!host.runEsql(value)) throw new Error('Discover could not take the ES|QL query. Try this step again.');
       await host.wait(2500, signal);
+      // The editor keeps its focus through the URL change, and with it an autocomplete list over the page.
+      const typed = document.activeElement;
+      if (editor.contains(typed)) typed.blur();
       return {type: 'esql_submitted', details: {query: value, language: 'esql'}, state_after: {query: value, query_language: 'esql'}};
     }
     if (command.type === 'enter_kql' || command.type === 'enter_esql') {
@@ -44,6 +95,16 @@ globalThis.KibanaApplicationAdapters.push({
       await host.enterQuery(value, coach, timingScale, signal, input);
       return {type: command.type === 'enter_esql' ? 'esql_submitted' : 'query_submitted', details: {query: value, language: command.type === 'enter_esql' ? 'esql' : 'kql'}, state_after: {query: value, query_language: command.type === 'enter_esql' ? 'esql' : 'kql'}};
     }
+    // A grouped ES|QL result is read, not opened: each row states its group and its calculated values
+    // (verified 9.5.2: a `<id>-row-header` reading "/api/orders/confirm total: 45 failures: 42"), while a
+    // field's Top values would only repeat the group names.
+    if (command.type === 'inspect_field' && command.target === 'kibana.esql_first_result') {
+      const row = await host.waitForNaming('kibana.esql_first_result', command.value?.value, signal, 8000)
+        || await host.waitFor('kibana.esql_first_result', 8000, signal);
+      await host.pointAt(row, coach, timingScale, signal, 'Read this row’s values together.', {showClick: false});
+      return {type: 'field_inspected', details: {...command.value}, state_after: {...command.value}};
+    }
+    if (command.type === 'sort_column') return this.sortColumn(command, host, coach, timingScale, signal);
     // Column add/remove drives the verified 9.5.2 field-list toggle `fieldToggle-<field>`
     // (its aria-label flips between "Add field as column" and "Remove field from table").
     // The field name comes from the command; fall back to the registry target otherwise.
@@ -74,9 +135,10 @@ globalThis.KibanaApplicationAdapters.push({
       const type = command.type === 'open_field_statistics' ? 'field_statistics_opened' : 'field_inspected';
       return {type, details: {...command.value}, state_after: {...command.value}};
     }
-    const target = await host.waitFor(command.target, 20000, signal);
+    const fallback = await host.waitFor(command.target, 20000, signal);
+    const target = (command.type === 'expand_document' && command.value?.service && this.expandToggleFor(command.value.service)) || fallback;
     const activity = command.type !== 'expand_document' ? command.narration || 'Use the highlighted Discover control.'
-      : (command.evidence_focus || command.walkthrough?.evidence_focus)?.fields?.length ? 'Expand the first result, then pin the fields to compare at the top of it.'
+      : (command.evidence_focus || command.walkthrough?.evidence_focus)?.fields?.length ? `Expand ${command.value?.service ? `this ${command.value.service} result` : 'the first result'}, then pin the fields to compare at the top of it.`
         : 'Expand the first result to read all of its fields.';
     await host.pointAt(target, coach, timingScale, signal, activity, {activate: true});
     // Report the step only once the document is actually open, so a click that opened nothing is

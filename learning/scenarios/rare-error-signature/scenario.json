@@ -18,8 +18,7 @@
         {"service": "payments", "error_type": "LedgerRoundingError", "route_path": "/api/payments/settle", "message": "settlement rounding mismatch detected", "noise_message": "payments settlement batch queued"},
         {"service": "auth", "error_type": "SessionReplayDetected", "route_path": "/api/auth/refresh", "message": "refused a replayed session token", "noise_message": "auth key rotation completed"}
       ]
-    },
-    "window": {"choose": ["30m", "1h"]}
+    }
   },
   "provisioning": {
     "strategies": ["seeded-events", "saved-objects"],

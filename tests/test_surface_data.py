@@ -130,6 +130,79 @@ class SurfaceDataTests(unittest.TestCase):
             self.controller.reclaim_after_retention(run)
             cleanup.assert_not_called()
 
+    def test_every_inventory_entity_keeps_reporting_for_the_life_of_the_run(self):
+        # The inventory reads about the last minute and draws a host with nothing newer as 0%, so seeded
+        # readings that stop at provisioning would drop every entity to 0% a minute later.
+        from datetime import datetime, timedelta, timezone
+        for pack in ("cpu-saturation", "hot-instance-imbalance", "memory-leak-and-restarts"):
+            with self.subTest(pack=pack):
+                template = json.loads((ROOT / "learning/scenarios" / pack / "scenario.json").read_text())
+                manifest = self.controller.materialize(template, 7, run_id="run-000000000007")
+                documents = self.controller.generate_seeded_events(manifest)
+                now = datetime.now(timezone.utc)
+                tail = self.controller._metric_tail(manifest, documents, "metrics", now)
+                entity = lambda document: self.controller._lookup_nested(document, "kubernetes.pod.name") or self.controller._lookup_nested(document, "host.name")
+                entities = {entity(document) for document in documents if document.get("processor", {}).get("event") == "metric"}
+                self.assertEqual({entity(reading) for reading in tail}, entities)
+                for name in entities:
+                    times = sorted(datetime.fromisoformat(reading["@timestamp"]) for reading in tail if entity(reading) == name)
+                    self.assertLessEqual(times[0], now)
+                    self.assertGreaterEqual(times[-1], now + timedelta(hours=2))
+                    self.assertTrue(all(later - earlier <= timedelta(seconds=30) for earlier, later in zip(times, times[1:])))
+                # Each entity reads both metrics, so neither view of the inventory draws one at 0%.
+                for reading in tail:
+                    self.assertIsNotNone(self.controller._lookup_nested(reading, "system.cpu.total.norm.pct"))
+                    self.assertIsNotNone(self.controller._lookup_nested(reading, "system.memory.actual.used.pct"))
+                # The outlier keeps its own reading.
+                signal = template["provisioning"]["seeded_events"]["signal"]
+                outlier = self.controller._lookup_nested(signal, "kubernetes.pod.name") or self.controller._lookup_nested(signal, "host.name")
+                path = "system.memory.actual.used.pct" if pack == "memory-leak-and-restarts" else "system.cpu.total.norm.pct"
+                wanted = self.controller._lookup_nested(signal, path)
+                self.assertTrue(all(self.controller._lookup_nested(reading, path) == wanted for reading in tail if entity(reading) == outlier))
+
+    def test_the_metric_tail_never_reaches_other_surfaces_or_the_runs_own_index(self):
+        from datetime import datetime, timezone
+        template = json.loads((ROOT / "learning/scenarios/slow-dependency-trace/scenario.json").read_text())
+        manifest = self.controller.materialize(template, 7, run_id="run-000000000007")
+        documents = self.controller.generate_seeded_events(manifest)
+        self.assertEqual(self.controller._metric_tail(manifest, documents, "apm", datetime.now(timezone.utc)), [])
+
+    def test_every_retry_trace_shows_its_three_attempts_one_after_another(self):
+        # A learner may open any trace sample, so each must carry the spans the step reads; a transaction
+        # without its own duration is drawn at APM's 120 ms default, shorter than its calls.
+        documents, _streams = self.documents("retry-amplification")
+        transactions = [document for document in documents if document.get("processor", {}).get("event") == "transaction" and document.get("transaction", {}).get("name") == "POST /checkout" and document.get("retry", {}).get("count") == 3]
+        self.assertTrue(transactions)
+        spans = [document for document in documents if document.get("processor", {}).get("event") == "span" and document.get("span", {}).get("name") == "POST payments/authorize"]
+        for transaction in transactions:
+            self.assertEqual(transaction["transaction"]["duration"]["us"], 1800000)
+            attempts = sorted((span for span in spans if span["trace"]["id"] == transaction["trace"]["id"]), key=lambda span: span["@timestamp"])
+            self.assertEqual(len(attempts), 3)
+            # Each hangs off its request; an orphan draws "the trace document is incomplete" over the waterfall.
+            for attempt in attempts:
+                self.assertEqual(attempt["parent"]["id"], transaction["transaction"]["id"])
+                self.assertEqual(attempt["transaction"]["id"], transaction["transaction"]["id"])
+        # One root per trace: two transactions sharing a trace.id would double its spans.
+        roots = [transaction["trace"]["id"] for transaction in transactions]
+        self.assertEqual(len(roots), len(set(roots)))
+        started = sorted(span["@timestamp"] for span in spans if span["trace"]["id"] == transactions[-1]["trace"]["id"])
+        first, second, third = [datetime_from_iso(value) for value in started[:3]]
+        self.assertGreater((second - first).total_seconds(), 0.5)
+        self.assertGreater((third - second).total_seconds(), 0.5)
+
+    def test_a_hosts_log_evidence_belongs_to_that_host(self):
+        # The step reads the outlier's own Logs tab, which lists only lines carrying its host.name.
+        for pack, host in (("hot-instance-imbalance", "orders-04"), ("cpu-saturation", "checkout-03")):
+            with self.subTest(pack=pack):
+                _documents, streams = self.documents(pack)
+                logs = [document for stream, document in streams if stream and stream.startswith("logs-")]
+                self.assertTrue([document for document in logs if document.get("host", {}).get("name") == host])
+
+
+def datetime_from_iso(value):
+    from datetime import datetime
+    return datetime.fromisoformat(value)
+
 
 if __name__ == "__main__":
     unittest.main()

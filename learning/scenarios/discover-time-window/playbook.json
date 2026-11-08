@@ -4,31 +4,30 @@
   "extends": "discover.json",
   "variables": {
     "title": "Finding the incident window",
-    "window": "${param.window.value}",
     "field": "http.response.status_code",
     "status_field": "http.response.status_code",
     "route_field": "url.path",
     "query": "http.response.status_code: ${param.incident.status} and url.path: \"${param.incident.route}\"",
-    "finding_phrase": "the ${truth.finding}"
+    "finding_phrase": "the failures between ${incident.onset_clock} and ${incident.end_clock}"
   },
   "goal_overrides": {
     "scope": {
       "concept": "The histogram shows when activity changed, so it can date an incident more precisely than a report can.",
-      "narration": "Support noticed the failures ${detected_offset_minutes} minutes ago, but not when they began. Find where the histogram rises above its usual level, then set the time picker to a window that starts just before that rise.",
+      "narration": "Support noticed the failures at ${incident.noticed_clock} (${incident.noticed_ago}), but not when they began. Find where the histogram rises above its usual level, then set the window to start just before that rise.",
       "reasoning": "A window that starts just before the rise holds the whole incident without older, unrelated traffic diluting the comparison.",
       "evidence": "The histogram should show the raised stretch, with only a little normal traffic either side.",
       "demonstration": {
-        "narration": "Support noticed the failures ${detected_offset_minutes} minutes ago, not when they began. I'll find where this histogram rises and start the window just before it.",
+        "narration": "Support noticed the failures at ${incident.noticed_clock}, not when they began. I'll find where this histogram rises and start the window just before it.",
         "reasoning": "",
-        "evidence": "The window now opens just before the rise, so the whole raised stretch is in view with a little normal traffic either side. The failures began a few minutes before support noticed them, which the report alone couldn't tell us.",
+        "evidence": "The window now opens at ${incident.window_start_clock}, just before the rise, so the whole raised stretch is in view with a little normal traffic either side. The failures began a few minutes before support noticed them, which the report alone couldn't tell us.",
         "goal_focus": {"kind": "histogram"}
       },
       "hints": [
-        "Support noticed the failures ${detected_offset_minutes} minutes ago, but they may have started earlier. Look for where the histogram rises above its usual level.",
-        "Use the date picker at the top of Discover (or click and drag across the histogram) to choose a window that starts just before the rise.",
-        "Set the range to the last ${incident.window_spelled}; Show me can do it for you."
+        "Support noticed the failures at ${incident.noticed_clock}, but they may have started earlier. Look for where the histogram rises above its usual level.",
+        "Click the date box at the top of Discover and type a start date and time just before the rise, followed by “to now”, or drag across the histogram.",
+        "Start the window at ${incident.window_start_clock}: type “${incident.window_start_typed} to now”. Show me can do it for you."
       ],
-      "reference_action": {"command": "set_time_range", "target": "kibana.time_picker", "arguments": {"from": "now-${incident.window}", "to": "now"}}
+      "reference_action": {"command": "set_time_range", "target": "kibana.time_picker", "arguments": {"from": "${incident.window_start}", "to": "now"}}
     },
     "isolate": {
       "title": "Filter to the failing status code",
@@ -65,7 +64,19 @@
         "evidence": "This one request carries both ${param.incident.status} and ${param.incident.route}, so the status and endpoint really occur together, not just in separate totals. ${truth.conclusion}",
         "evidence_focus": {"kind": "document", "fields": ["${var.status_field}", "${var.route_field}"]}
       },
-      "requires": ["endpoints"]
+      "requires": ["endpoints"],
+      "accepts": [
+        {"action": ["document_expanded", "trace_opened", "surrounding_documents_opened"], "validators": [{"kind": "result_assertion", "assertion": "corroboration"}]},
+        {"action": ["column_added"], "validators": [{"kind": "detail_equals", "field": "field", "values": ["${var.status_field}", "${var.route_field}"]}, {"kind": "result_assertion", "assertion": "corroboration"}]}
+      ],
+      "drifts": [
+        {"action": ["column_added"], "validators": [{"kind": "detail_not", "field": "field", "values": ["${var.status_field}", "${var.route_field}"]}], "note": "You added ${action.field} as a column; this step checks ${var.status_field} and ${var.route_field} on the same rows, or one whole event."}
+      ],
+      "hints": [
+        "Check one typical record instead of relying only on the count.",
+        "Expand a row to read all of its fields, or add ${var.status_field} and ${var.route_field} as columns to read them on the same rows.",
+        "Open the first result; Show me can do it for you."
+      ]
     }
   },
   "goal_inserts": [
@@ -113,7 +124,7 @@
         "demonstration": {
           "narration": "I'll check url.path Top values within the ${param.incident.status} responses to see which endpoint the failures hit.",
           "reasoning": "A status-code spike could be spread across many routes or concentrated on one. Reading url.path in the filtered set tells us which pattern is present.",
-          "evidence": "Almost all of the ${param.incident.status} responses hit ${param.incident.route}, which serves the ${param.incident.journey} requests support reported failing. The failures are tied to that one endpoint rather than spread across the API.",
+          "evidence": "The ${param.incident.status} responses concentrate on ${param.incident.route}, which serves the ${param.incident.journey} requests support reported failing. The failures are tied to that one endpoint rather than spread across the API.",
           "evidence_focus": {"kind": "top_values", "field": "${var.route_field}", "value": "${param.incident.route}"}
         },
         "requires": ["isolate"],

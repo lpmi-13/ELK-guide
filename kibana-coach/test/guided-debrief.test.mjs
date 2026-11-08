@@ -46,7 +46,7 @@ test('guided debrief shows the scored percentage, phase credit, and marked gradi
   const {Debrief, dialog} = renderGuided({scored: true, total: 70, summary: 'Complete.', assistance});
   assert.match(dialog.innerHTML, /Guided practice score<\/strong><strong>70%/);
   assert.match(dialog.innerHTML, /role="progressbar"[^>]*aria-valuenow="70"[^>]*--score:70%/);
-  assert.match(dialog.innerHTML, /Per phase: 20% without help · 10% with hints only · 0% with Show me/);
+  assert.match(dialog.innerHTML, /Per phase: 20% without help · 10% with hints that leave the answer to you · 0% once a hint or Show me gives it/);
   assert.equal((dialog.innerHTML.match(/<i><\/i>/g) || []).length, 6);
   assert.match(dialog.innerHTML, /<span>0%<\/span>.*<span>100%<\/span>/s);
   assert.match(Debrief.styles, /guided-score-unearned[^}]*animation/);
@@ -100,14 +100,19 @@ test('guided step rows carry an unscored detail line when there is one', () => {
   assert.deepEqual(details.map(detail => detail.hidden), [false, false, true]);
 });
 
-test('a challenge debrief lists its detours', () => {
+test('a challenge debrief lists its detours, one line each, with any explanation', () => {
   const {dialog, created} = renderGuided({
     total: 72, summary: 'ok', components: {}, assistance: {hints: 0, demonstrated_steps: 0}, reference_route: [],
     step_detours: [{id: 'isolate', title: 'Filter to the failing status code', dead_ends: ['search with no results'],
-      drift: ['You filtered on a status code, but not the one that stood out in the top values.']}],
+      drift: ['You filtered on a status code, but not the one that stood out in the top values.']},
+    {id: 'scope', title: 'Set the time window', dead_ends: ['window missed the incident'],
+      notes: ['Your window, the last 15 minutes, started at 04:12 when you chose it, after the report at 04:10.']}],
   });
   assert.equal(dialog.parts['.debrief-detours'].hidden, false);
-  const item = created[1];
-  assert.equal(item.parts.strong.textContent, 'Filter to the failing status code');
-  assert.equal(item.parts.span.textContent, 'Dead end: search with no results · You filtered on a status code, but not the one that stood out in the top values.');
+  const items = created.filter(element => element.parts.strong);
+  assert.equal(items[0].parts.strong.textContent, 'Filter to the failing status code');
+  assert.deepEqual(items[0].children.map(line => line.textContent),
+    ['Dead end: search with no results', 'You filtered on a status code, but not the one that stood out in the top values.']);
+  assert.deepEqual(items[1].children.map(line => line.textContent),
+    ['Dead end: window missed the incident', 'Your window, the last 15 minutes, started at 04:12 when you chose it, after the report at 04:10.']);
 });

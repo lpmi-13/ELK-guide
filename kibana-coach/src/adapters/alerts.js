@@ -15,6 +15,12 @@ document.addEventListener('click', event => {
 globalThis.KibanaApplicationAdapters.push({
   name: 'alerts',
   commands: new Set(['open_alert', 'filter_alerts', 'inspect_alert_reason', 'inspect_alert_history', 'navigate_from_alert_to_source']),
+
+  // This run's alert, by its rule name, rather than whichever row the table lists first.
+  anchor(command, host, signal) {
+    return command.type === 'open_alert' ? host.waitForNaming(command.target, command.value?.value, signal) : null;
+  },
+
   async perform(command, host, coach, {timingScale = 1, signal} = {}) {
     const value = command.value || {};
     const narration = command.narration || 'Inspect the controller-provisioned alert.';

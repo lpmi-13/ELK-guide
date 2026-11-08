@@ -18,8 +18,7 @@
         {"service": "payments", "producer": "telemetry-node/1.9", "good_producer": "telemetry-node/1.8", "version": "2.3.0", "route": "/api/payments"},
         {"service": "catalog", "producer": "telemetry-python/4.0", "good_producer": "telemetry-python/3.9", "version": "6.0.0", "route": "/api/catalog"}
       ]
-    },
-    "window": {"choose": ["30m", "45m", "1h"]}
+    }
   },
   "provisioning": {
     "strategies": ["seeded-events", "saved-objects"],

@@ -27,7 +27,7 @@ test('an already selected time window stays in a blue note until Advance', async
   const advance = {title: ''};
   const detail = {textContent: '', hidden: true};
   const actions = {hidden: true, replaceChildren() {}};
-  panel.root = {querySelector: selector => ({'#stage': stage, '#phase-headline': headline, '#phase-detail': detail, '#phase-eyebrow': eyebrow, '#advance': advance, '#stage-actions': actions})[selector]};
+  panel.root = {querySelector: selector => ({'#stage': stage, '#phase-headline': headline, '#phase-detail': detail, '#phase-why': {hidden: true}, '#phase-why-text': {textContent: ''}, '#phase-eyebrow': eyebrow, '#advance': advance, '#stage-actions': actions})[selector]};
   panel.resetCountdown = () => {};
   panel.showTarget = () => {};
   panel.refit = () => {};
@@ -115,7 +115,7 @@ test('the shared cursor path clears the completed target before the timed hold',
   const action = adapter.pointAt(target, coach, 30, new AbortController().signal, 'Open the picker.', {activate: true})
     .then(() => { finished = true; });
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(calls, ['reveal', 'card', 'move', 'cursor click', 'control click', 'clear highlight', 'hold']);
+  assert.deepEqual(calls, ['card', 'reveal', 'card', 'move', 'cursor click', 'control click', 'clear highlight', 'hold']);
   assert.equal(finished, false);
   releaseHold();
   await action;
@@ -146,7 +146,7 @@ test('the cursor reacquires a time control replaced while it was moving', async 
   };
   await adapter.pointAt(oldTarget, coach, 1, new AbortController().signal, 'Open the time picker.',
     {activate: true, targetName: 'kibana.time_picker'});
-  assert.deepEqual(calls, ['show stale', 'move stale', 'show live', 'move live', 'cursor click', 'live click']);
+  assert.deepEqual(calls, ['show live', 'show stale', 'move stale', 'show live', 'move live', 'cursor click', 'live click']);
 });
 
 test('a picker redrawn after its first click is reopened and set through every visible control', async () => {
@@ -185,8 +185,8 @@ test('a picker redrawn after its first click is reopened and set through every v
   assert.equal(result.state_after.time_from, 'now-10m');
   assert.deepEqual(calls, [
     'Open the time picker.', 'Open the time picker.', 'Choose Custom range.',
-    'Click the Time value box, clear its old value, and type 10.', 'Type 10',
-    'Choose minutes as the unit.', 'hold', 'Apply the Last 10 minutes range.',
+    'Click the number box under Start date and type 10.', 'Type 10',
+    'Choose “minutes ago” as the unit.', 'hold', 'Apply the Last 10 minutes range.',
   ]);
 });
 
@@ -290,4 +290,72 @@ test('the pointer moves over a scroller before a smooth scroll reveals the contr
   await cursor.moveTo(target);
   assert.deepEqual(events, ['translate(30px,300px)', 'scroll:smooth', 'translate(30px,310px)']);
   assert.equal(top, 300);
+});
+
+test('typing over the time count never leaves the box empty, so Kibana never flips it to "from now"', async () => {
+  const Adapter = loadClass('../src/kibana-adapter.js', 'KibanaAdapter', ['KeyboardEvent'], [class {}]);
+  const adapter = new Adapter();
+  const values = [];
+  adapter.setNativeValue = (_element, value) => values.push(value);
+  adapter.wait = async () => {};
+  const element = {focus() {}, dispatchEvent() {}};
+  await adapter.typeValue(element, '15', new AbortController().signal, null, {clearFirst: false});
+  assert.deepEqual(values.slice(0, 2), ['1', '15']);
+  values.length = 0;
+  await adapter.typeValue(element, '15', new AbortController().signal);
+  assert.equal(values[0], ''); // an ordinary field still clears first
+});
+
+test('a named target is the row that says so, not the first row, and an exact match wins', () => {
+  const row = text => ({textContent: text, getClientRects: () => [{}]});
+  const rows = [row('HTTP 2xx POST /checkout/retry checkout 3,700 ms'), row('POST /checkout'), row('POST payments/authorize checkout 3,400 ms')];
+  const Adapter = loadClass('../src/kibana-adapter.js', 'KibanaAdapter', ['document'], [{querySelectorAll: () => rows}]);
+  const adapter = new Adapter();
+  adapter.registry = {targets: {'kibana.trace_span': ['row']}};
+  assert.equal(adapter.namedCandidate('kibana.trace_span', 'POST /checkout'), rows[1]);
+  assert.equal(adapter.namedCandidate('kibana.trace_span', 'payments/authorize'), rows[2]);
+  assert.equal(adapter.namedCandidate('kibana.trace_span', 'nothing'), null);
+  assert.equal(adapter.targetNaming('kibana.trace_span', 'nothing', 'fallback'), 'fallback');
+});
+
+test('a dashboard filter pill is found by value when the field is not known', () => {
+  const pill = subject => ({getAttribute: () => subject});
+  const pills = [pill('filter-key-service.name filter-value-orders'), pill('filter-key-panel.metric.keyword filter-value-failedtransactions')];
+  const Adapter = loadClass('../src/kibana-adapter.js', 'KibanaAdapter', ['document'], [{querySelectorAll: () => pills}]);
+  assert.equal(new Adapter().findFilterPill(null, 'failed transactions'), pills[1]);
+  assert.equal(new Adapter().findFilterPill('service.name', 'orders'), pills[0]);
+});
+
+test('a start date is typed into the date box as a learner would, then confirmed in the URL', async () => {
+  const EventClass = class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } };
+  const Adapter = loadClass('../src/kibana-adapter.js', 'KibanaAdapter', ['KeyboardEvent'], [EventClass]);
+  const adapter = new Adapter();
+  const start = new Date(2026, 10, 7, 14, 0);
+  const iso = start.toISOString();
+  let applied = {from: 'now-15m', to: 'now'};
+  adapter.currentTimeRange = () => applied;
+  const calls = [];
+  const input = {dispatchEvent: event => { calls.push(`key ${event.key}`); applied = {from: iso, to: 'now'}; }};
+  adapter.waitFor = async name => (name === 'kibana.time_input' ? input : null);
+  adapter.pointAt = async (_target, _coach, _scale, _signal, activity) => { calls.push(activity); };
+  adapter.typeValue = async (_input, value) => { calls.push(`type ${value}`); };
+  adapter.wait = async () => {};
+
+  assert.equal(adapter.absoluteStart({from: 'now-15m'}), null);
+  assert.equal(adapter.typedStart(start), 'Nov 7 14:00');
+  const result = await adapter.setTimeRange({value: {from: iso, to: 'now'}}, {}, {}, 1, new AbortController().signal);
+  assert.deepEqual(calls, ['Open the date box.', 'Type the start, “Nov 7 14:00 to now”, and press Enter.', 'type Nov 7 14:00 to now', 'key Enter']);
+  assert.deepEqual(result, {type: 'time_range_changed', details: {from: iso, to: 'now'}, state_after: {time_from: iso, time_to: 'now'}});
+});
+
+test('the briefing states each moment as a clock time beside how long ago it was', () => {
+  const Briefing = loadClass('../src/ui/incident-briefing.js', 'IncidentBriefing');
+  const briefing = Object.create(Briefing.prototype);
+  const noticed = new Date(Date.now() - 12 * 60_000);
+  const rollout = new Date(Date.now() - 17 * 60_000);
+  const clock = moment => `${String(moment.getHours()).padStart(2, '0')}:${String(moment.getMinutes()).padStart(2, '0')}`;
+  assert.deepEqual(briefing.timedFacts({noticed_at: noticed.toISOString(), timed_facts: [{text: 'The rollout began at {time} ({ago}).', at: rollout.toISOString()}]}), [
+    `Noticed at ${clock(noticed)} (12 minutes ago).`,
+    `The rollout began at ${clock(rollout)} (17 minutes ago).`,
+  ]);
 });

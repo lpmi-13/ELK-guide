@@ -18,8 +18,7 @@
         {"service": "orders", "error_message": "order settlement rejected", "noise_a": "order shipping estimate stale", "noise_b": "order inventory sync delayed", "exclude_fragment": "shipping estimate stale", "status": 500},
         {"service": "auth", "error_message": "session key validation failed", "noise_a": "auth token refresh throttled", "noise_b": "auth cache eviction noisy", "exclude_fragment": "token refresh throttled", "status": 401}
       ]
-    },
-    "window": {"choose": ["20m", "30m", "45m", "1h"]}
+    }
   },
   "provisioning": {
     "strategies": ["seeded-events", "saved-objects"],
