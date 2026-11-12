@@ -39,12 +39,21 @@ LAB_RETENTION = os.getenv("LAB_RETENTION", "8h")
 # A completed run stays browsable this long before its space and data are reclaimed, so the learner
 # can read the debrief beside the evidence — and a final step that opens another page (Explore in
 # Discover, a trace's logs) still finds it. DELETE /api/runs/<id> reclaims a run at once.
+# The controller forgets any ended run (completed, aborted or failed) and its manifest file once this
+# window has passed, so a long-lived controller does not hold every run it ever started.
 COMPLETED_RETENTION_SECONDS = float(os.getenv("COMPLETED_RETENTION_SECONDS", "600"))
+ENDED_STATES = {"COMPLETED", "ABORTED", "FAILED"}
 METRIC_TAIL_SECONDS = int(os.getenv("METRIC_TAIL_SECONDS", str(3 * 3600)))
 METRIC_TAIL_INTERVAL_SECONDS = 30
 LAB_ILM_POLICY = "lab-retention"
 LAB_INDEX_TEMPLATE = "lab-lifecycle"
 LAB_INDEX_PATTERNS = ["microservices-*", "tutorial-*", "scenario-*", "lab-*"]
+# Kibana's own event log (background-task and rule runs; not lab data) keeps 90 days by default,
+# about 0.5 GB on a machine that runs for months. Lab rules live for one run, so a week loses nothing
+# a learner sees; only Kibana's rule and task history older than that. Set on the data stream, not
+# Kibana's managed template, and re-applied each boot in case Kibana restores its default.
+KIBANA_EVENT_LOG = ".kibana-event-log-ds"
+KIBANA_EVENT_LOG_RETENTION = os.getenv("KIBANA_EVENT_LOG_RETENTION", "7d")
 LOG_FILE = Path(os.getenv("LOG_DIR", "/tmp")) / "scenario-controller.json"
 LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 _log_writer = logging.getLogger("scenario-controller")
@@ -1111,41 +1120,70 @@ def cleanup_run(run, delete_data=True):
                     pass
 
 
+class RunAborted(Exception):
+    """The run was stopped (stop_run) while it was still being prepared."""
+
+
 def lifecycle(manifest, stop):
+    """Prepare a run, step by step, until it is READY.
+
+    stop_run can stop a run at any moment, cleaning up whatever exists at that instant. Each step
+    therefore checks for that first, and a run stopped mid-preparation is cleaned up once more when its
+    step in flight returns: that step may have created its Space, seeded index, fault or rule after the
+    first cleanup ran. A state is only ever advanced while the run is unstopped (under the state lock,
+    which stop_run's ABORTED respects), so a stopped run never reports WARMING, READY or FAILED.
+    """
     run_id = manifest["run_id"]
+    run = get_run(run_id)
+
+    def advance(state=None, **updates):
+        with state_lock:
+            if stop.is_set():
+                raise RunAborted()
+            run.update(updates, **({"state": state} if state else {}))
+
     try:
-        update_run(run_id, state="ACTIVATING")
+        advance("ACTIVATING")
         emit("scenario activating", run_id=run_id, action="activating", state="ACTIVATING", seed=manifest["seed"])
         strategies = manifest["scenario"]["provisioning"].get("strategies", [])
         create_space(manifest)
         if "live-traffic" in strategies:
+            advance()
             create_live_data_alias(manifest)
         if "saved-objects" in strategies:
+            advance()
             import_saved_objects(manifest)
         if "seeded-events" in strategies:
+            advance()
             indexed = bulk_seed(manifest)
             update_run(run_id, indexed_documents=indexed["documents"], data_streams=indexed["data_streams"])
         if "live-traffic" in strategies:
+            advance()
             activate_fault(manifest)
             traffic_thread = threading.Thread(target=traffic_loop, args=(manifest, stop), daemon=True)
-            update_run(run_id, traffic_thread=traffic_thread)
+            advance(traffic_thread=traffic_thread)
             traffic_thread.start()
         if "managed-resource" in strategies:
+            advance()
             update_run(run_id, managed_resources=provision_managed_resources(manifest))
-        if stop.is_set():
-            return
-        update_run(run_id, state="WARMING")
+        advance("WARMING")
         ready, evidence = readiness(manifest, stop)
         if not ready:
+            advance()
             raise TimeoutError(f"scenario readiness timed out: {evidence}")
-        ready_at = now_iso()
-        update_run(run_id, state="READY", ready_at=ready_at, evidence=evidence)
+        advance("READY", ready_at=now_iso(), evidence=evidence)
         emit("scenario ready", run_id=run_id, action="ready", state="READY", evidence=evidence)
     except Exception as error:
+        if stop.is_set():
+            # Stopped while preparing (RunAborted, or a step that failed because its Space was already
+            # gone): stop_run reports ABORTED; this only removes what the step in flight left behind.
+            cleanup_run(run)
+            return
         if update_run(run_id, state="FAILED", error=str(error)):
             emit("scenario failed", "ERROR", run_id, action="failed", state="FAILED", error={"type": type(error).__name__, "message": str(error)})
         stop.set()
-        cleanup_run(get_run(run_id), delete_data=True)
+        cleanup_run(run, delete_data=True)
+        forget_after_retention(run_id)
 
 
 def create_run(seed=None, scenario_name=None, scenario_key=SCENARIO_KEY_UNSET):
@@ -1178,6 +1216,28 @@ def reclaim_after_retention(run):
     """Reclaim a completed run once its retention window passes, unless stop_run already has."""
     if not run.setdefault("reclaimed", threading.Event()).wait(COMPLETED_RETENTION_SECONDS):
         cleanup_run(run)
+        forget_run(run["manifest"]["run_id"])
+
+
+def forget_run(run_id):
+    """Drop an ended run, and its manifest file, from this controller once nothing needs them.
+
+    Its Space and data are already gone by then; a learner's tab still pointing at it is told the run
+    is no longer available (the learning service sees 404) and offered the launcher.
+    """
+    with state_lock:
+        run = runs.get(run_id)
+        if not run or run["state"] not in ENDED_STATES:
+            return False
+        del runs[run_id]
+    (MANIFEST_DIR / f"{run_id}.json").unlink(missing_ok=True)
+    return True
+
+
+def forget_after_retention(run_id):
+    timer = threading.Timer(COMPLETED_RETENTION_SECONDS, forget_run, args=(run_id,))
+    timer.daemon = True
+    timer.start()
 
 
 def stop_run(run_id):
@@ -1189,6 +1249,7 @@ def stop_run(run_id):
     run.setdefault("reclaimed", threading.Event()).set()
     update_run(run_id, state="ABORTED", completed_at=now_iso())
     emit("scenario aborted", run_id=run_id, action="aborted", state="ABORTED")
+    forget_after_retention(run_id)
     return True
 
 
@@ -1337,8 +1398,9 @@ def ensure_lifecycle_management():
     Re-applied on every boot so a fresh ephemeral VM is protected from the first
     scenario onward: absolute disk watermarks (so ES only blocks when the shared
     disk is genuinely almost full, not at 95% of a disk it barely uses), an ILM
-    policy that expires lab data at LAB_RETENTION, and a template that attaches
-    the policy and drops replicas to 0 (single node -> replicas are unassignable).
+    policy that expires lab data at LAB_RETENTION, a template that attaches
+    the policy and drops replicas to 0 (single node -> replicas are unassignable),
+    and a shorter retention (KIBANA_EVENT_LOG_RETENTION) for Kibana's event log.
     """
     steps = (
         (
@@ -1381,6 +1443,12 @@ def ensure_lifecycle_management():
                 },
             },
         ),
+        (
+            "kibana event log retention",
+            f"{ELASTICSEARCH_URL}/_data_stream/{KIBANA_EVENT_LOG}/_lifecycle",
+            "PUT",
+            {"data_retention": KIBANA_EVENT_LOG_RETENTION},
+        ),
     )
     for label, url, method, payload in steps:
         try:
@@ -1393,26 +1461,67 @@ def ensure_lifecycle_management():
             emit(f"lifecycle bootstrap: {label} unreachable", "WARN", action="lifecycle", error=str(error))
 
 
-ORPHAN_SPACE = re.compile(r"lab-[0-9a-f]{12}")
+ORPHAN_SPACE = re.compile(r"lab-([0-9a-f]{12})")
+# Every Elasticsearch name a run owns: its index or filtered alias and its APM trace index
+# (lab-run-<id>, traces-apm.lab-run-<id>, logs-apm.lab-run-<id>) and the data streams it seeds
+# (<type>-<dataset>-lab<id>, see _run_namespace).
+RUN_DATA_NAME = re.compile(r"(?:[a-z0-9_.-]+[.])?lab-run-([0-9a-f]{12})|[a-z]+-[a-z0-9_.]+-lab([0-9a-f]{12})")
+RUN_FAULT = re.compile(r"run-[0-9a-f]{12}")
 RECLAIM_WORKERS = 4
 reclaim_lock = threading.Lock()
-last_reclaim = {"finished": float("-inf"), "spaces": []}
+last_reclaim = {"finished": float("-inf"), "runs": []}
 
 
-def reclaim_orphan(space_id):
-    run_id = f"run-{space_id.removeprefix('lab-')}"
-    cleanup_run({"manifest": {"run_id": run_id, "space_id": space_id, "scenario": {"cleanup": {}, "provisioning": {"strategies": []}}}})
+def runs_with_spaces():
+    status, spaces = kibana_json("/api/spaces/space", timeout=30)
+    if status >= 400 or not isinstance(spaces, list):
+        raise RuntimeError(f"Kibana did not list its Spaces (HTTP {status})")
+    return {f"run-{match.group(1)}" for space in spaces if (match := ORPHAN_SPACE.fullmatch(str(space.get("id", ""))))}
+
+
+def runs_with_data():
+    """Run id -> the data streams it still has, for every run with an index, alias or data stream left."""
+    status, resolved = http_json(f"{ELASTICSEARCH_URL}/_resolve/index/lab-run-*,*.lab-run-*,*-lab*?expand_wildcards=open,closed", timeout=30)
+    if status >= 400 or not isinstance(resolved, dict):
+        raise RuntimeError(f"Elasticsearch did not list run data (HTTP {status})")
+    owners = {}
+    for kind in ("indices", "aliases", "data_streams"):
+        for item in resolved.get(kind, []):
+            match = RUN_DATA_NAME.fullmatch(str(item.get("name", "")))
+            if match:
+                streams = owners.setdefault(f"run-{match.group(1) or match.group(2)}", set())
+                if kind == "data_streams":
+                    streams.add(item["name"])
+    return owners
+
+
+def runs_with_faults():
+    """Run id -> the services still holding a fault for it. A service that does not answer is skipped."""
+    owners = {}
+    for service, url in SERVICE_URLS.items():
+        try:
+            status, state = http_json(f"{url}/_control/state", timeout=5)
+        except (OSError, URLError):
+            continue
+        if status < 400 and isinstance(state, dict):
+            for scenario_id in state.get("faults") or {}:
+                if RUN_FAULT.fullmatch(scenario_id):
+                    owners.setdefault(scenario_id, set()).add(service)
+    return owners
 
 
 def reclaim_orphaned_runs():
-    """Delete the Spaces and run data of runs this controller no longer knows, and return their Space ids.
+    """Remove everything left by runs this controller no longer knows, and return those run ids.
 
     Runs live only in this process, so a restart forgets every run: one waiting out its completed-run
-    retention, one a learner abandoned, the previous auto-started run. Their Spaces and data would stay
-    forever (Kibana's space selector filled with hundreds of them), and no session can reach them any
-    more — the learning service reports such a session as ended. Only Spaces this controller names
-    (``lab-`` and twelve hex digits) are touched, and never a live run's: a run is registered before
-    its Space is created, so every Space listed here that belongs to a live run is already in ``runs``.
+    retention, one a learner abandoned, the previous auto-started run. And a step in flight when a run
+    is stopped, or a late write, can leave something after the run's own cleanup. Their Spaces would
+    stay forever (Kibana's space selector filled with hundreds of them), their data until ILM expires
+    it, and their faults until the service restarts; no session can reach any of it. This finds them
+    by name: Spaces ``lab-<id>``, Elasticsearch names ending ``lab-run-<id>`` or ``-lab<id>``, faults
+    keyed ``run-<id>``. A live run's are never touched: a run is registered before it creates anything,
+    and everything is listed before the live runs are read, so whatever a live run owns is already in
+    ``runs``.
 
     One pass runs at a time. A caller that arrives while a pass is under way (build-all.sh asking just
     after the boot pass started) waits for it and gets its result instead of listing again.
@@ -1420,18 +1529,28 @@ def reclaim_orphaned_runs():
     arrived = time.monotonic()
     with reclaim_lock:
         if last_reclaim["finished"] > arrived:
-            return list(last_reclaim["spaces"])
-        status, spaces = kibana_json("/api/spaces/space", timeout=30)
-        if status >= 400 or not isinstance(spaces, list):
-            raise RuntimeError(f"Kibana did not list its Spaces (HTTP {status})")
+            return list(last_reclaim["runs"])
+        spaces, data, faults = runs_with_spaces(), runs_with_data(), runs_with_faults()
         with state_lock:
-            live = {run["manifest"].get("space_id") for run in runs.values()}
-        orphans = [space["id"] for space in spaces if ORPHAN_SPACE.fullmatch(str(space.get("id", ""))) and space["id"] not in live]
+            live = set(runs)
+        orphans = sorted((spaces | set(data) | set(faults)) - live)
+
+        def reclaim(run_id):
+            space_id = f"lab-{run_id.removeprefix('run-')}"
+            cleanup_run({"manifest": {"run_id": run_id, "space_id": space_id, "scenario": {"cleanup": {}, "provisioning": {"strategies": []}}},
+                         "data_streams": sorted(data.get(run_id, ()))})
+            for service in sorted(faults.get(run_id, ())):
+                try:
+                    http_json(f"{SERVICE_URLS[service]}/_control/fault?scenario_id={quote(run_id)}", "DELETE", timeout=5)
+                except (OSError, URLError):
+                    pass
+
         with ThreadPoolExecutor(max_workers=RECLAIM_WORKERS) as pool:
-            list(pool.map(reclaim_orphan, orphans))
+            list(pool.map(reclaim, orphans))
         if orphans:
-            emit("reclaimed orphaned runs", action="reclaimed", count=len(orphans))
-        last_reclaim.update(finished=time.monotonic(), spaces=orphans)
+            emit("reclaimed orphaned runs", action="reclaimed", count=len(orphans),
+                 spaces=len(spaces & set(orphans)), data=len(set(data) & set(orphans)), faults=len(set(faults) & set(orphans)))
+        last_reclaim.update(finished=time.monotonic(), runs=orphans)
         return orphans
 
 

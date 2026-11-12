@@ -17,6 +17,7 @@ import socket
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import unittest
 from http.server import ThreadingHTTPServer
@@ -278,10 +279,6 @@ class ControllerReplayTests(unittest.TestCase):
             controller.runs.pop(manifest["run_id"], None)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class SettlementTests(unittest.TestCase):
     """The observer marks a search whose results it never saw (result_settled: false); such an action
     is recorded but completes nothing, while the same action once settled does."""
@@ -322,18 +319,67 @@ class CoachIsolationTests(unittest.TestCase):
             self.assertIn(f"'{event_type}'", isolation.group(1))
 
 
+def ended(run_id, state="COMPLETED"):
+    return {"manifest": {"run_id": run_id}, "state": state, "stop": threading.Event()}
+
+
+class FakeLabStack:
+    """Kibana Spaces, Elasticsearch run data and service faults as the reclaim pass reads them."""
+
+    def __init__(self, spaces=(), indices=(), aliases=(), data_streams=(), faults=None):
+        self.spaces = [{"id": space} for space in spaces]
+        self.resolved = {"indices": [{"name": name} for name in indices], "aliases": [{"name": name} for name in aliases],
+                         "data_streams": [{"name": name} for name in data_streams]}
+        self.faults = faults or {}
+        self.cleared = []
+        self.cleaned = {}
+
+    def kibana_json(self, path, *args, **kwargs):
+        return 200, self.spaces
+
+    def http_json(self, url, method="GET", *args, **kwargs):
+        if "/_resolve/index/" in url:
+            return 200, self.resolved
+        service = next(name for name, base in controller.SERVICE_URLS.items() if url.startswith(base))
+        if url.endswith("/_control/state"):
+            return 200, {"faults": {key: {} for key in self.faults.get(service, ())}}
+        self.cleared.append((service, url.rsplit("scenario_id=", 1)[1]))
+        return 200, {"cleared": True}
+
+    def cleanup_run(self, run, delete_data=True):
+        self.cleaned[run["manifest"]["run_id"]] = run
+
+    def patches(self):
+        return (patch.object(controller, "kibana_json", side_effect=self.kibana_json),
+                patch.object(controller, "http_json", side_effect=self.http_json),
+                patch.object(controller, "cleanup_run", side_effect=self.cleanup_run))
+
+
 class OrphanReclaimTests(unittest.TestCase):
-    def test_a_restart_reclaims_only_lab_spaces_no_live_run_owns(self):
+    def reclaim(self, stack, live):
+        kibana, http, cleanup = stack.patches()
+        with patch.dict(controller.runs, live, clear=True), kibana, http, cleanup:
+            return controller.reclaim_orphaned_runs()
+
+    def test_a_pass_removes_spaces_data_and_faults_no_live_run_owns(self):
         manifest = generator.materialize("http-error-regression", 99)
+        live_id = manifest["run_id"]
+        live_hex = live_id.removeprefix("run-")
         live = {"manifest": manifest, "state": "READY", "evidence": {}, "stop": threading.Event()}
-        spaces = [{"id": "default"}, {"id": "team-space"}, {"id": manifest["space_id"]}, {"id": "lab-0123456789ab"}, {"id": "lab-notarunspace"}]
-        cleaned = []
-        with patch.dict(controller.runs, {manifest["run_id"]: live}, clear=True), \
-                patch.object(controller, "kibana_json", return_value=(200, spaces)), \
-                patch.object(controller, "cleanup_run", side_effect=lambda run, delete_data=True: cleaned.append(run["manifest"]["run_id"])):
-            reclaimed = controller.reclaim_orphaned_runs()
-        self.assertEqual(reclaimed, ["lab-0123456789ab"])
-        self.assertEqual(cleaned, ["run-0123456789ab"])
+        stack = FakeLabStack(
+            spaces=["default", "team-space", manifest["space_id"], "lab-0123456789ab", "lab-notarunspace"],
+            indices=[f"lab-{live_id}", "lab-run-00000000000d", "traces-apm.lab-run-00000000000d", "lab-run-notarun"],
+            aliases=["lab-run-00000000000e", f"lab-{live_id}"],
+            data_streams=["logs-apm.app.payments-lab00000000000d", f"metrics-system.cpu-lab{live_hex}", "logs-apm.lab-run-00000000000d", "logs-generic-default"],
+            faults={"payments": ["run-00000000000f", live_id, "default"], "orders": ["run-0123456789ab"]},
+        )
+        reclaimed = self.reclaim(stack, {live_id: live})
+        self.assertEqual(reclaimed, ["run-00000000000d", "run-00000000000e", "run-00000000000f", "run-0123456789ab"])
+        self.assertEqual(sorted(stack.cleaned), reclaimed)
+        self.assertNotIn(live_id, stack.cleaned)
+        self.assertEqual(stack.cleaned["run-0123456789ab"]["manifest"]["space_id"], "lab-0123456789ab")
+        self.assertEqual(stack.cleaned["run-00000000000d"]["data_streams"], ["logs-apm.app.payments-lab00000000000d", "logs-apm.lab-run-00000000000d"])
+        self.assertEqual(sorted(stack.cleared), [("orders", "run-0123456789ab"), ("payments", "run-00000000000f")])
 
     def test_an_unreadable_space_list_is_an_error_not_an_empty_result(self):
         with patch.object(controller, "kibana_json", return_value=(503, {"error": "unavailable"})), \
@@ -355,6 +401,8 @@ class OrphanReclaimTests(unittest.TestCase):
         results = {}
         with patch.dict(controller.runs, {}, clear=True), \
                 patch.object(controller, "kibana_json", side_effect=slow_listing), \
+                patch.object(controller, "runs_with_data", return_value={}), \
+                patch.object(controller, "runs_with_faults", return_value={}), \
                 patch.object(controller, "cleanup_run"):
             boot = threading.Thread(target=lambda: results.setdefault("boot", controller.reclaim_orphaned_runs()))
             boot.start()
@@ -365,7 +413,7 @@ class OrphanReclaimTests(unittest.TestCase):
             boot.join(10)
             asked.join(10)
         self.assertEqual(len(listings), 1)
-        self.assertEqual(sorted(results["asked"]), ["lab-00000000000a", "lab-00000000000b"])
+        self.assertEqual(results["asked"], ["run-00000000000a", "run-00000000000b"])
         self.assertEqual(results["asked"], results["boot"])
 
     def test_the_reclaim_endpoint_reports_what_it_removed_and_fails_loudly(self):
@@ -374,9 +422,9 @@ class OrphanReclaimTests(unittest.TestCase):
         url = f"http://127.0.0.1:{httpd.server_address[1]}/api/orphans/reclaim"
         request = lambda: Request(url, data=b"{}", method="POST", headers={"Content-Type": "application/json"})
         try:
-            with patch.object(controller, "reclaim_orphaned_runs", return_value=["lab-0123456789ab"]):
+            with patch.object(controller, "reclaim_orphaned_runs", return_value=["run-0123456789ab"]):
                 with urlopen(request(), timeout=10) as response:
-                    self.assertEqual(json.load(response), {"reclaimed": ["lab-0123456789ab"]})
+                    self.assertEqual(json.load(response), {"reclaimed": ["run-0123456789ab"]})
             with patch.object(controller, "reclaim_orphaned_runs", side_effect=RuntimeError("Kibana did not list its Spaces (HTTP 503)")):
                 with self.assertRaises(HTTPError) as failed:
                     urlopen(request(), timeout=10)
@@ -390,3 +438,144 @@ class OrphanReclaimTests(unittest.TestCase):
         self.assertLess(script.index("docker compose up"), script.index("/api/orphans/reclaim"))
         self.assertIn("docker compose exec -T scenario-controller", script)
         self.assertIn("RECLAIM_ORPHANED_RUNS", script)
+
+
+class RunLifecycleTests(unittest.TestCase):
+    """A run stopped while it is being prepared ends with nothing of it left, and is never reported FAILED."""
+
+    STEPS = ("create_space", "create_live_data_alias", "import_saved_objects", "bulk_seed", "activate_fault", "provision_managed_resources", "readiness")
+
+    def prepare(self, stop_during=None, fail_during=None):
+        manifest = generator.materialize("http-error-regression", 4242)
+        manifest["scenario"]["provisioning"]["strategies"] = ["live-traffic", "saved-objects", "seeded-events", "managed-resource"]
+        stop = threading.Event()
+        run = {"manifest": manifest, "state": "CREATED", "evidence": {}, "stop": stop}
+        calls, cleaned = [], []
+
+        def step(name, result=None):
+            def run_step(*args, **kwargs):
+                calls.append(name)
+                if name == stop_during:
+                    stop.set()
+                if name == fail_during:
+                    raise RuntimeError(f"{name} failed")
+                if name == "readiness" and stop.is_set():
+                    return False, {}
+                return result
+            return run_step
+
+        results = {"bulk_seed": {"documents": 1, "data_streams": []}, "provision_managed_resources": [], "readiness": (True, {"completed": 1})}
+        patches = [patch.object(controller, name, side_effect=step(name, results.get(name))) for name in self.STEPS]
+        patches += [patch.object(controller, "cleanup_run", side_effect=lambda run, delete_data=True: cleaned.append(run)),
+                    patch.object(controller, "traffic_loop"),
+                    patch.object(controller, "forget_after_retention")]
+        with patch.dict(controller.runs, {manifest["run_id"]: run}, clear=True):
+            for item in patches:
+                item.start()
+            try:
+                controller.lifecycle(manifest, stop)
+            finally:
+                for item in reversed(patches):
+                    item.stop()
+        return run, calls, cleaned
+
+    def test_a_run_stopped_mid_preparation_does_no_further_steps_and_is_cleaned_again(self):
+        for step in self.STEPS[:-1]:
+            with self.subTest(stopped_during=step):
+                run, calls, cleaned = self.prepare(stop_during=step)
+                self.assertEqual(calls[-1], step, "no step may start after the run was stopped")
+                self.assertEqual(len(cleaned), 1, "what the step in flight created must be removed")
+                self.assertNotIn(run["state"], {"WARMING", "READY", "FAILED"})
+
+    def test_a_run_stopped_while_warming_is_not_reported_failed(self):
+        run, calls, cleaned = self.prepare(stop_during="readiness")
+        self.assertEqual(run["state"], "WARMING")
+        self.assertNotIn("error", run)
+        self.assertEqual(len(cleaned), 1)
+
+    def test_a_real_failure_still_fails_cleans_up_and_is_forgotten_later(self):
+        with patch.object(controller, "emit"):
+            run, calls, cleaned = self.prepare(fail_during="bulk_seed")
+        self.assertEqual(run["state"], "FAILED")
+        self.assertIn("bulk_seed failed", run["error"])
+        self.assertTrue(run["stop"].is_set())
+        self.assertEqual(len(cleaned), 1)
+
+    def test_an_unstopped_run_reaches_ready(self):
+        with patch.object(controller, "emit"):
+            run, calls, cleaned = self.prepare()
+        self.assertEqual(run["state"], "READY")
+        self.assertEqual(calls, list(self.STEPS))
+        self.assertEqual(cleaned, [])
+
+
+class ForgetRunTests(unittest.TestCase):
+    def test_an_ended_run_and_its_manifest_are_forgotten_and_a_live_run_is_kept(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(controller, "MANIFEST_DIR", Path(directory)):
+            for run_id in ("run-00000000000a", "run-00000000000b"):
+                (Path(directory) / f"{run_id}.json").write_text("{}", encoding="utf-8")
+            live = ended("run-00000000000b", state="READY")
+            with patch.dict(controller.runs, {"run-00000000000a": ended("run-00000000000a", "ABORTED"), "run-00000000000b": live}, clear=True):
+                self.assertTrue(controller.forget_run("run-00000000000a"))
+                self.assertFalse(controller.forget_run("run-00000000000b"))
+                self.assertFalse(controller.forget_run("run-00000000000c"))
+                self.assertEqual(list(controller.runs), ["run-00000000000b"])
+            self.assertEqual(sorted(path.name for path in Path(directory).iterdir()), ["run-00000000000b.json"])
+
+    def test_stopping_or_completing_a_run_schedules_forgetting_it(self):
+        run = ended("run-00000000000a", "READY")
+        with patch.dict(controller.runs, {"run-00000000000a": run}, clear=True), \
+                patch.object(controller, "cleanup_run"), patch.object(controller, "emit"), \
+                patch.object(controller, "forget_after_retention") as forget:
+            controller.stop_run("run-00000000000a")
+        forget.assert_called_once_with("run-00000000000a")
+        completed = ended("run-00000000000c")
+        completed["manifest"] = {"run_id": "run-00000000000c"}
+        with patch.dict(controller.runs, {"run-00000000000c": completed}, clear=True), \
+                patch.object(controller, "COMPLETED_RETENTION_SECONDS", 0), patch.object(controller, "cleanup_run") as cleanup:
+            controller.reclaim_after_retention(completed)
+            self.assertNotIn("run-00000000000c", controller.runs)
+        cleanup.assert_called_once()
+
+
+class SessionRetentionTests(unittest.TestCase):
+    def test_idle_sessions_without_a_coach_connected_are_dropped(self):
+        now = server.time.monotonic()
+        old = now - server.SESSION_RETENTION_SECONDS - 60
+        sessions = {
+            "session-idle": {"last_active": old, "open_sockets": 0},
+            "session-connected": {"last_active": old, "open_sockets": 1},
+            "session-recent": {"last_active": now, "open_sockets": 0},
+            "session-untracked": {},
+        }
+        with patch.dict(server.sessions, sessions, clear=True):
+            self.assertEqual(server.prune_sessions(), ["session-idle"])
+            self.assertEqual(sorted(server.sessions), ["session-connected", "session-recent", "session-untracked"])
+
+    def test_looking_a_session_up_marks_it_used(self):
+        session = {"last_active": 0.0, "open_sockets": 0}
+        with patch.dict(server.sessions, {"session-a": session}, clear=True):
+            self.assertIs(server.lookup_session("session-a"), session)
+            self.assertIsNone(server.lookup_session("session-gone"))
+        self.assertGreater(session["last_active"], 0.0)
+
+    def test_creating_a_session_prunes_idle_ones(self):
+        with patch.object(server, "prune_sessions") as prune:
+            session = server.create_session(generator.run_response("http-error-regression", 7) if hasattr(generator, "run_response") else {"manifest": generator.materialize("http-error-regression", 7)}, "guided")
+        prune.assert_called_once()
+        self.assertEqual(session["open_sockets"], 0)
+        server.sessions.pop(session["id"], None)
+
+
+class KibanaEventLogRetentionTests(unittest.TestCase):
+    def test_each_boot_sets_the_event_log_retention_on_the_data_stream(self):
+        calls = []
+        with patch.object(controller, "http_json", side_effect=lambda url, method="GET", payload=None, **kwargs: calls.append((method, url, payload)) or (200, {})), \
+                patch.object(controller, "emit"), patch.object(controller, "KIBANA_EVENT_LOG_RETENTION", "7d"):
+            controller.ensure_lifecycle_management()
+        self.assertIn(("PUT", f"{controller.ELASTICSEARCH_URL}/_data_stream/.kibana-event-log-ds/_lifecycle", {"data_retention": "7d"}), calls)
+        self.assertFalse(any("_index_template/.kibana-event-log" in url for _, url, _ in calls), "Kibana's managed template is left alone")
+
+
+if __name__ == "__main__":
+    unittest.main()

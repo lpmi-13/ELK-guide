@@ -121,7 +121,7 @@ class SurfaceDataTests(unittest.TestCase):
         self.assertTrue(self.evaluator.validate_filter_contains(session, {"details": {"field": "cloud.region", "value": "eu-west-2"}}, {}, filtered))
 
     def test_a_completed_run_is_reclaimed_after_its_retention_unless_stopped_first(self):
-        run = {"manifest": {}, "reclaimed": threading.Event()}
+        run = {"manifest": {"run_id": "run-00000000000a"}, "reclaimed": threading.Event()}
         with patch.object(self.controller, "COMPLETED_RETENTION_SECONDS", 0), patch.object(self.controller, "cleanup_run") as cleanup:
             self.controller.reclaim_after_retention(run)
             cleanup.assert_called_once_with(run)

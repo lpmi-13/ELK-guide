@@ -42,6 +42,10 @@ ALLOWED_ORIGINS = {value.rstrip("/") for value in os.getenv("ALLOWED_ORIGINS", "
 
 sessions = {}
 sessions_lock = threading.RLock()
+# A session nobody has used for this long (no request, no coach connected) is dropped, so a service
+# that runs for days does not hold every session it ever served. A tab that comes back to one is told
+# the session has ended and offered the launcher. Matches the lab's data retention (LAB_RETENTION).
+SESSION_RETENTION_SECONDS = float(os.getenv("SESSION_RETENTION_SECONDS", str(8 * 3600)))
 write_lock = threading.Lock()
 
 MODE_POLICIES = {
@@ -235,10 +239,33 @@ def create_session(run_response, mode):
         "paused": False,
         "run_ready": False,
         "created_at": now_iso(),
+        "last_active": time.monotonic(),
+        "open_sockets": 0,
     }
+    prune_sessions()
     with sessions_lock:
         sessions[session_id] = session
     return session
+
+
+def lookup_session(session_id):
+    """The session with this id, marked as just used, or None."""
+    with sessions_lock:
+        session = sessions.get(session_id)
+        if session:
+            session["last_active"] = time.monotonic()
+        return session
+
+
+def prune_sessions():
+    """Drop sessions idle longer than SESSION_RETENTION_SECONDS with no coach connected; return their ids."""
+    cutoff = time.monotonic() - SESSION_RETENTION_SECONDS
+    with sessions_lock:
+        idle = [session_id for session_id, session in sessions.items()
+                if not session.get("open_sockets") and session.get("last_active", float("inf")) < cutoff]
+        for session_id in idle:
+            del sessions[session_id]
+    return idle
 
 
 def session_public(session, include_connection=False):
@@ -1252,7 +1279,7 @@ class Handler(BaseHTTPRequestHandler):
             # The coach asks this when its socket won't reconnect: 404 means the session is gone (the
             # service restarted, say), so it offers the way back to the launcher instead of retrying.
             with sessions_lock:
-                session = sessions.get(parts[2])
+                session = lookup_session(parts[2])
                 if not session:
                     self.respond(404, {"error": "session not found", "launcher_url": LAUNCHER_URL})
                 elif not authorized(self, session, parse_qs(parsed.query)):
@@ -1263,7 +1290,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] == "feedback":
             with sessions_lock:
-                session = sessions.get(parts[2])
+                session = lookup_session(parts[2])
                 if not session:
                     self.respond(404, {"error": "session not found"})
                 elif not session["feedback"]:
@@ -1321,7 +1348,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if len(parts) == 4 and parts[:2] == ["api", "sessions"]:
             with sessions_lock:
-                session = sessions.get(parts[2])
+                session = lookup_session(parts[2])
                 if not session:
                     self.respond(404, {"error": "session not found"})
                     return
@@ -1365,13 +1392,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def websocket(self, session_id, query):
         with sessions_lock:
-            session = sessions.get(session_id)
+            session = lookup_session(session_id)
             if not session:
                 self.respond(404, {"error": "session not found"})
                 return
             if not authorized(self, session, query):
                 self.respond(401, {"error": "invalid controller token"})
                 return
+            # A session with a coach connected is in use however long the learner reads.
+            session["open_sockets"] = session.get("open_sockets", 0) + 1
+        try:
+            self.serve_socket(session, query)
+        finally:
+            with sessions_lock:
+                session["open_sockets"] -= 1
+                session["last_active"] = time.monotonic()
+
+    def serve_socket(self, session, query):
         key = self.headers.get("Sec-WebSocket-Key")
         if not key:
             self.respond(400, {"error": "missing WebSocket key"})
