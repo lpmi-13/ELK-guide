@@ -518,6 +518,11 @@ def evaluate_action(session, action, evidence=None, earned_state=None):
         goal = current_goal(session)
         return {"outcome": "dead_end", "goals_progressed": [], "meaningful": False,
                 "step_id": goal["id"] if goal else None, **blocked}
+    if not ignored and action.get("type") in SEARCH_ACTIONS and _after(action).get("result_settled") is False:
+        # The browser never saw this search's results (it was still loading when the coach gave up), so
+        # what is on screen may be the previous search's. Recorded, but it can't establish anything.
+        return {"outcome": "observed", "goals_progressed": [], "meaningful": False,
+                "reason": "The search had not finished, so its results could not be read."}
     completed = session["completed_goals"]
     progressed, matching_titles = [], []
     # A single observation may establish multiple independent outcomes, but it

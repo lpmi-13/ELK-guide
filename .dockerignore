@@ -1,0 +1,9 @@
+# Local tooling and test output never belongs in an image (kibana-gateway copies all of kibana-coach/).
+**/node_modules
+**/__pycache__
+**/*.pyc
+kibana-coach/protocol/generated
+recordings
+video-downloads
+.git
+.pytest_cache

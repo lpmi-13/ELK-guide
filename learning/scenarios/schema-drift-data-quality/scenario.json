@@ -2,7 +2,7 @@
   "schema_version": 2,
   "id": "schema-drift-data-quality",
   "version": 2,
-  "title": "Schema drift and data quality",
+  "title": "Dashboard request count drop",
   "type": "analysis",
   "classification": "core",
   "difficulty": 2,

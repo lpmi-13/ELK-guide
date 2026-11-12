@@ -261,6 +261,35 @@ class KibanaAdapter {
     }
   }
 
+  // Type into a Monaco editor (Discover's ES|QL editor) as a learner would. Monaco ignores synthetic key
+  // events, but takes text inserted into its focused textarea (verified 9.5.2: document.execCommand
+  // ('insertText') one character at a time, auto-closed brackets overtyped). Advance completes the rest at
+  // once. Returns whether the editor then holds exactly the query.
+  async typeIntoMonaco(editor, value, signal) {
+    const area = editor.querySelector('textarea');
+    if (!area) return false;
+    const text = String(value);
+    const shown = () => [...editor.querySelectorAll('.view-line')].map(line => line.textContent).join('\n').replace(/\u00a0/g, ' ');
+    area.focus();
+    document.execCommand('selectAll');
+    const typing = {skip: false};
+    this.activeTyping = typing;
+    try {
+      let index = 0;
+      for (; index < text.length; index += 1) {
+        if (signal?.aborted) throw new DOMException('Demonstration stopped', 'AbortError');
+        if (typing.skip) break;
+        document.execCommand('insertText', false, text[index]);
+        await this.wait(this.typingIntervalMs, signal);
+      }
+      if (index < text.length) document.execCommand('insertText', false, text.slice(index));
+    } finally {
+      if (this.activeTyping === typing) this.activeTyping = null;
+    }
+    await this.wait(150, signal);
+    return shown().replace(/\s+/g, ' ').trim() === text.replace(/\s+/g, ' ').trim();
+  }
+
   advanceTyping() {
     if (!this.activeTyping) return false;
     this.activeTyping.skip = true;

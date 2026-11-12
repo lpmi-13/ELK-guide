@@ -12,6 +12,7 @@ import test from 'node:test';
 function element({subject = '', text = '', value, gridColumn} = {}) {
   const node = {
     getAttribute: name => (name === 'data-test-subj' ? subject : name === 'aria-label' ? text : null),
+    getClientRects: () => [{}],
     textContent: text,
     value,
   };
@@ -88,8 +89,9 @@ test('readFilterPills falls back to the pill text when structured tokens are abs
 test('a top-value filter-out (minus-<field>-<value>) reports filter_added with the negated pill', async () => {
   const {dom, document} = makeDom();
   const {observer, reports} = makeObserver(document);
-  dom.pills = [element({subject: 'filter-badge-99 filter filter-enabled filter-key-event.outcome.keyword filter-value-success filter-negated filter-id-0', text: 'NOT event.outcome: success'})];
   observer.onClick({target: element({subject: 'minus-event.outcome-success'})});
+  // Kibana adds the pill a moment after the click.
+  dom.pills = [element({subject: 'filter-badge-99 filter filter-enabled filter-key-event.outcome.keyword filter-value-success filter-negated filter-id-0', text: 'NOT event.outcome: success'})];
   await new Promise(resolve => setTimeout(resolve, 300));
   assert.equal(reports.length, 1);
   assert.equal(reports[0].type, 'filter_added');
@@ -192,14 +194,20 @@ test('a refresh-interval interaction reports auto_refresh_changed', async () => 
   assert.equal(reports[0].details.interval, '10');
 });
 
-test('opening a field preview popover reports field_statistics_opened with the field name', () => {
+test('opening a field preview popover reports field_statistics_opened with the field name', async () => {
   // Surveying a field's distribution is a first-class step (status-code / endpoint surveys), so the
   // observer must name WHICH field a learner previewed. Kibana 9.5.2 uses the field row's "Preview"
   // button `field-<field>-showDetails` inside the `dscFieldListPanelField-<field>` wrapper.
-  const {document} = makeDom();
+  const {dom, document} = makeDom();
   const {observer, reports} = makeObserver(document);
+  // Each preview opens its popover (verified 9.5.2 header); it is reported once the popover is up.
   observer.onClick({target: element({subject: 'field-http.response.status_code-showDetails'})});
+  dom.bySubject.fieldPopoverHeader_fieldDisplayName = element({subject: 'fieldPopoverHeader_fieldDisplayName'});
+  await new Promise(resolve => setTimeout(resolve, 120));
+  delete dom.bySubject.fieldPopoverHeader_fieldDisplayName;
   observer.onClick({target: element({subject: 'dscFieldListPanelField-url.path'})});
+  dom.bySubject.fieldPopoverHeader_fieldDisplayName = element({subject: 'fieldPopoverHeader_fieldDisplayName'});
+  await new Promise(resolve => setTimeout(resolve, 120));
   assert.equal(reports.length, 2);
   assert.deepEqual(reports.map(report => report.type), ['field_statistics_opened', 'field_statistics_opened']);
   assert.equal(reports[0].details.field, 'http.response.status_code');

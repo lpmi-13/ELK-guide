@@ -169,7 +169,7 @@ class ContractTests(unittest.TestCase):
         content = (ROOT / "kibana-coach/src/content-script.js").read_text(encoding="utf-8")
         server = (ROOT / "learning-service/server.py").read_text(encoding="utf-8")
         idle_timeout = int(re.search(r"connection\.settimeout\((\d+)\)", server).group(1))
-        heartbeat = int(re.search(r"message_type: 'heartbeat'\}\)\);\n\s*\}, (\d+)\);", client).group(1))
+        heartbeat = int(re.search(r"message_type: 'heartbeat'\}\)+;\n\s*\}, (\d+)\);", client).group(1))
         self.assertLess(heartbeat, idle_timeout * 1000 / 2)
         self.assertIn("clearInterval(this.heartbeat);", client)
         self.assertIn("currentCommand?.command_id === command.command_id) return;\n      // A reconnect", content)
@@ -246,7 +246,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("fill.style.transform = 'scaleX(1)'", briefing)
         for mode in ("demonstration", "guided", "challenge"):
             self.assertIn(f"{mode}:", briefing)
-        self.assertIn("message.message_type === 'incident_briefing'", client)
+        self.assertIn("case 'incident_briefing': this.onBriefing?.(message)", client)
         self.assertIn("message_type: 'briefing_ack'", client)
         self.assertIn("await coach.showBriefing(briefing)", content)
         self.assertIn('elif message_type == "briefing_ack":', learning_service)

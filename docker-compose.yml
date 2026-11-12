@@ -170,6 +170,8 @@ services:
       SCENARIO: ${SCENARIO:-slow-payments}
       SCENARIO_SEED: ${SCENARIO_SEED:-20260822}
       SCENARIO_AUTO_START: ${SCENARIO_AUTO_START:-true}
+      SCENARIO_TRACK: ${SCENARIO_TRACK:-mvp}
+      RECLAIM_ORPHANED_RUNS: ${RECLAIM_ORPHANED_RUNS:-true}
       ELASTICSEARCH_URL: http://elasticsearch:9200
       KIBANA_URL: http://kibana:5601
       PUBLIC_KIBANA_URL: http://localhost:5601

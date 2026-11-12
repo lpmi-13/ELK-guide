@@ -747,6 +747,8 @@ def next_command(session):
         "session_id": session["id"],
         "sequence": session["last_command_sequence"],
         "step_id": step["id"],
+        # What the coach shows as the step's heading (the id is internal).
+        "step_title": substitute(step.get("title", step["id"]), session),
         "step_index": index,
         "step_count": len(goals),
         "type": command_type,
@@ -771,9 +773,11 @@ def next_command(session):
         # "Show me" performs this step immediately, then explains its scenario-specific reasoning
         # and result (e.g. why the range reaches back N minutes).
         walkthrough = step.get("demonstration", {})
+        # Absent, a focus is null and the learning focus empty, as on a demonstration's command — not "".
+        defaults = {"narration": "", "reasoning": "", "evidence": "", "learning_focus": [], "evidence_focus": None}
         command["walkthrough"] = {
-            field: substitute(walkthrough.get(field, step.get(field, "")), session)
-            for field in ("narration", "reasoning", "evidence", "learning_focus", "evidence_focus")
+            field: substitute(walkthrough.get(field, step.get(field, default)), session)
+            for field, default in defaults.items()
         }
     if session["mode"] == "guided":
         command["restore_state"] = restore_state(session)
@@ -829,13 +833,35 @@ def learner_session(session):
     return public
 
 
+TERMINAL_RUN_STATES = {"FAILED", "ABORTED", "MISSING"}
+
+
 def refresh_run_ready(session):
-    status, run = http_json(f"{CONTROLLER_URL}/api/runs/{session['run_id']}")
-    state = run.get("state")
-    session["run_ready"] = status == 200 and (
-        state in {"READY", "INVESTIGATING"} or (state == "COMPLETED" and bool(session["feedback"]))
-    )
+    """Whether the session's run can be investigated (or, once it has feedback, reviewed). Records the
+    run's state as ``run_state``; MISSING when the controller no longer knows the run."""
+    try:
+        status, run = http_json(f"{CONTROLLER_URL}/api/runs/{session['run_id']}")
+    except (OSError, ValueError):
+        status, run = 503, {}
+    if status == 200:
+        session["run_state"] = run.get("state")
+        session["run_error"] = run.get("error")
+    elif status == 404:
+        session["run_state"] = "MISSING"
+    state = session.get("run_state")
+    # A completed session stays reviewable after its run is replayed (ABORTED) or forgotten (MISSING).
+    session["run_ready"] = (status == 200 and state in {"READY", "INVESTIGATING"}) or (
+        bool(session["feedback"]) and state in {"COMPLETED", "ABORTED", "MISSING"})
     return session["run_ready"]
+
+
+def run_unavailable(session):
+    """Why the run can no longer be investigated ("failed", "aborted", "missing"), or None while it can
+    still become ready."""
+    state = session.get("run_state")
+    if session["run_ready"] or state not in TERMINAL_RUN_STATES:
+        return None
+    return state.lower()
 
 
 def transition_run(session, state):
@@ -846,13 +872,68 @@ def transition_run(session, state):
 
 
 def wait_run_ready(session):
+    """Wait for the run to become ready. Returns None when it is, else why not: "failed", "aborted" or
+    "missing" as soon as the controller says so, "timeout" when readiness never came."""
     validators = session["manifest"]["scenario"].get("provisioning", {}).get("readiness_validators", [])
     deadline = time.monotonic() + max([int(item.get("timeout_seconds", 90)) for item in validators] or [90]) + 30
     while time.monotonic() < deadline:
         if refresh_run_ready(session):
-            return True
+            return None
+        reason = run_unavailable(session)
+        if reason:
+            return reason
         time.sleep(2)
-    return False
+    return "timeout"
+
+
+LAUNCHER_URL = os.getenv("LAUNCHER_URL", "http://localhost:8090/").rstrip("/") + "/"
+FAILURE_TEXT = {
+    "failed": "This investigation could not be prepared.",
+    "aborted": "This investigation has ended: its run was stopped or replaced.",
+    "missing": "This investigation is no longer available.",
+    "timeout": "The evidence for this investigation did not become ready.",
+}
+
+
+# Messages the service sends the coach over the session's WebSocket besides commands, briefings, hints,
+# check-ins and window slides (built where their logic lives). kibana-coach/protocol/protocol.d.ts
+# declares every variant; scripts/generate-protocol-samples.py samples each from these builders.
+def action_result_message(session, action, evaluation):
+    reply = {"message_type": "action_result", "evaluation": learner_evaluation(session, evaluation), "session": learner_session(session),
+             "action": {"type": action.get("type"), "sequence": action.get("sequence")}}
+    if action.get("type") == "time_range_changed":
+        reply["window_watch"] = window_watch(session, action)
+    return reply
+
+
+def session_status(session):
+    """GET /api/sessions/<id>: whether the session can still be investigated or reviewed."""
+    return {"session": learner_session(session), "run_state": session.get("run_state"), "available": run_unavailable(session) is None,
+            "feedback_available": bool(session["feedback"]), "launcher_url": LAUNCHER_URL}
+
+
+def complete_message(session):
+    return {"message_type": "complete", "session_id": session["id"]}
+
+
+def failed_message(session, reason):
+    """The run can't be investigated: a terminal state, with the way back to the launcher."""
+    detail = session.get("run_error") if reason == "failed" else None
+    return {"message_type": "failed", "session_id": session["id"], "reason": reason,
+            "error": FAILURE_TEXT[reason] + (f" {detail}" if detail else ""), "launcher_url": LAUNCHER_URL}
+
+
+def error_message(error):
+    """A message the service could not act on. The connection stays open."""
+    return {"message_type": "error", "error": str(error)}
+
+
+def status_message(paused):
+    return {"message_type": "status", "paused": paused}
+
+
+def acknowledged_message(command_id):
+    return {"message_type": "acknowledged", "command_id": command_id}
 
 
 def elastic_search(query, index="microservices-*"):
@@ -1076,6 +1157,23 @@ def record_action(session, action):
     return evaluation
 
 
+def submit_answer(session, payload):
+    """Score a challenge's (or a demonstration's reference) answer and complete the run. A demonstration's
+    feedback carries its summary, so a reloaded tab can show it again."""
+    session["answer"] = payload
+    actor = "tutorial" if session["mode"] == "demonstration" else "learner"
+    synthetic = {"protocol_version": 2, "run_id": session["run_id"], "session_id": session["id"], "sequence": session["last_action_sequence"] + 1, "type": "answer_submitted", "actor": actor, "observed_at": now_iso(), "details": payload}
+    record_action(session, synthetic)
+    answer_evidence = action_evidence(session, {"details": {"trace_id": payload.get("trace_id")}})
+    trace_valid = answer_evidence["trace_services"] >= 3
+    feedback = score_session(session, trace_is_valid=trace_valid, evidence=answer_evidence)
+    if session["mode"] == "demonstration" and session["playbook"].get("demonstration_summary"):
+        feedback["demonstration_summary"] = substitute(session["playbook"]["demonstration_summary"], session)
+    session["feedback"] = feedback
+    transition_run(session, "COMPLETED")
+    return feedback
+
+
 def authorized(handler, session, query=None):
     header = handler.headers.get("Authorization", "")
     token = header.removeprefix("Bearer ") if header.startswith("Bearer ") else (query or {}).get("token", [""])[0]
@@ -1150,6 +1248,19 @@ class Handler(BaseHTTPRequestHandler):
             status, run = http_json(f"{CONTROLLER_URL}/api/runs/{parts[2]}")
             self.respond(status, run)
             return
+        if len(parts) == 3 and parts[:2] == ["api", "sessions"]:
+            # The coach asks this when its socket won't reconnect: 404 means the session is gone (the
+            # service restarted, say), so it offers the way back to the launcher instead of retrying.
+            with sessions_lock:
+                session = sessions.get(parts[2])
+                if not session:
+                    self.respond(404, {"error": "session not found", "launcher_url": LAUNCHER_URL})
+                elif not authorized(self, session, parse_qs(parsed.query)):
+                    self.respond(401, {"error": "invalid controller token"})
+                else:
+                    refresh_run_ready(session)
+                    self.respond(200, session_status(session))
+            return
         if len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] == "feedback":
             with sessions_lock:
                 session = sessions.get(parts[2])
@@ -1194,13 +1305,15 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "reset":
+            # Validate before the controller stops the run being replayed: a rejected replay must not cost
+            # the learner the run (and debrief) they already have.
+            mode = payload.get("mode", "guided")
+            if mode not in MODE_POLICIES:
+                self.respond(400, {"error": "mode must be demonstration, guided, or challenge"})
+                return
             status, run = http_json(f"{CONTROLLER_URL}/api/runs/{parts[2]}/reset", "POST", payload, timeout=20)
             if status >= 400:
                 self.respond(status, run)
-                return
-            mode = payload.get("mode", "guided")
-            if mode not in MODE_POLICIES:
-                self.respond(400, {"error": "invalid mode"})
                 return
             session = create_session(run, mode)
             self.respond(202, {"run": {key: value for key, value in run.items() if key != "manifest"}, "session": session_public(session, include_connection=True)})
@@ -1238,15 +1351,7 @@ class Handler(BaseHTTPRequestHandler):
                         else:
                             self.respond(409, {"error": "finish the guided investigation steps first"})
                         return
-                    session["answer"] = payload
-                    actor = "tutorial" if session["mode"] == "demonstration" else "learner"
-                    synthetic = {"protocol_version": 2, "run_id": session["run_id"], "session_id": session["id"], "sequence": session["last_action_sequence"] + 1, "type": "answer_submitted", "actor": actor, "observed_at": now_iso(), "details": payload}
-                    record_action(session, synthetic)
-                    answer_evidence = action_evidence(session, {"details": {"trace_id": payload.get("trace_id")}})
-                    trace_valid = answer_evidence["trace_services"] >= 3
-                    session["feedback"] = score_session(session, trace_is_valid=trace_valid, evidence=answer_evidence)
-                    transition_run(session, "COMPLETED")
-                    self.respond(200, session["feedback"])
+                    self.respond(200, submit_answer(session, payload))
                     return
         self.respond(404, {"error": "not found"})
 
@@ -1287,14 +1392,17 @@ class Handler(BaseHTTPRequestHandler):
                 session["utc_offset_minutes"] = offset
         except ValueError:
             pass
-        if not wait_run_ready(session):
-            send_frame(connection, json.dumps({"message_type": "failed", "error": "run evidence did not become ready"}))
+        unavailable = wait_run_ready(session)
+        if unavailable:
+            send_frame(connection, json.dumps(failed_message(session, unavailable)))
             return
-        if session["briefing_acknowledged"]:
-            if not session["feedback"]:
-                transition_run(session, "INVESTIGATING")
+        if session["feedback"]:
+            # Finished: a reload (or a replay elsewhere) keeps the debrief reviewable, not a fresh step.
+            send_frame(connection, json.dumps(complete_message(session)))
+        elif session["briefing_acknowledged"]:
+            transition_run(session, "INVESTIGATING")
             initial = next_command(session)
-            send_frame(connection, json.dumps(initial or {"message_type": "complete", "session_id": session_id}))
+            send_frame(connection, json.dumps(initial or complete_message(session)))
         else:
             send_frame(connection, json.dumps(build_incident_briefing(session)))
         try:
@@ -1310,19 +1418,21 @@ class Handler(BaseHTTPRequestHandler):
                 message = json.loads(data)
                 message_type = message.get("message_type")
                 if message_type == "action":
-                    evaluation = record_action(session, message["action"])
-                    reply = {"message_type": "action_result", "evaluation": learner_evaluation(session, evaluation), "session": learner_session(session),
-                             "action": {"type": message["action"].get("type"), "sequence": message["action"].get("sequence")}}
-                    if message["action"].get("type") == "time_range_changed":
-                        reply["window_watch"] = window_watch(session, message["action"])
-                    send_frame(connection, json.dumps(reply))
+                    try:
+                        evaluation = record_action(session, message["action"])
+                    except ValueError as error:
+                        # A rejected action (a stale sequence from a duplicated tab, say) is reported, and the
+                        # session carries on; closing the socket would only make the coach reconnect and resend.
+                        send_frame(connection, json.dumps(error_message(error)))
+                        continue
+                    send_frame(connection, json.dumps(action_result_message(session, message["action"], evaluation)))
                     # A challenge's answer form is already open; re-sending it would reset what the learner typed.
                     if evaluation["goals_progressed"] and not session["paused"] and session["mode"] != "challenge":
                         command = next_command(session)
                         if command:
                             send_frame(connection, json.dumps(command))
                         elif session["mode"] == "guided" and session["feedback"]:
-                            send_frame(connection, json.dumps({"message_type": "complete", "session_id": session_id}))
+                            send_frame(connection, json.dumps(complete_message(session)))
                 elif message_type == "check_in":
                     reply = check_in_reply(session, message.get("step_id"))
                     if reply:
@@ -1334,7 +1444,7 @@ class Handler(BaseHTTPRequestHandler):
                     if reply:
                         send_frame(connection, json.dumps(reply))
                 elif message_type == "ack":
-                    send_frame(connection, json.dumps({"message_type": "acknowledged", "command_id": message.get("command_id")}))
+                    send_frame(connection, json.dumps(acknowledged_message(message.get("command_id"))))
                 elif message_type == "briefing_ack":
                     if session["briefing_acknowledged"]:
                         continue
@@ -1344,17 +1454,17 @@ class Handler(BaseHTTPRequestHandler):
                     session["briefing_read_at"] = now_iso()
                     transition_run(session, "INVESTIGATING")
                     command = next_command(session)
-                    send_frame(connection, json.dumps(command or {"message_type": "complete", "session_id": session_id}))
+                    send_frame(connection, json.dumps(command or complete_message(session)))
                 elif message_type == "hint":
                     hint = next_hint(session)
                     if hint:
                         send_frame(connection, json.dumps(hint))
                 elif message_type == "pause":
                     session["paused"] = True
-                    send_frame(connection, json.dumps({"message_type": "status", "paused": True}))
+                    send_frame(connection, json.dumps(status_message(True)))
                 elif message_type == "resume":
                     session["paused"] = False
-                    send_frame(connection, json.dumps({"message_type": "status", "paused": False}))
+                    send_frame(connection, json.dumps(status_message(False)))
                     command = next_command(session)
                     if command:
                         send_frame(connection, json.dumps(command))

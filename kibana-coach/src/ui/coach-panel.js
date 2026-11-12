@@ -28,6 +28,13 @@ class IncidentCoachPanel {
         <p id="status" role="status"></p>
       </aside>`;
     this.panel = this.root.querySelector('.panel');
+    // A press inside the coach (Advance, Pause, Hint...) is not a click outside Kibana's open popover.
+    // Kibana closes a popover on any mouse event that reaches the document from outside it (verified 9.5.2:
+    // pressing Advance while the coach typed into the date box closed the box and failed the step), so the
+    // coach's own presses stop at its shadow root. Capture-phase listeners (the step clock's) still see them.
+    for (const type of ['mousedown', 'mouseup', 'pointerdown', 'pointerup', 'touchstart', 'touchend', 'click']) {
+      this.root.addEventListener(type, event => event.stopPropagation());
+    }
     this.cursor = new IncidentCursor(this.root);
     this.spotlight = new IncidentSpotlight(this.root);
     this.debrief = new IncidentDebrief(this.root);
@@ -170,7 +177,7 @@ class IncidentCoachPanel {
     // debrief scores it afterwards.
     const challenge = command.mode === 'challenge';
     this.root.querySelector('#mode').textContent = challenge ? 'challenge' : `${command.mode} · step ${command.step_index + 1} of ${command.step_count}`;
-    this.root.querySelector('#objective').textContent = challenge ? 'Your investigation' : command.step_id.replaceAll('-', ' ');
+    this.root.querySelector('#objective').textContent = challenge ? 'Your investigation' : command.step_title || command.step_id.replaceAll('-', ' ');
     this.root.querySelector('.progress').hidden = challenge;
     this.root.querySelector('.progress span').style.width = `${100 * command.step_index / command.step_count}%`;
     this.root.querySelector('#pause').hidden = command.mode !== 'demonstration';
@@ -264,6 +271,9 @@ class IncidentCoachPanel {
     this.host.hidden = false;
     this.panel.hidden = false;
     this.phase = 'recovery';
+    // A status left from an earlier recovery ("Search restored — carry on") would contradict this card.
+    const status = this.root.querySelector('#status');
+    if (!status.classList.contains('error')) this.toast('');
     for (const id of ['#hint', '#demonstrate', '#incident-info', '#pause', '#review-feedback']) this.root.querySelector(id).hidden = true;
     const advance = this.root.querySelector('#advance');
     advance.hidden = Boolean(choices?.length);
@@ -301,7 +311,11 @@ class IncidentCoachPanel {
     requestAnimationFrame(() => this.placeAwayFrom(this.activeTarget?.isConnected ? this.activeTarget : null));
   }
 
-  showGuidedCompletion() {
+  showGuidedCompletion() { this.showCompletion('guided'); }
+
+  // The session has its feedback (any mode). The panel stays with Review feedback, so a debrief that was
+  // closed can be opened again.
+  showCompletion(mode = 'guided') {
     clearTimeout(this.celebrateTimer);
     this.celebrating = false;
     this.advanceRequested = false;
@@ -312,8 +326,8 @@ class IncidentCoachPanel {
     this.host.hidden = false;
     this.panel.hidden = false;
     this.root.querySelector('.progress span').style.width = '100%';
-    this.root.querySelector('#mode').textContent = 'guided · complete';
-    this.root.querySelector('#objective').textContent = 'Investigation complete';
+    this.root.querySelector('#mode').textContent = `${mode} · complete`;
+    this.root.querySelector('#objective').textContent = mode === 'demonstration' ? 'Demonstration complete' : 'Investigation complete';
     this.root.querySelector('#pause').hidden = true;
     this.root.querySelector('#advance').hidden = true;
     this.root.querySelector('#hint').hidden = true;
@@ -323,7 +337,42 @@ class IncidentCoachPanel {
     this.root.querySelector('#diagnosis').hidden = true;
     this.root.querySelector('#stage').classList.remove('success', 'celebrate-in', 'recovery', 'checkin');
     this.root.querySelector('#stage').hidden = false;
-    this.renderPhase({eyebrow: 'Finished', headline: 'Your guided investigation is complete.'});
+    this.renderPhase({eyebrow: 'Finished', headline: {
+      guided: 'Your guided investigation is complete.',
+      challenge: 'Your answer is in. Review feedback opens the debrief again.',
+      demonstration: 'The demonstration is complete. Review feedback opens its summary again.',
+    }[mode] || 'Complete.'});
+    requestAnimationFrame(() => this.placeAwayFrom(null));
+  }
+
+  // The session can't go on: its run ended, was replaced or never became ready, or the service no longer
+  // knows it. Nothing further is automated; the card says why and leads back to the launcher.
+  showSessionEnded({headline, detail = '', launcherUrl = ''}) {
+    clearTimeout(this.celebrateTimer);
+    this.celebrating = false;
+    this.advanceRequested = false;
+    this.pendingCommand = null;
+    this.clearHint();
+    this.clearEvidenceHighlights();
+    this.spotlight.hide();
+    this.cursor.hide();
+    this.briefing.close();
+    this.host.hidden = false;
+    this.panel.hidden = false;
+    this.phase = 'ended';
+    this.activeTarget = null;
+    this.root.querySelector('.progress').hidden = true;
+    this.root.querySelector('#mode').textContent = 'session ended';
+    this.root.querySelector('#objective').textContent = 'Investigation unavailable';
+    for (const id of ['#hint', '#demonstrate', '#advance', '#pause', '#incident-info', '#review-feedback', '#diagnosis']) this.root.querySelector(id).hidden = true;
+    const stage = this.root.querySelector('#stage');
+    stage.hidden = false;
+    stage.classList.remove('success', 'celebrate-in', 'acting', 'result', 'checkin');
+    stage.classList.add('recovery');
+    this.resetCountdown();
+    this.toast('');
+    const choices = launcherUrl ? [{id: 'launcher', label: 'Return to the launcher', primary: true, onSelect: () => location.assign(launcherUrl)}] : [];
+    this.renderPhase({eyebrow: 'Session ended', headline, detail, choices});
     requestAnimationFrame(() => this.placeAwayFrom(null));
   }
 
@@ -919,10 +968,22 @@ class IncidentCoachPanel {
     this.phase = null;
   }
 
-  toast(message, error = false) {
+  // A line under the card: a status, or an error (which reveals the panel). `action` adds a button to it,
+  // e.g. Retry now while the learning service is away.
+  toast(message, error = false, action = null) {
     const status = this.root.querySelector('#status');
     status.textContent = message;
     status.className = error ? 'error' : '';
+    if (action && message) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'status-action';
+      button.textContent = action.label;
+      button.onclick = () => action.onSelect?.();
+      status.append(' ', button);
+      this.host.hidden = false;
+      this.panel.hidden = false;
+    }
     // A problem must never be swallowed by a panel that finishCommand hid between steps: surface the
     // panel so the learner sees what went wrong instead of the demonstration appearing to just stop.
     if (error) { this.host.hidden = false; this.panel.hidden = false; }
@@ -1022,7 +1083,7 @@ class IncidentCoachPanel {
     #hint-text { margin:6px 0 0;color:#173d53;font:500 15px/1.5 'Segoe UI',system-ui,sans-serif;letter-spacing:-.005em;white-space:pre-line; }
     .progress { height:4px;background:#dce4eb;margin:12px 0 10px;border-radius:4px;overflow:hidden; }.progress span { display:block;height:100%;background:#006bb4;transition:width .3s; }
     label { display:block;font-weight:650;margin-top:10px; } input,select,textarea { display:block;width:100%;box-sizing:border-box;margin-top:3px;padding:7px;border:1px solid #9ba9b6;border-radius:4px;font:inherit; } textarea { min-height:58px; }
-    #diagnosis button { margin-top:12px;background:#006bb4;color:#fff;border:0; } #status { min-height:18px;color:#147d5c; } #status:empty { display:none; }.error { color:#a32b1c!important; }
+    #diagnosis button { margin-top:12px;background:#006bb4;color:#fff;border:0; } #status { min-height:18px;color:#147d5c; } #status .status-action { margin-left:6px;padding:2px 8px;font-size:12px; } #status:empty { display:none; }.error { color:#a32b1c!important; }
     #stage.success { border-left-color:#12a56b;background:#ecf8f2;box-shadow:0 6px 22px #12a56b24; } #stage.success .eyebrow { display:flex;align-items:center;gap:8px;color:#0b7a4f; } #stage.success #phase-headline { color:#0c3d2b; }
     #phase-detail { margin:12px 0 0;color:#3a4d5c;font-size:14px;line-height:1.5;white-space:pre-line; }
     .stage-actions { display:flex;flex-wrap:wrap;gap:8px;margin-top:16px; } .stage-actions button { padding:7px 12px;font-weight:600; } .stage-actions button.primary { background:#006bb4;border-color:#006bb4;color:#fff; }

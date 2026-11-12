@@ -71,6 +71,7 @@ async function makeDemo({carried = null} = {}) {
     constructor() { client = this; }
     async connect() { return {session_id: 'test'}; }
     send(message) { calls.messages.push(message); }
+    setPaused(paused) { this.send({message_type: paused ? 'pause' : 'resume'}); }
     sendAction(action) { calls.messages.push({...action, step_clock: this.stepClock?.()}); }
     requestCheckIn(step_id) { calls.messages.push({message_type: 'check_in', step_id}); }
     acknowledge() {}

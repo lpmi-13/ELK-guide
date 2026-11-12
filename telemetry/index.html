@@ -516,7 +516,12 @@
           break;
         }
         if (run.state === 'FAILED' || run.state === 'ABORTED') {
-          const message = run.error || 'Run did not become ready.';
+          // The controller's error is diagnostic detail (validator readings); the learner gets what happened
+          // and what to do, and the detail stays in the launcher's console.
+          if (run.error) console.warn(`Run ${runId} ${run.state}: ${run.error}`);
+          const message = run.state === 'ABORTED'
+            ? 'This run was stopped before it was ready. Start it again from the launcher.'
+            : 'The evidence for this scenario did not become ready. Start it again, or choose another scenario.';
           stopWarmup();
           signalTab({__halt: true});
           if (!tabMessage('Preparation did not complete', message)) setLaunchStatus(message);

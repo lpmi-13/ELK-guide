@@ -5,11 +5,22 @@
 // without pointer or key input, no Kibana popover open, the query bar not focused) and then asks for
 // a check-in. After "Keep going" the next one comes at 1.5× the budget; after two, none for the step.
 class GuidedStepClock {
+  /**
+   * @param {{isPaused?: () => boolean, isQuiet?: () => boolean, onDue?: (stepId: string) => void, now?: () => number,
+   *   setTimer?: (callback: () => void, delay: number) => any, clearTimer?: (id: any) => void, tickMs?: number, idleMs?: number}} [options]
+   */
   constructor({isPaused = () => false, isQuiet = () => true, onDue = () => {}, now = () => performance.now(),
     // Wrapped: a browser's setTimeout throws "Illegal invocation" when called as a method of this.
     setTimer = (callback, delay) => setTimeout(callback, delay), clearTimer = id => clearTimeout(id),
     tickMs = 500, idleMs = 5000} = {}) {
-    Object.assign(this, {isPaused, isQuiet, onDue, now, setTimer, clearTimer, tickMs, idleMs});
+    this.isPaused = isPaused;
+    this.isQuiet = isQuiet;
+    this.onDue = onDue;
+    this.now = now;
+    this.setTimer = setTimer;
+    this.clearTimer = clearTimer;
+    this.tickMs = tickMs;
+    this.idleMs = idleMs;
     this.stepId = null;
     this.timer = null;
     this.active = 0;
@@ -72,7 +83,7 @@ class GuidedStepClock {
   retry() { this.awaiting = false; }
 }
 
-globalThis.GuidedStepClock = GuidedStepClock;
+/** @type {any} */ (globalThis).GuidedStepClock = GuidedStepClock;
 
 function startIncidentCoach() {
   if (document.querySelector('#adaptive-incident-coach')) return;
@@ -90,7 +101,10 @@ function startIncidentCoach() {
   // walkthrough ends, so the observer must not report the coach's changes as the learner's —
   // that would complete the step early and cut off its explanation.
   let walkthroughController = null;
-  let guidedFeedbackShown = false;
+  // Set once the session has its feedback (any mode): no more recovery, check-ins or window watches.
+  let investigationFinished = false;
+  // Set once this page has shown a debrief: a reconnect's "complete" then leaves it closed.
+  let debriefShown = false;
   // Guided dead-end recovery: set while the coach explains and undoes a search that left no results.
   let recoveryController = null;
   // The scope step's "choose again" card, and the watch on a relative window that will slide.
@@ -312,7 +326,7 @@ function startIncidentCoach() {
   }
 
   function recoveryEligible(command = currentCommand) {
-    return client?.mode === 'guided' && !guidedFeedbackShown && !recoveryController &&
+    return client?.mode === 'guided' && !investigationFinished && !recoveryController &&
       !executionController && !adapter.performing && command?.mode === 'guided' && Boolean(command.restore_state) &&
       !coach.briefing.active;
   }
@@ -383,9 +397,15 @@ function startIncidentCoach() {
 
   // What went wrong, how to tell the learner has fixed it, and how the coach puts it right.
   // `reason` is the service's dead_end evaluation, or null when the browser saw "No results" itself.
+  /**
+   * @typedef {{eyebrow: string, headline: string, detail: string, stillBroken: () => boolean,
+   *   restore: (signal?: AbortSignal) => Promise<boolean>, working?: string, restoredToast?: string, diagnosis?: any}} DeadEndProblem
+   * @param {import('../protocol/protocol').RestoreState} state
+   * @param {import('../protocol/protocol').DeadEndEvaluation | null} reason
+   * @returns {Promise<DeadEndProblem>}
+   */
   async function describeDeadEnd(state, reason) {
-    const code = reason?.reason_code || 'empty_result';
-    if (code === 'lost_earned_state') {
+    if (reason?.reason_code === 'lost_earned_state') {
       const lost = reason.lost || [];
       const names = lost.map(filter => `${filter.negate ? 'NOT ' : ''}${filter.field}: ${filter.value}`);
       return {
@@ -396,7 +416,8 @@ function startIncidentCoach() {
         restore: async () => adapter.restoreDiscoverState(state, {merge: true}),
       };
     }
-    if (code === 'window_excludes_incident' || code === 'window_slid_past_incident') {
+    if (reason?.reason_code === 'window_excludes_incident' || reason?.reason_code === 'window_slid_past_incident') {
+      const code = reason.reason_code;
       // The service compares the window's start with the incident's moment in absolute time, and words
       // the card in the learner's clock time.
       const moment = new Date(reason.incident_reference_at);
@@ -428,6 +449,7 @@ function startIncidentCoach() {
     const problem = {
       ...describeEmptySearch(state),
       eyebrow: 'No results — back on track',
+      diagnosis: null,
       stillBroken: () => KibanaActionObserver.noResultsShown(),
       restore: async () => {
         if (!adapter.restoreDiscoverState(state)) throw new Error('The search could not be restored automatically. Clear the query and filters to continue.');
@@ -475,7 +497,7 @@ function startIncidentCoach() {
     }
     // The coach opening the popover is not the learner's action.
     adapter.performing = true;
-    try { button.click(); } finally { adapter.performing = false; }
+    try { /** @type {HTMLElement} */ (button).click(); } finally { adapter.performing = false; }
   }
 
   // A diagnosed query: wait for Fix my query / Show top values / Reset search. Resolves when the
@@ -580,7 +602,7 @@ function startIncidentCoach() {
     if (client?.mode !== 'guided' || Number.isNaN(at) || at - Date.now() > 86_400_000) return;
     const entry = {from: watch.from, timer: null};
     const check = () => {
-      if (windowWatch !== entry || guidedFeedbackShown) return;
+      if (windowWatch !== entry || investigationFinished) return;
       // The coach's own restore changes the window without a report; that ends the watch too.
       if (observer?.readTimeRange().from !== entry.from) {
         windowWatch = null;
@@ -602,7 +624,7 @@ function startIncidentCoach() {
   // Keep going / Give me a hint / Show me. Answering it costs nothing.
   function showCheckIn(message) {
     if (!currentCommand || message.step_id !== currentCommand.step_id || message.step_id !== stepClock.stepId ||
-        recoveryController || executionController || coach.celebrating || guidedFeedbackShown) {
+        recoveryController || executionController || coach.celebrating || investigationFinished) {
       stepClock.retry();
       return;
     }
@@ -618,7 +640,7 @@ function startIncidentCoach() {
     };
     const drift = message.drift || [];
     coach.showCheckIn({
-      title: message.step_title || currentCommand.step_id.replaceAll('-', ' '),
+      title: message.step_title || currentCommand.step_title || currentCommand.step_id.replaceAll('-', ' '),
       drift: drift[drift.length - 1] || '',
       choices: [
         {id: 'keep_going', label: 'Keep going', primary: true, onSelect: () => answer('keep_going')},
@@ -635,16 +657,34 @@ function startIncidentCoach() {
         ...(summary.answer || summary.diagnosis),
         evidence: summary.evidence,
       });
+      investigationFinished = true;
+      debriefShown = true;
+      coach.showCompletion('demonstration');
       coach.debrief.showDemonstration(summary);
     } catch (error) {
       coach.toast(error.message, true);
     }
   }
 
+  // The debrief for any mode: a demonstration's summary, or the scored (or guided) feedback.
+  /** @param {import('../protocol/protocol').Feedback} feedback */
+  function showFeedback(feedback) {
+    if ('demonstration_summary' in feedback && feedback.demonstration_summary) coach.debrief.showDemonstration(feedback.demonstration_summary);
+    else coach.debrief.show(feedback);
+  }
+
+  const SESSION_ENDED_DETAIL = {
+    aborted: 'Start a new run from the launcher. The same scenario key replays the same incident.',
+    failed: 'Start it again from the launcher, or choose another scenario.',
+    timeout: 'Start it again from the launcher, or choose another scenario.',
+    missing: 'The learning service no longer has this session (it may have restarted). Start again from the launcher.',
+  };
+
   async function startSession(config) {
     client?.stop();
     observer?.stop();
-    guidedFeedbackShown = false;
+    investigationFinished = false;
+    debriefShown = false;
     dismissWindowMiss();
     clearTimeout(windowWatch?.timer);
     windowWatch = null;
@@ -661,22 +701,42 @@ function startIncidentCoach() {
       } catch (_error) { return null; }
     };
     client.onCheckIn = showCheckIn;
-    client.onStatus = message => coach.toast(message);
+    client.onStatus = (message, retry) => coach.toast(message, false, retry ? {label: 'Retry now', onSelect: retry} : null);
     client.onError = message => coach.toast(message, true);
+    // The session is finished: after the last guided step, or on reconnecting (a reload) once any mode has
+    // its feedback. The debrief opens once per page; Review feedback brings it back after it is closed.
     client.onComplete = async () => {
-      if (client.mode !== 'guided' || guidedFeedbackShown) return;
-      guidedFeedbackShown = true;
+      if (debriefShown) return;
+      investigationFinished = true;
+      debriefShown = true;
       stepClock.stop();
       checkIn = null;
       try {
         const feedback = await client.getFeedback();
         observer?.stop();
-        coach.showGuidedCompletion();
-        coach.debrief.show(feedback);
+        coach.showCompletion(client.mode);
+        showFeedback(feedback);
       } catch (error) {
-        guidedFeedbackShown = false;
+        investigationFinished = false;
+        debriefShown = false;
         coach.toast(error.message, true);
       }
+    };
+    // The run can't be investigated any more (it was stopped, replaced or never became ready), or the
+    // service no longer knows the session: stop everything and offer the way back to the launcher.
+    client.onFailed = message => {
+      executionController?.abort();
+      recoveryController?.abort();
+      dismissWindowMiss();
+      stepClock.stop();
+      checkIn = null;
+      currentCommand = null;
+      clearTimeout(deadEndPoll);
+      observer?.stop();
+      sessionStorage.removeItem(activeSessionKey);
+      sessionStorage.removeItem(carriedResultKey);
+      window.__coachBootOverlay?.release();
+      coach.showSessionEnded({headline: message.error, detail: SESSION_ENDED_DETAIL[message.reason], launcherUrl: message.launcher_url});
     };
     client.onHint = hint => coach.showHint(hint);
     client.onWindowSlid = message => {
@@ -693,8 +753,8 @@ function startIncidentCoach() {
       // recovering without waiting out the usual grace period; a lost filter or a window that misses
       // the incident still shows results, so recover from it directly. On the scope step itself, a
       // window that misses is explained and the learner chooses again.
-      if (client.mode === 'guided' && (evaluation.outcome === 'dead_end' || evaluation.outcome === 'empty_result')) {
-        const code = evaluation.reason_code || 'empty_result';
+      if (client.mode === 'guided' && evaluation.outcome === 'dead_end') {
+        const code = evaluation.reason_code;
         if (code === 'empty_result') deadEndSince = 1;
         else if (code === 'window_misses_incident') { if (recoveryEligible()) explainWindowMiss(currentCommand, evaluation); }
         else if (recoveryEligible()) recoverFromDeadEnd(currentCommand, evaluation);
@@ -747,7 +807,7 @@ function startIncidentCoach() {
       currentCommand = command;
       // The clock times a step, so a re-sent command for the same step keeps counting.
       checkIn = null;
-      if (command.mode === 'guided' && command.pace_seconds) {
+      if (command.mode === 'guided' && 'pace_seconds' in command && command.pace_seconds) {
         if (stepClock.stepId !== command.step_id) stepClock.start(command.step_id, command.pace_seconds);
       } else {
         stepClock.stop();
@@ -802,11 +862,11 @@ function startIncidentCoach() {
         coach.resumeCountdown(activeReadingBeat.remaining);
         activeReadingBeat.resume();
       }
-      client.send({message_type: paused ? 'pause' : 'resume'});
+      client.setPaused(paused);
     };
     coach.onHint = () => client.requestHint();
     coach.onReviewFeedback = async () => {
-      try { coach.debrief.show(await client.getFeedback()); }
+      try { showFeedback(await client.getFeedback()); }
       catch (error) { coach.toast(error.message, true); }
     };
     coach.onDemonstrate = () => currentCommand && execute(currentCommand, true);
@@ -853,6 +913,9 @@ function startIncidentCoach() {
       try {
         // Discover shows local time, so a window stated as clock times is graded in the learner's zone.
         const feedback = await client.submitDiagnosis({...answer, client_utc_offset_minutes: new Date().getTimezoneOffset()});
+        investigationFinished = true;
+        debriefShown = true;
+        coach.showCompletion('challenge');
         coach.debrief.show(feedback);
       } catch (error) { coach.toast(error.message, true); }
     };

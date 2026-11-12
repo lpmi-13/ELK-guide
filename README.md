@@ -51,7 +51,7 @@ cp .env.example .env
 ./build-all.sh
 ```
 
-The script builds and starts the stack in the background, waits for it to be ready, then prints `Lab ready. Open http://localhost:8090/ in your browser.` If you prefer attached logs, `docker compose up --build` prints the same URL when the browser service starts.
+The script builds and starts the stack in the background, waits for it to be ready, removes the Kibana Spaces and data left by earlier lab runs, then prints `Lab ready. Open http://localhost:8090/ in your browser.` If you prefer attached logs, `docker compose up --build` prints the same URL when the browser service starts.
 
 Open <http://localhost:8090>, select a scenario, choose an assistance mode, accept or change the suggested scenario key, and start the run. A preparation tab opens immediately and moves into the connected Kibana investigation only after the run reaches `READY`; if the tab cannot be opened, the launcher reveals a manual fallback link. No manual Kibana content creation is required.
 
@@ -91,7 +91,7 @@ Poll the returned run ID until its state is `READY`:
 curl -sS http://localhost:8091/api/runs/RUN_ID
 ```
 
-Run states follow `CREATED → ACTIVATING → WARMING → READY → INVESTIGATING → COMPLETED`, with `FAILED` and `ABORTED` terminal branches. Reset deletes the prior Space and run data, clears its fault, and creates a new isolated run ID:
+Run states follow `CREATED → ACTIVATING → WARMING → READY → INVESTIGATING → COMPLETED`, with `FAILED` and `ABORTED` terminal branches. Runs live only in the scenario controller's memory, so when it starts, and again each time `./build-all.sh` runs (`POST /api/orphans/reclaim` on the controller), it deletes the Space and data of every run it no longer knows; live runs are never touched (set `RECLAIM_ORPHANED_RUNS=false` to keep them); a Kibana tab still open on such a run says its session has ended and links back to the launcher. Reset deletes the prior Space and run data, clears its fault, and creates a new isolated run ID:
 
 ```sh
 curl -sS -X POST http://localhost:8091/api/runs/RUN_ID/reset \
@@ -126,7 +126,9 @@ Output is written to `recordings/` as a WebM video plus a JSON sidecar containin
 
 ## Verify locally
 
-The dependency-free suite checks pack contracts, selector parity, manifests, run isolation, goal alternatives, scoring, and all 72 core scenario-mode combinations:
+The [local test plan](LOCAL_TEST_PLAN.md) sets out what end-to-end confidence requires; the checks below implement it, cheapest first.
+
+**Without Docker.** The dependency-free suite checks pack contracts, selector parity, manifests, run isolation, goal alternatives, scoring, all 66 core scenario-mode combinations, the learning service's protocol (every WebSocket and REST variant, sampled from the real server code), public wording, and the session-ending paths of the real HTTP/WebSocket server:
 
 ```sh
 python -m unittest discover -s tests -v
@@ -136,14 +138,36 @@ python scripts/generate-saved-objects.py --check
 docker compose config -q
 ```
 
+The coach's own tests and its protocol type check need Node 22 and, once, `npm ci` in `kibana-coach/`:
+
+```sh
+cd kibana-coach && npm ci
+npm test                  # unit tests, including failed and delayed Kibana actions
+npm run check:protocol    # samples from learning-service/server.py vs protocol/protocol.d.ts, and the coach's JSDoc
+```
+
+`check:protocol` regenerates `kibana-coach/protocol/generated/samples.ts` with `scripts/generate-protocol-samples.py`, then type-checks it and the coach against the strict declaration in `kibana-coach/protocol/protocol.d.ts`: a renamed or extra field, a wrong null, or a message variant the declaration or the coach lacks fails before any live run. Change the server, the declaration and the coach together. When TypeScript is installed, the Python suite runs this check too.
+
 The dashboards and their Lens panels in `kibana/saved-objects.ndjson` are generated: edit them in `scripts/generate-saved-objects.py` and run it (no arguments) to rewrite the file.
 
-With the stack running, exercise the converted live investigation end to end, then provision and clean every capability-available core pack:
+**With the stack running.** Exercise the converted live investigation end to end, then provision every capability-available core pack and check that its fault really exists: declared readiness, decisive truth assertions in Elasticsearch, another variant's evidence absent, a representative distractor answer graded wrong and the run's own answer right. Parameterized packs run once per parameter choice, with fixed scenario keys. `--replay` adds the replay contract (a repeated key reproduces the incident in a new run and Space; a rejected replay leaves the run alone; a completed session's feedback survives a replay):
 
 ```sh
 python tests/live_smoke.py
-python tests/live_scenario_matrix.py --all --isolation
+python tests/live_scenario_matrix.py --track mvp --replay        # the MVP packs, every variant
+python tests/live_scenario_matrix.py --all --isolation --replay   # every available core pack
 ```
+
+**In a browser.** `scenario-recorder/coach-audit.mjs` starts each case from the launcher, lets the built-in coach operate Kibana, and checks what a learner sees: every declared action visibly performed and then shown, the card off the control, rings, flyouts and notices, the pointer in view, the debrief matching the run's manifest (and dismissable and reopenable), and the controller run `COMPLETED`. It never drives the coach itself and never submits the reference answer. Each case writes `recordings/audit/<time>/<case>/` (summary, events, step screenshots; a DOM snapshot and trace on failure). It uses Playwright from `npm ci` in `scenario-recorder/`; `PW_CHANNEL=chrome` uses an installed Chrome instead of downloading Playwright's:
+
+```sh
+cd scenario-recorder && npm ci
+PW_CHANNEL=chrome node coach-audit.mjs --mvp --mode demonstration --mode guided --mode challenge   # the first gate: both viewports, normal and Advance speed
+PW_CHANNEL=chrome node coach-audit.mjs --mvp --case robustness --case recovery --case replay       # Pause/Advance/hidden tab/reload/outage/expired session; guided dead ends; tabs and keys
+PW_CHANNEL=chrome node coach-audit.mjs --all --surface dashboard                                   # the manual catalog sweep, one surface at a time
+```
+
+The launcher lists only the MVP track; set `SCENARIO_TRACK=all` in `.env` (and recreate `scenario-controller`) to start every pack from it. Without that, the sweep starts other packs through the same API call and handoff the launcher makes, and notes it.
 
 For a full smoke test, follow startup and ingestion with:
 

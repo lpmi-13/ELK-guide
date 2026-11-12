@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": {"record": "node recorder.mjs"},
-  "dependencies": {"playwright": "1.62.1"}
+  "scripts": {
+    "record": "node recorder.mjs",
+    "audit": "node coach-audit.mjs",
+    "audit:mvp": "node coach-audit.mjs --mvp --mode demonstration --mode guided --mode challenge"
+  },
+  "dependencies": {
+    "playwright": "1.62.1"
+  }
 }

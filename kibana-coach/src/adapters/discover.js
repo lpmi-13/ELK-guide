@@ -81,8 +81,17 @@ globalThis.KibanaApplicationAdapters.push({
     if (command.type === 'enter_esql' && document.querySelector("[data-test-subj='ESQLEditor'] .monaco-editor")) {
       const value = typeof command.value === 'string' ? command.value : command.value?.query || '';
       const editor = await waitForSelector("[data-test-subj='ESQLEditor']", 20000, signal);
-      await host.pointAt(editor, coach, timingScale, signal, 'Write the ES|QL pipeline here, then run it.', {showClick: false});
-      if (!host.runEsql(value)) throw new Error('Discover could not take the ES|QL query. Try this step again.');
+      // Write the pipeline in the editor and run it, as a learner does. Only if the editor won't take the
+      // text is the query applied through Discover's URL state instead.
+      await host.pointAt(editor, coach, timingScale, signal, 'Write the ES|QL pipeline here.', {activate: true, hold: false});
+      const written = await host.typeIntoMonaco(editor, value, signal);
+      const run = written && host.resolve('kibana.query_submit');
+      if (run) {
+        coach?.clearActionTarget?.();
+        await host.pointAt(run, coach, timingScale, signal, 'Run the query.', {activate: true, targetName: 'kibana.query_submit'});
+      } else if (!host.runEsql(value)) {
+        throw new Error('Discover could not take the ES|QL query. Try this step again.');
+      }
       await host.wait(2500, signal);
       // The editor keeps its focus through the URL change, and with it an autocomplete list over the page.
       const typed = document.activeElement;

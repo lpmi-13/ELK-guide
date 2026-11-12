@@ -9,3 +9,5 @@ video-downloads/*
 
 notes.txt
 docs
+node_modules/
+kibana-coach/protocol/generated/

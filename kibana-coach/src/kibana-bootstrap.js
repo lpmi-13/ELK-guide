@@ -29,6 +29,32 @@
   });
 })();
 
+// Count Kibana's own search requests (verified 9.5.2: Discover POSTs /internal/search/ese, twice per
+// search, ~350-650 ms after Enter — even for an unchanged query — and keeps the previous hit count on
+// screen until they return). The action observer reads a result only after the search an action started
+// has come back, so an old hit count is never reported as the action's result. Installed here, before
+// Kibana's own code captures window.fetch.
+(function trackKibanaSearches() {
+  const searchRequest = /\/internal\/(search|bsearch)\b|\/internal\/esql|\/api\/esql/;
+  const state = {started: 0, finished: 0, failed: 0, inFlight: 0};
+  window.__coachSearches = state;
+  const nativeFetch = window.fetch;
+  if (typeof nativeFetch !== 'function') return;
+  window.fetch = function fetch(input, init) {
+    let url = '';
+    try { url = typeof input === 'string' ? input : (input && input.url) || String(input); } catch (_error) { /* opaque input */ }
+    if (!searchRequest.test(url)) return nativeFetch.apply(this, arguments);
+    state.started += 1;
+    state.inFlight += 1;
+    const settle = ok => {
+      state.inFlight = Math.max(0, state.inFlight - 1);
+      state.finished += 1;
+      if (!ok) state.failed += 1;
+    };
+    return nativeFetch.apply(this, arguments).then(response => { settle(response.ok); return response; }, error => { settle(false); throw error; });
+  };
+})();
+
 // Seed the same local preferences as each Discover callout's Dismiss action
 // before the Kibana application starts, so the prompts never flash into view.
 for (const key of [

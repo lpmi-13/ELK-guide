@@ -36,6 +36,7 @@
     <p id="msg">Setting up evidence in Kibana…</p>
     <progress id="p" value="0" max="1000" aria-label="Investigation preparation progress"></progress>
     <p id="extra" hidden><a id="go" href="#">Open Kibana</a></p>
+    <p id="back" hidden><a id="return" href="/">Return to the launcher</a></p>
   </main>
   <script>
     (() => {
@@ -51,7 +52,14 @@
       if (window.__url == null) { const saved = read('prep:url'); if (saved) window.__url = saved; }
       if (window.__url) window.__done = true;
       if (read('prep:halt') === '1') window.__halt = true;
+      // A preparation that stopped (it failed, or the run was stopped) keeps its message on screen and
+      // always offers the way back to the launcher, which this page shares an origin with.
+      function halt() {
+        bar.hidden = true;
+        document.getElementById('back').hidden = false;
+      }
       if (window.__halt) {
+        halt();
         const set = (id, text) => { const el = document.getElementById(id); if (el && text) el.textContent = text; };
         const heading = read('prep:heading');
         if (heading) { document.title = heading; set('h', heading); }
@@ -66,7 +74,7 @@
       if (fresh) { startedAt = Date.now(); write('prep:started', String(startedAt)); }
       let shown = fresh ? 40 : Math.min(985, 900 * (1 - Math.exp(-((Date.now() - startedAt) / 1000) / 5)));
       function step() {
-        if (window.__halt) return;
+        if (window.__halt) { halt(); return; }
         // Persist a URL pushed live so a refresh a moment later can still navigate.
         if (window.__url && read('prep:url') !== window.__url) write('prep:url', window.__url);
         const ceiling = window.__done ? 1000 : 900 * (1 - Math.exp(-((Date.now() - startedAt) / 1000) / 5));

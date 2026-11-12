@@ -100,8 +100,10 @@ def main():
     for observed in actions:
         status, result = request_json(f"{learning}/api/sessions/{session_id}/actions", "POST", observed, token)
         expect(status, result)
-        if result["evaluation"]["outcome"] != "accepted":
-            raise RuntimeError(f"action was not accepted: {result}")
+        # A challenge gives no verdict until its debrief: each action is only "recorded". The final score
+        # below shows whether the route reached every goal.
+        if result["evaluation"]["outcome"] != "recorded" or result["evaluation"]["goals_progressed"]:
+            raise RuntimeError(f"a challenge action revealed more than that it was recorded: {result}")
 
     answer = {
         "finding": "payments",

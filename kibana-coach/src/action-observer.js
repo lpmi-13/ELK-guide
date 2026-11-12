@@ -16,6 +16,7 @@ class KibanaActionObserver {
     this.lastTimeSignature = this.timeSignature();
     this.lastSort = this.sortSignature();
     this.rebaselineFilters();
+    this.deliverPivot();
     this.timePoll = setInterval(() => {
       if (this.adapter.performing) {
         this.coachActed = true;
@@ -58,7 +59,7 @@ class KibanaActionObserver {
   // baseline; the click that applied them reports filter_added. A dashboard pill usually comes from a
   // click on a chart (a bar on the canvas, a legend entry's "Filter for") with no control to recognise,
   // so there a new pill reports filter_added itself.
-  captureFilterRemoval() {
+  captureFilterRemoval(since = null) {
     const filters = this.readFilterPills();
     const key = filter => `${filter.negate ? '-' : ''}${filter.field}=${filter.value}`;
     const active = new Set(filters.filter(filter => !filter.disabled).map(key));
@@ -72,43 +73,87 @@ class KibanaActionObserver {
     }
     if (!lost.length) return;
     const disabled = lost.every(filter => filters.some(item => item.disabled && key(item) === key(filter)));
-    this.reportWithCount({type: disabled ? 'filter_disabled' : 'filter_removed', details: {...lost[0]}, state_after: {filters, query: this.queryValue()}});
+    this.reportWithCount({type: disabled ? 'filter_disabled' : 'filter_removed', details: {...lost[0]}, state_after: {filters, query: this.queryValue()}}, since);
   }
 
   stop() {
+    this.stopped = true;
     document.removeEventListener('click', this.boundClick, true);
     document.removeEventListener('keydown', this.boundKey, true);
     clearInterval(this.timePoll);
+    clearInterval(this.pivotWatch);
   }
+
+  // Wait up to `timeout` ms for `check()` to return something truthy, and resolve with it (or null).
+  waitUntil(check, timeout) {
+    return new Promise(resolve => {
+      const startedAt = Date.now();
+      const poll = () => {
+        let value = null;
+        try { value = check(); } catch (_error) { value = null; }
+        if (value) resolve(value);
+        else if (this.stopped || Date.now() - startedAt >= timeout) resolve(null);
+        else setTimeout(poll, 50);
+      };
+      poll();
+    });
+  }
+
+  // How many searches Kibana had started when an action began (see kibana-bootstrap.js).
+  searchMark() { return globalThis.__coachSearches?.started ?? 0; }
 
   queryValue() { return this.adapter.resolve('kibana.query_bar')?.value || ''; }
 
-  // How many documents Discover shows once the search settles: 0 on its "No results" prompt, the
-  // hit counter otherwise, null when it can't tell (another app, or still loading at the deadline).
-  // A search that leaves nothing to read is a dead end, so the service must see the count rather
-  // than accept a query that merely mentions the right field and value.
-  async resultCount(timeout = 8000, fetchGrace = 1000) {
-    if (this.appName() !== 'discover') return null;
+  // How many documents Discover shows once the search an action started has settled, and whether it
+  // did. A search action (a submitted query, an added or removed pill) always refetches in Discover
+  // (verified 9.5.2, even for an unchanged query), and the previous hit count stays on screen until that
+  // search returns, so its count is read only after a search begun since the action (`since`, a
+  // searchMark()) has finished and Discover's busy markers (the grid's "updating" overlay, the loading
+  // spinner) have cleared. If none starts before `timeout` the result is unsettled: count null, settled
+  // false, and the service won't let it complete a step. Without `requireSearch` (a restored search,
+  // say) a view that shows no search within `fetchGrace` is read as it stands. `settled` is null outside
+  // Discover's document view (another app, an ES|QL chart), where there is no count to read.
+  async searchOutcome({timeout = KibanaActionObserver.SEARCH_WAIT_MS, fetchGrace = 1000, since = null, requireSearch = false} = {}) {
+    if (this.appName() !== 'discover') return {count: null, settled: null};
     const resultsUi = () => document.querySelector("[data-test-subj='discoverQueryHits']") || KibanaActionObserver.noResultsShown();
-    if (!resultsUi()) return null; // not a document view (e.g. an ES|QL chart), nothing to count
-    // Discover keeps the previous hit count on screen for the ~1s its refetch takes, and Kibana's
-    // global loading indicator does not track that search. So wait for Discover's own busy markers
-    // (verified 9.5.2: the grid's "updating" overlay, the loading spinner) to appear and then clear;
-    // if none shows within `fetchGrace`, no refetch happened and the count on screen is current.
+    if (!resultsUi()) return {count: null, settled: null};
     const busy = () => document.querySelector("[data-test-subj='discoverDataGridUpdating'], [data-test-subj='loadingSpinner'], [data-test-subj='globalLoadingIndicator']");
+    const network = () => globalThis.__coachSearches;
+    const mark = since ?? this.searchMark();
     const startedAt = Date.now();
     let sawBusy = false;
+    let sawSearch = false;
     while (Date.now() - startedAt < timeout) {
+      const searches = network();
+      if (searches && searches.started > mark) sawSearch = true;
+      const searching = Boolean(searches?.inFlight);
       if (busy()) sawBusy = true;
-      else if (sawBusy || Date.now() - startedAt > fetchGrace) {
-        if (KibanaActionObserver.noResultsShown()) return 0;
+      else if (!searching && (sawBusy || sawSearch || (!requireSearch && Date.now() - startedAt > fetchGrace))) {
+        if (KibanaActionObserver.noResultsShown()) return {count: 0, settled: true};
         const hits = document.querySelector("[data-test-subj='discoverQueryHits']")?.textContent || '';
         const count = Number(hits.replace(/[^\d]/g, ''));
-        if (hits && Number.isFinite(count)) return count;
+        if (hits && Number.isFinite(count)) return {count, settled: true};
       }
       await new Promise(resolve => setTimeout(resolve, 50));
     }
-    return null;
+    return {count: null, settled: false};
+  }
+
+  // The settled count alone (null when unknown). Kept for callers that only need the number.
+  async resultCount(timeout = 8000, fetchGrace = 1000) {
+    return (await this.searchOutcome({timeout, fetchGrace})).count;
+  }
+
+  // The open document viewer, or null.
+  static documentViewer() {
+    const viewer = document.querySelector("[data-test-subj='docViewerFlyout']");
+    return viewer && viewer.getClientRects().length ? viewer : null;
+  }
+
+  // A field's open preview popover (its header), or null.
+  fieldPopover() {
+    const header = document.querySelector("[data-popover-panel] [data-test-subj='fieldPopoverHeader_fieldDisplayName']");
+    return header && header.getClientRects().length ? header : null;
   }
 
   static noResultsShown() {
@@ -116,10 +161,14 @@ class KibanaActionObserver {
     return Boolean(prompt && prompt.getClientRects().length);
   }
 
-  // Report a search-shaping action once its results settle, carrying the measured count.
-  reportWithCount(action) {
-    this.resultCount().then(count => {
-      if (count != null) action.state_after = {...(action.state_after || {}), result_count: count};
+  // Report a search-shaping action once its search settles, carrying the measured count — or, if it
+  // never settled, saying so (result_settled: false) so the service does not take a stale view as its result.
+  reportWithCount(action, since = null) {
+    this.searchOutcome({since, requireSearch: true}).then(({count, settled}) => {
+      if (this.stopped) return;
+      action.state_after = {...(action.state_after || {})};
+      if (count != null) action.state_after.result_count = count;
+      if (settled === false) action.state_after.result_settled = false;
       this.report(action);
     });
   }
@@ -184,7 +233,11 @@ class KibanaActionObserver {
       return [{type: 'alert_opened', details: {value}, state_after: {app: 'alerts'}}, {type: 'alert_reason_inspected', details: {value}, state_after: {app: 'alerts'}}];
     }
     if (subject === 'relatedAlertsTab') return [{type: 'alert_history_inspected', details: {}, state_after: {app: 'alerts'}}];
-    if (subject.startsWith('alertDetailsPage_viewInDiscover_')) return [{type: 'alert_source_opened', details: {}, state_after: {app: 'alerts'}}];
+    if (subject.startsWith('alertDetailsPage_viewInDiscover_')) {
+      // A pivot: reported from Discover once it opens there (see holdPivot).
+      this.holdPivot({type: 'alert_source_opened', details: {}, state_after: {app: 'alerts'}});
+      return [];
+    }
     return null;
   }
 
@@ -390,20 +443,22 @@ class KibanaActionObserver {
 
   onKey(event) {
     if (this.adapter.performing || event.key !== 'Enter') return;
+    const mark = this.searchMark();
     if (event.target === this.adapter.resolve('kibana.query_bar')) {
       const query = event.target.value;
-      setTimeout(() => this.reportSearch(query), 50);
+      setTimeout(() => this.reportSearch(query, mark), 50);
     } else if ((event.ctrlKey || event.metaKey) && event.target.closest?.("[data-test-subj='ESQLEditor']")) {
       // The ES|QL editor runs its query on Ctrl/Cmd+Enter (plain Enter is a new line).
-      setTimeout(() => this.reportSearch(), 50);
+      setTimeout(() => this.reportSearch(null, mark), 50);
     }
   }
 
   // Report a submitted search once Discover settles, as KQL or ES|QL by what Discover's URL state
   // says then: in 9.5 the ES|QL editor is Monaco (no textarea value to read) and shares the KQL
   // bar's querySubmitButton, so neither the clicked control nor the editor tells them apart.
-  reportSearch(kqlQuery = null) {
-    this.resultCount().then(count => {
+  reportSearch(kqlQuery = null, since = null) {
+    this.searchOutcome({since, requireSearch: true}).then(({count, settled}) => {
+      if (this.stopped) return;
       const view = this.adapter.currentView?.();
       const esql = view?.language === 'esql';
       const query = esql ? view.query : (kqlQuery ?? this.queryValue());
@@ -411,6 +466,60 @@ class KibanaActionObserver {
         ? {type: 'esql_submitted', details: {query, language: 'esql'}, state_after: {query, query_language: 'esql'}}
         : {type: 'query_submitted', details: {query, language: 'kql'}, state_after: {...this.searchState(), query, query_language: 'kql'}};
       if (count != null) action.state_after.result_count = count;
+      if (settled === false) action.state_after.result_settled = false;
+      this.report(action);
+    });
+  }
+
+  // A pivot to another page (Explore in Discover, View in Discover) counts once that page is reached,
+  // not when its control is clicked: a click that goes nowhere must not complete a step. The action is
+  // held in this tab's sessionStorage, so the destination page's observer reports it (the coach
+  // reconnects there); a pivot that has not arrived within PIVOT_WAIT_MS is dropped.
+  holdPivot(action) {
+    const pending = {action, from: `${location.pathname}${location.search || ''}${location.hash || ''}`, app: this.appName(), at: Date.now()};
+    try { sessionStorage.setItem(KibanaActionObserver.PIVOT_KEY, JSON.stringify(pending)); } catch (_error) { return; }
+    clearInterval(this.pivotWatch);
+    // Kibana may also move within the page (no reload): then this observer delivers it.
+    this.pivotWatch = setInterval(() => {
+      if (this.appName() !== pending.app) {
+        clearInterval(this.pivotWatch);
+        this.deliverPivot();
+      } else if (Date.now() - pending.at > KibanaActionObserver.PIVOT_WAIT_MS) {
+        clearInterval(this.pivotWatch);
+        try { sessionStorage.removeItem(KibanaActionObserver.PIVOT_KEY); } catch (_error) { /* storage unavailable */ }
+      }
+    }, 250);
+  }
+
+  // Report a pivot held by the page it came from, now that it has arrived here.
+  deliverPivot() {
+    let pending = null;
+    try { pending = JSON.parse(sessionStorage.getItem(KibanaActionObserver.PIVOT_KEY) || 'null'); } catch (_error) { pending = null; }
+    if (!pending?.action) return;
+    if (Date.now() - pending.at > KibanaActionObserver.PIVOT_WAIT_MS + 30000 || this.appName() === pending.app) {
+      // Too old to be this navigation, or still on the page it came from (the poll above decides there).
+      if (this.appName() !== pending.app) sessionStorage.removeItem(KibanaActionObserver.PIVOT_KEY);
+      return;
+    }
+    sessionStorage.removeItem(KibanaActionObserver.PIVOT_KEY);
+    // Both pivots open a Kibana /app/r locator link, which the page then redirects to Discover in place
+    // (the coach starts while it is still on /app/r): wait for the destination itself.
+    const destination = this.appName() === 'r'
+      ? this.waitUntil(() => (this.appName() !== 'r' ? this.appName() : null), KibanaActionObserver.SEARCH_WAIT_MS * 2)
+      : Promise.resolve(this.appName());
+    // Discover is the destination of both pivots: report once its results are on screen and no search
+    // is still running (a fresh page has no stale count to wait out). One that never shows them is not
+    // reported. Another destination counts on arrival.
+    const resultsShown = () => document.querySelector("[data-test-subj='discoverQueryHits']") || KibanaActionObserver.noResultsShown();
+    let app = '';
+    destination.then(reached => {
+      app = reached || '';
+      if (!app) return null;
+      return app === 'discover' ? this.waitUntil(resultsShown, KibanaActionObserver.SEARCH_WAIT_MS * 2) : true;
+    }).then(shown => (shown ? (app === 'discover' ? this.searchOutcome({since: -1}) : {count: null}) : null)).then(outcome => {
+      if (!outcome || this.stopped) return;
+      const action = {...pending.action, state_after: {...(pending.action.state_after || {}), app, arrived_from: pending.app}};
+      if (outcome.count != null) action.state_after.result_count = outcome.count;
       this.report(action);
     });
   }
@@ -442,7 +551,7 @@ class KibanaActionObserver {
         const language = this.adapter.currentView?.()?.language || (this.adapter.resolve('kibana.esql_editor') ? 'esql' : 'kql');
         this.report({type: 'query_language_changed', details: {language}, state_after: {query_language: language}});
       }, 1500);
-    } else if (/superDatePickerApplyTimeButton|euiQuickSelect__applyButton|dateRangePicker\w*Apply|dateRangePickerPresetItem|CommonlyUsed|superDatePickerQuickMenu/i.test(subject)) {
+    } else if (/superDatePickerApplyTimeButton|euiQuickSelect__applyButton|dateRangePicker\w*Apply|dateRangePickerPresetItem-|superDatePickerCommonlyUsed_/i.test(subject)) {
       // A window was applied — via custom-range Apply (`dateRangePickerCustomRangeApplyButton`),
       // or a preset / recent quick pick. In Kibana 9.5.2 both the Presets and Recent lists render
       // each option as `dateRangePickerPresetItem-<label>` (e.g. Last_15_minutes, now-30m-now),
@@ -462,14 +571,22 @@ class KibanaActionObserver {
       // the negate state, so it only matched one pack and never lit the filter-out route.
       // A chart legend's Filter for / Filter out (`legend-<value>-filterIn|Out`, verified 9.5.2) lands here
       // too; the poll must leave that pill to this report.
+      // The pill appears a moment after the click (after Save, or once the popover closes); report the
+      // one this click added, with its search's settled count. A click that adds no pill (Save on an
+      // incomplete filter, a value already filtered) is no filter_added, and an existing pill is never
+      // reported in its place.
+      const before = this.readFilterPills();
+      const key = filter => `${filter.negate ? '-' : ''}${filter.field}=${filter.value}${filter.disabled ? '/off' : ''}`;
+      const known = new Set(before.map(key));
+      const mark = this.searchMark();
       this.filterClickPending = true;
-      setTimeout(() => {
-        const filters = this.readFilterPills();
-        const latest = filters[filters.length - 1] || {};
-        this.lastFilters = filters;
+      this.waitUntil(() => this.readFilterPills().find(filter => !filter.disabled && !known.has(key(filter))), KibanaActionObserver.UI_WAIT_MS).then(added => {
         this.filterClickPending = false;
-        this.reportWithCount({type: 'filter_added', details: {...latest}, state_after: {filters, query: this.queryValue()}});
-      }, 250);
+        const filters = this.readFilterPills();
+        this.lastFilters = filters;
+        if (!added || this.stopped) return;
+        this.reportWithCount({type: 'filter_added', details: {...added}, state_after: {filters, query: this.queryValue()}}, mark);
+      });
     } else if (/fieldToggle|fieldPopoverHeader_addField|FieldListPanel(Add|Remove)|dscFieldDetails(Add|Remove)|removeColumn|add.?column|remove.?column/i.test(subject)) {
       // Column add/remove. `fieldToggle-<field>` is the verified 9.5.2 field-list toggle; it
       // both adds and removes, and its aria-label ("Add field as column" / "Remove field
@@ -479,7 +596,8 @@ class KibanaActionObserver {
       this.report({type: removing ? 'column_removed' : 'column_added', details: {field: this.fieldFromSubject(subject, event.target)}});
     } else if (/filter.*(remove|delete|disable)|(remove|delete|disable).*filter/i.test(subject)) {
       // Read which pill went, and what is left, once Kibana has applied the change.
-      setTimeout(() => this.captureFilterRemoval(), 300);
+      const mark = this.searchMark();
+      setTimeout(() => this.captureFilterRemoval(mark), 300);
     } else if (/superDatePicker.*[Rr]efresh|refreshInterval|autoRefresh/i.test(subject)) {
       // Auto-refresh interval / pause toggle. Kibana 9.5.2 Discover ships the new
       // dateRangePicker with NO auto-refresh control (verified: no refresh-* subj on the
@@ -494,18 +612,32 @@ class KibanaActionObserver {
       // field name. That lets a survey step validate WHICH field's distribution was inspected.
       const containerSubject = this.fieldPreviewSubject(event.target);
       const field = containerSubject.replace(/^dscFieldListPanelField-/, '').replace(/^field-/, '').replace(/-showDetails$/, '');
-      this.report({type: 'field_statistics_opened', details: {field, subject: containerSubject}});
+      // Only once its popover is open (verified 9.5.2: `fieldPopoverHeader_fieldDisplayName` in the
+      // popover panel). The same button closes an open popover, and a closing click opens nothing.
+      const wasOpen = Boolean(this.fieldPopover());
+      this.waitUntil(() => !wasOpen && this.fieldPopover(), KibanaActionObserver.UI_WAIT_MS).then(open => {
+        if (open && !this.stopped) this.report({type: 'field_statistics_opened', details: {field, subject: containerSubject}});
+      });
     } else if (/surrounding/i.test(subject)) {
       this.report({type: 'surrounding_documents_opened', details: {subject}});
     } else if (/field.*(action|name|value)/i.test(subject)) {
       this.report({type: 'field_inspected', details: {subject}});
     } else if (subject === 'docTableExpandToggleColumn' || subject.includes('docTableExpand')) {
+      // Report the document once its viewer is open (verified 9.5.2: `docViewerFlyout`, ~750 ms after
+      // the click), reading the trace from it. A click that opens nothing reports nothing; the same
+      // toggle closes an open document, and moving to another row keeps the viewer open.
       const visibleTrace = this.adapter.resolve('kibana.first_trace_value')?.textContent?.trim() || '';
-      setTimeout(() => {
+      const wasOpen = Boolean(KibanaActionObserver.documentViewer());
+      const opened = wasOpen
+        ? new Promise(resolve => setTimeout(() => resolve(KibanaActionObserver.documentViewer()), 400))
+        : this.waitUntil(() => KibanaActionObserver.documentViewer(), KibanaActionObserver.DOCUMENT_WAIT_MS);
+      opened.then(viewer => {
+        if (!viewer || this.stopped) return;
         const expanded = this.adapter.resolve('kibana.trace_field');
-        const trace = visibleTrace || (expanded?.matches?.("[data-test-subj='tableDocViewRow-trace.id-value']") ? expanded.textContent.trim() : '');
+        const inViewer = expanded?.matches?.("[data-test-subj='tableDocViewRow-trace.id-value']") ? expanded.textContent.trim() : '';
+        const trace = inViewer || visibleTrace;
         this.report({type: trace ? 'trace_opened' : 'document_expanded', details: {trace_id: trace}, state_after: {trace_id: trace}});
-      }, 350);
+      });
     } else if (/control-frame|controlGroup|optionsListControl/i.test(subject)) {
       this.report({type: 'dashboard_control_changed', details: {subject}, state_after: {app: 'dashboard'}});
     } else if (/openInspector|inspectPanel/i.test(subject)) {
@@ -514,8 +646,9 @@ class KibanaActionObserver {
       this.report({type: 'panel_inspected', details: {subject, panel: this.panelTitle(node)}, state_after: {app: 'dashboard'}});
     } else if (/underlyingData|viewData|OPEN_IN_DISCOVER/i.test(subject)) {
       // "Explore in Discover" (`embeddablePanelAction-ACTION_OPEN_IN_DISCOVER`, verified 9.5.2) opens the
-      // panel's records with its filters and time; the dashboard adapter keeps it in this tab.
-      this.report({type: 'panel_underlying_data_opened', details: {subject, panel: this.panelTitle(node)}, state_after: {app: 'dashboard'}});
+      // panel's records with its filters and time; the dashboard adapter keeps it in this tab. A pivot:
+      // reported from Discover once it opens there (see holdPivot).
+      this.holdPivot({type: 'panel_underlying_data_opened', details: {subject, panel: this.panelTitle(node)}, state_after: {app: 'dashboard'}});
     } else if (/drilldown/i.test(subject)) {
       this.report({type: 'panel_drilldown_opened', details: {subject}, state_after: {app: 'dashboard'}});
     } else if (/transactionSample|traceSample/i.test(subject)) {
@@ -545,5 +678,13 @@ class KibanaActionObserver {
     }
   }
 }
+
+// How long a click's result may take to appear (a pill, a popover), a document to open, and a pivot to
+// reach its page before the click is taken to have done nothing.
+KibanaActionObserver.SEARCH_WAIT_MS = 8000;
+KibanaActionObserver.UI_WAIT_MS = 3000;
+KibanaActionObserver.DOCUMENT_WAIT_MS = 8000;
+KibanaActionObserver.PIVOT_WAIT_MS = 10000;
+KibanaActionObserver.PIVOT_KEY = 'incident-coach:pending-pivot';
 
 globalThis.KibanaActionObserver = KibanaActionObserver;

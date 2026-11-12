@@ -2,7 +2,7 @@
   "schema_version": 2,
   "id": "deployment-version-regression",
   "version": 4,
-  "title": "Deployment version regression",
+  "title": "Unhealthy instances after a rollout",
   "type": "investigation",
   "classification": "core",
   "difficulty": 2,

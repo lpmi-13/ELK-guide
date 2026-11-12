@@ -1,0 +1,14 @@
+{
+  "name": "elk-guide-kibana-coach",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tests and the protocol type check for the built-in Kibana coach, which ships as plain scripts. tsconfig.json checks the generated protocol samples and session-client.js strictly against protocol/protocol.d.ts; tsconfig.coach.json checks how content-script.js reads the protocol.",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.coach.json",
+    "check:protocol": "python3 ../scripts/generate-protocol-samples.py && npm run typecheck"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

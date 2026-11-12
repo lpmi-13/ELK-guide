@@ -79,7 +79,8 @@ MVP_TRACK = os.getenv("SCENARIO_TRACK", "mvp")
 
 
 def in_mvp_track(entry):
-    return entry.get("track") == MVP_TRACK
+    # SCENARIO_TRACK=all offers every pack (the catalog-wide browser sweep starts them from the launcher).
+    return MVP_TRACK == "all" or entry.get("track") == MVP_TRACK
 
 
 def now_iso():
@@ -1259,6 +1260,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         parts = parsed.path.strip("/").split("/")
         try:
+            if parsed.path == "/api/orphans/reclaim":
+                try:
+                    reclaimed = reclaim_orphaned_runs()
+                except (RuntimeError, OSError, URLError) as error:
+                    self.respond(502, {"error": str(error)})
+                    return
+                self.respond(200, {"reclaimed": reclaimed})
+                return
             if parsed.path == "/api/runs":
                 run = create_run(scenario_name=payload.get("scenario"), scenario_key=payload["scenario_key"]) if "scenario_key" in payload else create_run(payload.get("seed"), payload.get("scenario"))
                 self.respond(202, run)
@@ -1268,12 +1277,18 @@ class Handler(BaseHTTPRequestHandler):
                 if not existing:
                     self.respond(404, {"error": "run not found"})
                     return
-                stop_run(parts[2])
                 scenario = existing["manifest"]["template_id"]
+                # Check the replay request before stopping anything: a rejected key or seed must leave the
+                # existing (possibly completed) run, its Space and its evidence untouched.
+                if "scenario_key" in payload:
+                    scenario_key_seed(payload["scenario_key"])
+                else:
+                    seed = payload.get("seed", existing["manifest"]["seed"])
+                    normalize_seed(seed)
+                stop_run(parts[2])
                 if "scenario_key" in payload:
                     run = create_run(scenario_name=scenario, scenario_key=payload["scenario_key"])
                 else:
-                    seed = payload.get("seed", existing["manifest"]["seed"])
                     run = create_run(seed, scenario)
                 self.respond(202, run)
                 return
@@ -1378,9 +1393,60 @@ def ensure_lifecycle_management():
             emit(f"lifecycle bootstrap: {label} unreachable", "WARN", action="lifecycle", error=str(error))
 
 
+ORPHAN_SPACE = re.compile(r"lab-[0-9a-f]{12}")
+RECLAIM_WORKERS = 4
+reclaim_lock = threading.Lock()
+last_reclaim = {"finished": float("-inf"), "spaces": []}
+
+
+def reclaim_orphan(space_id):
+    run_id = f"run-{space_id.removeprefix('lab-')}"
+    cleanup_run({"manifest": {"run_id": run_id, "space_id": space_id, "scenario": {"cleanup": {}, "provisioning": {"strategies": []}}}})
+
+
+def reclaim_orphaned_runs():
+    """Delete the Spaces and run data of runs this controller no longer knows, and return their Space ids.
+
+    Runs live only in this process, so a restart forgets every run: one waiting out its completed-run
+    retention, one a learner abandoned, the previous auto-started run. Their Spaces and data would stay
+    forever (Kibana's space selector filled with hundreds of them), and no session can reach them any
+    more — the learning service reports such a session as ended. Only Spaces this controller names
+    (``lab-`` and twelve hex digits) are touched, and never a live run's: a run is registered before
+    its Space is created, so every Space listed here that belongs to a live run is already in ``runs``.
+
+    One pass runs at a time. A caller that arrives while a pass is under way (build-all.sh asking just
+    after the boot pass started) waits for it and gets its result instead of listing again.
+    """
+    arrived = time.monotonic()
+    with reclaim_lock:
+        if last_reclaim["finished"] > arrived:
+            return list(last_reclaim["spaces"])
+        status, spaces = kibana_json("/api/spaces/space", timeout=30)
+        if status >= 400 or not isinstance(spaces, list):
+            raise RuntimeError(f"Kibana did not list its Spaces (HTTP {status})")
+        with state_lock:
+            live = {run["manifest"].get("space_id") for run in runs.values()}
+        orphans = [space["id"] for space in spaces if ORPHAN_SPACE.fullmatch(str(space.get("id", ""))) and space["id"] not in live]
+        with ThreadPoolExecutor(max_workers=RECLAIM_WORKERS) as pool:
+            list(pool.map(reclaim_orphan, orphans))
+        if orphans:
+            emit("reclaimed orphaned runs", action="reclaimed", count=len(orphans))
+        last_reclaim.update(finished=time.monotonic(), spaces=orphans)
+        return orphans
+
+
+def reclaim_at_boot():
+    try:
+        reclaim_orphaned_runs()
+    except (RuntimeError, OSError, URLError) as error:
+        emit("could not reclaim orphaned runs", "WARN", action="reclaimed", error=str(error))
+
+
 if __name__ == "__main__":
     MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
     ensure_lifecycle_management()
     if AUTO_START:
         create_run()
+    if os.getenv("RECLAIM_ORPHANED_RUNS", "true").lower() != "false":
+        threading.Thread(target=reclaim_at_boot, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
