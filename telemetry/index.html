@@ -482,7 +482,11 @@
         // Persist first so a refresh mid-handoff can still land, then hand the URL
         // to the prep page: it fills the bar, then navigates itself.
         persistTab({'prep:url': investigationUrl});
-        if (signalTab({__url: investigationUrl, __done: true})) clearLaunchStatus();
+        const signaled = signalTab({__url: investigationUrl, __done: true});
+        // Animation frames pause in a hidden preparation tab. Wake its handoff
+        // independently so readiness never waits for that tab to become visible.
+        try { investigationTab?.postMessage({type: 'prep:ready'}, location.origin); } catch (_error) { /* tab may have closed */ }
+        if (signaled) clearLaunchStatus();
         else revealManualOpen('Investigation ready.');
       } else if (coachRuntimeResolved) {
         launched = true;

@@ -73,15 +73,24 @@
       const fresh = !startedAt;
       if (fresh) { startedAt = Date.now(); write('prep:started', String(startedAt)); }
       let shown = fresh ? 40 : Math.min(985, 900 * (1 - Math.exp(-((Date.now() - startedAt) / 1000) / 5)));
-      function step() {
+      let lastFrame = performance.now(), doneAt = null, doneFrom = shown;
+      function step(now) {
         if (window.__halt) { halt(); return; }
         // Persist a URL pushed live so a refresh a moment later can still navigate.
         if (window.__url && read('prep:url') !== window.__url) write('prep:url', window.__url);
-        const ceiling = window.__done ? 1000 : 900 * (1 - Math.exp(-((Date.now() - startedAt) / 1000) / 5));
-        shown += (ceiling - shown) * (window.__done ? 0.2 : 0.08);
-        if (!window.__done && shown > 985) shown = 985;
-        bar.value = Math.min(Math.round(shown), 1000);
-        if (window.__done && shown >= 999) {
+        if (window.__done) {
+          if (doneAt == null) { doneAt = now; doneFrom = shown; }
+          const fraction = Math.min(1, (now - doneAt) / 650);
+          shown = doneFrom + (1000 - doneFrom) * (1 - (1 - fraction) ** 3);
+        } else {
+          const ceiling = 900 * (1 - Math.exp(-((Date.now() - startedAt) / 1000) / 5));
+          const elapsed = Math.max(0, now - lastFrame) / 1000;
+          shown = Math.min(985, Math.max(shown, shown + (ceiling - shown) * (1 - Math.exp(-elapsed / .2))));
+        }
+        lastFrame = now;
+        const value = Math.min(Math.round(shown), 1000);
+        if (bar.value !== value) bar.value = value;
+        if (window.__done && now - doneAt >= 650) {
           bar.value = 1000;
           document.title = 'Opening Kibana…';
           if (window.__url) location.replace(window.__url);
@@ -89,6 +98,16 @@
         }
         requestAnimationFrame(step);
       }
+      // A hidden tab may have its animation frames suspended. The opener also
+      // sends a readiness message so handoff never waits for a paint to resume.
+      window.addEventListener('message', event => {
+        if (!window.opener || event.source !== window.opener || event.origin !== location.origin || event.data?.type !== 'prep:ready') return;
+        const url = window.__url || read('prep:url');
+        if (!url) return;
+        window.__url = url;
+        window.__done = true;
+        if (document.hidden) location.replace(url);
+      });
       requestAnimationFrame(step);
     })();
   </script>
@@ -104,9 +123,11 @@
       if (!btx || !ctx) return;
       const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       const TAU = Math.PI * 2, rand = (lo, hi) => lo + Math.random() * (hi - lo);
-      // Everything is drawn as batched strokes on a half-resolution layer so it
+      // Everything is drawn as batched strokes on a reduced-resolution layer so it
       // stays smooth on CPU-only machines; the static board keeps full resolution.
-      const LEVELS = 8, CHUNK = 3;
+      // Wider chunks keep the moving glow continuous while avoiding thousands of
+      // tiny canvas path segments on each frame.
+      const LEVELS = 5, CHUNK = 8;
       const GRID = 20, STEP = 3, PITCH = 7, MAX_POINTS = 70000;
       const DIRS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
       let W = 0, H = 0, dpr = 1, lay = .5, t = 0, total = 0, xs, ys, en, lines = [], banks = [], near = new Map();
@@ -173,7 +194,9 @@
       function build() {
         dpr = Math.min(window.devicePixelRatio || 1, 1.5);
         W = window.innerWidth; H = window.innerHeight;
-        lay = Math.min(.75, .5 * dpr);
+        // The moving current is a glow over the sharp, full-resolution board.
+        // Rasterising that glow more finely costs paint time without adding detail.
+        lay = Math.min(.5, .35 * dpr);
         board.width = Math.round(W * dpr); board.height = Math.round(H * dpr);
         canvas.width = Math.round(W * lay); canvas.height = Math.round(H * lay);
         xs = new Float32Array(MAX_POINTS); ys = new Float32Array(MAX_POINTS); en = new Float32Array(MAX_POINTS);
@@ -228,14 +251,16 @@
       const spark = (x, y, o = {}) => sparks.push({ x, y, age: 0, life: o.life ?? rand(.08, .2), reach: o.reach ?? rand(16, 34), heading: o.heading ?? rand(0, TAU), power: o.power ?? 1 });
 
       // Match the visible progress bar: current becomes more frequent, faster and
-      // brighter in proportion to preparation, then surges across the board when ready.
+      // brighter in proportion to preparation.
       const progress = document.getElementById('p');
-      let nextBank = .2, swept = false;
+      let nextBank = .2;
       const fade = τ => Math.exp(-1 / τ);
       function update(dt) {
         const intensity = Math.min(1, progress.value / progress.max);
         t += dt * (7 + 8 * intensity);
-        const bankRate = 3 + 9 * intensity;
+        // A few concurrent currents read clearly; lighting more banks mainly
+        // increases the number of strokes rasterised every frame.
+        const bankRate = 2 + 4 * intensity;
         nextBank -= dt;
         while (nextBank <= 0 && banks.length) {
           fireBank(banks[Math.floor(rand(0, banks.length))], {
@@ -243,11 +268,6 @@
             power: rand(.95 + .4 * intensity, 1.35 + .45 * intensity),
           });
           nextBank += rand(.7, 1.3) / bankRate;
-        }
-        // The ready signal adds the original one-time rush on top of the gradual build.
-        if (window.__done && !swept) {
-          swept = true;
-          banks.forEach(bank => fireBank(bank, { speed: 1500, power: 1.5, stagger: .05 }));
         }
         for (let i = pulses.length - 1; i >= 0; i--) {
           const p = pulses[i];
@@ -272,7 +292,7 @@
         }
         // Resting traces twinkle: brief glints scattered over the whole board.
         for (let n = Math.floor(dt * (70 + 70 * intensity) + Math.random()); n > 0 && total; n--) glints.push({ k: Math.floor(rand(0, total)), age: 0, life: rand(.12, .35), power: rand(.35, 1) });
-        const trace = Math.pow(fade(.75 + .35 * intensity), dt), pad = Math.pow(fade(1.3), dt);
+        const trace = Math.pow(fade(.5 + .2 * intensity), dt), pad = Math.pow(fade(1.1), dt);
         for (let k = 0; k < total; k++) if (en[k] > .004) en[k] *= trace; else en[k] = 0;
         for (const line of lines) { line.padA *= pad; line.padB *= pad; }
         // Short-lived effects survive until drawn at least once, so they still
@@ -319,16 +339,17 @@
           }
         }
         ctx.lineCap = 'butt';
-        for (const [width, color, gain] of [[14, '#0d72b1', .5], [6, '#19c6f3', .75], [2, '#8ff0ff', 1.3]]) {
-          ctx.lineWidth = width; ctx.strokeStyle = color;
-          buckets.forEach((chunks, level) => {
-            if (!chunks.length) return;
-            ctx.globalAlpha = Math.min(1, (level + .5) / LEVELS * 1.4 * gain);
-            ctx.beginPath();
-            for (let i = 0; i < chunks.length; i += 2) { ctx.moveTo(xs[chunks[i]], ys[chunks[i]]); ctx.lineTo(xs[chunks[i + 1]], ys[chunks[i + 1]]); }
-            ctx.stroke();
-          });
-        }
+        // The static board supplies the dark-blue trace. Draw the moving current
+        // in one pass, rather than rasterising the same full-screen paths three
+        // times for concentric glow layers.
+        ctx.lineWidth = 6; ctx.strokeStyle = '#19c6f3';
+        buckets.forEach((chunks, level) => {
+          if (!chunks.length) return;
+          ctx.globalAlpha = Math.min(1, (level + .5) / LEVELS * 1.4);
+          ctx.beginPath();
+          for (let i = 0; i < chunks.length; i += 2) { ctx.moveTo(xs[chunks[i]], ys[chunks[i]]); ctx.lineTo(xs[chunks[i + 1]], ys[chunks[i + 1]]); }
+          ctx.stroke();
+        });
         if (hot.length) {
           ctx.lineWidth = 1.3; ctx.strokeStyle = '#f4ffff'; ctx.globalAlpha = .85;
           ctx.beginPath();
@@ -375,6 +396,7 @@
       };
       let lastProbe = 0;
       window.addEventListener('pointermove', event => {
+        if (still || document.hidden || window.__halt || window.__done) return;
         const now = performance.now(); if (now - lastProbe < 90) return;
         const hit = nearest(event.clientX, event.clientY, 14); if (!hit) return;
         lastProbe = now;
@@ -383,6 +405,7 @@
         spark(xs[hit.point], ys[hit.point], { power: .8 });
       }, { passive: true });
       window.addEventListener('pointerdown', event => {
+        if (still || document.hidden || window.__halt || window.__done) return;
         const hit = nearest(event.clientX, event.clientY, 60); if (!hit) return;
         const at = (hit.point - hit.line.start) / hit.line.count;
         for (const line of hit.line.bank.lines) {
@@ -403,13 +426,23 @@
       window.addEventListener('resize', () => { clearTimeout(rebuild); rebuild = setTimeout(build, 150); });
       // Keep real time even when frames are scarce, and cap at ~30fps to leave
       // the CPU to Kibana, which is booting in the background meanwhile.
-      let prev = performance.now(), drawn = -Infinity;
-      (function frame(now) {
-        requestAnimationFrame(frame);
+      let prev = performance.now(), drawn = -Infinity, pendingFrame = 0;
+      function scheduleFrame() {
+        if (!pendingFrame && !document.hidden && !window.__halt && !window.__done) pendingFrame = requestAnimationFrame(frame);
+      }
+      function frame(now) {
+        pendingFrame = 0;
+        if (document.hidden || window.__halt || window.__done) return;
+        scheduleFrame();
         if (now - drawn < 32) return;
         const dt = Math.min(.25, Math.max(0, now - prev) / 1000); prev = drawn = now;
         update(dt); draw();
-      })(prev);
+      }
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) { cancelAnimationFrame(pendingFrame); pendingFrame = 0; }
+        else { prev = performance.now(); scheduleFrame(); }
+      });
+      scheduleFrame();
     })();
   </script>
 </body>
