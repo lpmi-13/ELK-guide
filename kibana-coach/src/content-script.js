@@ -247,7 +247,8 @@ function startIncidentCoach() {
         coach.showCommand(command, command.goal_focus ? null : target);
         if (!command.goal_focus) coach.revealTarget?.(target);
         if (command.goal_focus) coach.showGoalFocus(await adapter.findEvidence({...command, evidence_focus: command.goal_focus}, controller.signal));
-        const pause = goalPause(command.narration);
+        // A chart-reading goal needs time to explain the visible pattern before the controls take over.
+        const pause = command.goal_focus ? readingPause(command.narration) : goalPause(command.narration);
         coach.startCountdown(pause);
         await readingBeatWait(pause, controller.signal);
         // Hand the card over to the live step's action narration.

@@ -48,6 +48,7 @@ async function makeDemo({carried = null} = {}) {
     waitForAdvance() { return new Promise(resolve => { calls.continueResult = resolve; }); }
     setPaused(paused) { this.paused = paused; this.onPause?.(paused); }
     showCommand() { calls.commands++; }
+    showGoalFocus() {}
     startCountdown(duration) { calls.countdowns.push(duration); }
     stopCountdown() {}
     resumeCountdown(remaining) { calls.resumes.push(remaining); }
@@ -163,6 +164,25 @@ test('pause freezes a reading beat; resume continues its remaining time without 
   demo.clock.advance(1);
   await Promise.resolve();
   await Promise.resolve();
+  assert.equal(demo.calls.actions, 1);
+});
+
+test('a chart-reading opening stays visible long enough to explain the time-window estimate', async () => {
+  const demo = await makeDemo();
+  const narration = JSON.parse(fs.readFileSync(new URL('../../learning/scenarios/discover-time-window/playbook.json', import.meta.url), 'utf8'))
+    .goal_overrides.scope.demonstration.narration;
+  await demo.client.onCommand({
+    command_id: 'read-histogram', mode: 'demonstration', type: 'set_time_range', target: 'time',
+    narration, goal_focus: {kind: 'histogram'},
+  });
+  await Promise.resolve();
+  const pause = demo.calls.countdowns[0];
+  assert.ok(pause >= 12000 && pause <= 15000);
+  demo.clock.advance(pause - 1);
+  await Promise.resolve();
+  assert.equal(demo.calls.actions, 0);
+  demo.clock.advance(1);
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(demo.calls.actions, 1);
 });
 
