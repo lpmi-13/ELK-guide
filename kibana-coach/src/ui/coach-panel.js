@@ -67,29 +67,36 @@ class IncidentCoachPanel {
     dragHandle.addEventListener('pointermove', event => this.moveDrag(event));
     dragHandle.addEventListener('pointerup', event => this.endDrag(event));
     dragHandle.addEventListener('pointercancel', event => this.endDrag(event));
+    this.updatePlacement = event => {
+      if (this.panel.hidden || this.dragging) return;
+      const target = this.activeTarget?.isConnected ? this.activeTarget : null;
+      // Nothing to dodge — no highlighted control and no open doc-viewer flyout — so leave the
+      // card where it rests rather than nudging it for every stray scroll or mutation.
+      if (!target && !this.findFlyout() && !this.findPopovers().length && !this.evidenceField && !this.evidenceFields.length && !this.evidenceTargets.length && !this.coversQueryBar() && event?.type !== 'resize') return;
+      if (target && this.spotlightRevealed) this.spotlight.show(target);
+      this.refreshEvidenceHighlights();
+      this.placeAwayFrom(target);
+    };
     this.reposition = event => {
       if (this.panel.hidden) return;
-      // Scroll fires this many times a second; coalesce to one update per frame so the glide isn't
-      // repeatedly retargeted mid-flight (which resets its easing and reads as a stutter).
-      if (this.repositionScheduled) return;
-      this.repositionScheduled = true;
-      requestAnimationFrame(() => {
-        this.repositionScheduled = false;
-        if (this.panel.hidden) return;
-        const target = this.activeTarget?.isConnected ? this.activeTarget : null;
-        // Nothing to dodge — no highlighted control and no open doc-viewer flyout — so leave the
-        // card where it rests rather than nudging it for every stray scroll or mutation.
-        if (this.dragging) return;
-        if (!target && !this.findFlyout() && !this.findPopovers().length && !this.evidenceField && !this.evidenceFields.length && !this.evidenceTargets.length && !this.coversQueryBar() && event?.type !== 'resize') return;
-        // Keep the panel clear of the control, but only re-dim/-highlight if the spotlight is
-        // already revealed — a guided step starts with nothing dimmed until the learner asks.
-        if (target && this.spotlightRevealed) this.spotlight.show(target);
-        this.refreshEvidenceHighlights();
-        this.placeAwayFrom(target);
+      // Scroll, resize and DOM mutations share one placement pass. Keep the
+      // latest event so a resize is not lost behind an earlier scroll.
+      if (event) this.placementEvent = event;
+      if (this.repositionFrame) return;
+      this.repositionFrame = requestAnimationFrame(() => {
+        this.repositionFrame = 0;
+        const event = this.placementEvent;
+        this.placementEvent = null;
+        if (this.mutationPlacement) {
+          this.mutationPlacement = false;
+          const open = !!this.findFlyout();
+          const watching = this.activeTarget?.isConnected || this.findPopovers().length || this.evidenceField || this.evidenceFields.length || this.evidenceTargets.length || this.coversQueryBar();
+          if (open === this.flyoutOpen && !watching && event?.type !== 'resize') return;
+          this.flyoutOpen = open;
+        }
+        this.updatePlacement(event);
       });
     };
-    window.addEventListener('resize', this.reposition);
-    window.addEventListener('scroll', this.reposition, true);
     // Expanding a result opens Kibana's doc-viewer flyout, docked over the right of the screen —
     // exactly where the card usually sits, so it would be hidden underneath. Popovers (the time
     // picker, a field's Top values, Add filter) open over the page the same way, and the step's own
@@ -98,18 +105,10 @@ class IncidentCoachPanel {
     // time). placeAwayFrom is sticky, so this only moves the card when it actually covers something
     // the learner needs; the open/closed flag skips the flood of unrelated mutations otherwise.
     this.flyoutObserver = new MutationObserver(() => {
-      if (this.flyoutCheckScheduled) return;
-      this.flyoutCheckScheduled = true;
-      requestAnimationFrame(() => {
-        this.flyoutCheckScheduled = false;
-        const open = !!this.findFlyout();
-        const watching = this.activeTarget?.isConnected || this.findPopovers().length || this.evidenceField || this.evidenceFields.length || this.evidenceTargets.length || this.coversQueryBar();
-        if (open === this.flyoutOpen && !watching) return;
-        this.flyoutOpen = open;
-        this.reposition();
-      });
+      if (this.panel.hidden) return;
+      this.mutationPlacement = true;
+      this.reposition();
     });
-    this.flyoutObserver.observe(document.body, {childList: true, subtree: true});
     this.root.querySelector('#pause').onclick = () => this.setPaused(!this.paused);
     this.root.querySelector('#advance').onclick = () => this.onAdvance?.();
     this.root.querySelector('#hint').onclick = () => this.revealHint();
@@ -123,6 +122,38 @@ class IncidentCoachPanel {
       event.preventDefault();
       this.onDiagnosis?.(Object.fromEntries(new FormData(event.target)));
     });
+  }
+
+  startObserving() {
+    if (!this.observing) {
+      this.observing = true;
+      window.addEventListener('resize', this.reposition);
+      window.addEventListener('scroll', this.reposition, true);
+    }
+    this.startWatchingMutations();
+  }
+
+  startWatchingMutations() {
+    if (this.watchingMutations || !document.body) return;
+    this.watchingMutations = true;
+    this.flyoutObserver.observe(document.body, {childList: true, subtree: true});
+  }
+
+  stopWatchingMutations() {
+    this.flyoutObserver.disconnect();
+    this.watchingMutations = false;
+    this.mutationPlacement = false;
+  }
+
+  stopObserving() {
+    if (!this.observing) return;
+    this.observing = false;
+    this.stopWatchingMutations();
+    window.removeEventListener('resize', this.reposition);
+    window.removeEventListener('scroll', this.reposition, true);
+    cancelAnimationFrame(this.repositionFrame);
+    this.repositionFrame = 0;
+    this.placementEvent = null;
   }
 
   renderAnswerSchema(schema = {}) {
@@ -764,11 +795,10 @@ class IncidentCoachPanel {
     }
   }
 
-  clampPosition(left, top) {
-    const rect = this.panel.getBoundingClientRect();
+  clampPosition(left, top, width, height) {
     return {
-      left: Math.round(Math.max(18, Math.min(left, Math.max(18, innerWidth - rect.width - 18)))),
-      top: Math.round(Math.max(72, Math.min(top, Math.max(72, innerHeight - Math.min(rect.height, innerHeight - 90) - 18)))),
+      left: Math.round(Math.max(18, Math.min(left, Math.max(18, innerWidth - width - 18)))),
+      top: Math.round(Math.max(72, Math.min(top, Math.max(72, innerHeight - Math.min(height, innerHeight - 90) - 18)))),
     };
   }
 
@@ -778,19 +808,38 @@ class IncidentCoachPanel {
     const handle = this.root.querySelector('header');
     handle.setPointerCapture(event.pointerId);
     const rect = this.panel.getBoundingClientRect();
-    this.dragging = {pointerId: event.pointerId, x: event.clientX - rect.left, y: event.clientY - rect.top};
+    this.dragging = {pointerId: event.pointerId, x: event.clientX - rect.left, y: event.clientY - rect.top,
+      width: rect.width, height: rect.height, pending: null};
     this.panel.style.transition = 'none';
     handle.classList.add('dragging');
   }
 
   moveDrag(event) {
     if (this.dragging?.pointerId !== event.pointerId) return;
-    this.pos = this.clampPosition(event.clientX - this.dragging.x, event.clientY - this.dragging.y);
+    this.dragging.pending = {left: event.clientX - this.dragging.x, top: event.clientY - this.dragging.y};
+    if (this.dragFrame) return;
+    this.dragFrame = requestAnimationFrame(() => {
+      this.dragFrame = 0;
+      this.flushDrag();
+    });
+  }
+
+  flushDrag() {
+    const drag = this.dragging;
+    if (!drag?.pending) return;
+    this.pos = this.clampPosition(drag.pending.left, drag.pending.top, drag.width, drag.height);
+    drag.pending = null;
     this.applyPosition(true);
   }
 
   endDrag(event) {
     if (this.dragging?.pointerId !== event.pointerId) return;
+    if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) {
+      this.dragging.pending = {left: event.clientX - this.dragging.x, top: event.clientY - this.dragging.y};
+    }
+    cancelAnimationFrame(this.dragFrame);
+    this.dragFrame = 0;
+    this.flushDrag();
     this.dragging = null;
     const handle = this.root.querySelector('header');
     if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
@@ -931,10 +980,11 @@ class IncidentCoachPanel {
     // taller can never spill past the bottom edge — it keeps the same margin as the sides and
     // scrolls inside if it truly can't fit. (CSS max-height is measured from the viewport top,
     // which stops guarding once the panel is placed lower down.)
-    this.panel.style.maxHeight = `${Math.max(160, innerHeight - this.pos.top - 18)}px`;
-    if (instant) {
+    const maxHeight = `${Math.max(160, innerHeight - this.pos.top - 18)}px`;
+    if (this.panel.style.maxHeight !== maxHeight) this.panel.style.maxHeight = maxHeight;
+    if (instant && !this.dragging) {
       void this.panel.offsetWidth; // flush the placement before re-enabling the transition
-      if (!this.dragging) this.panel.style.transition = '';
+      this.panel.style.transition = '';
     }
     this.appliedPos = {left: this.pos.left, top: this.pos.top};
   }
@@ -1046,6 +1096,7 @@ class IncidentCoachPanel {
   }
 
   stop() {
+    this.stopObserving();
     this.clearHint();
     this.briefing.close();
     this.clearEvidenceHighlights();
@@ -1094,8 +1145,8 @@ class IncidentCoachPanel {
     .stage-tick::after { content:"";position:absolute;left:6px;top:3px;width:4px;height:8px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(42deg); }
     @keyframes tick-pop { from{transform:scale(0)} to{transform:scale(1)} }
     #stage.celebrate-in { animation:celebrate-in .42s cubic-bezier(.22,1,.36,1); } @keyframes celebrate-in { from{opacity:0;transform:translateY(8px) scale(.99)} to{opacity:1;transform:none} }
-    .incident-spotlight { position:fixed;z-index:1;display:none;box-sizing:border-box;border:3px solid #ffb000;border-radius:7px;box-shadow:0 0 0 9999px #10182070;pointer-events:none;transition:all .25s; }
-    .incident-evidence-highlight { position:fixed;z-index:1;box-sizing:border-box;border:3px solid #ffb000;border-radius:7px;background:#ffb00018;box-shadow:0 0 0 2px #fff8;pointer-events:none;transition:all .25s; }
+    .incident-spotlight { position:fixed;z-index:1;display:none;box-sizing:border-box;border:3px solid #ffb000;border-radius:7px;box-shadow:0 0 0 9999px #10182070;pointer-events:none; }
+    .incident-evidence-highlight { position:fixed;z-index:1;box-sizing:border-box;border:3px solid #ffb000;border-radius:7px;background:#ffb00018;box-shadow:0 0 0 2px #fff8;pointer-events:none; }
     .incident-cursor { position:fixed;z-index:2;left:-12px;top:-12px;width:24px;height:24px;opacity:0;pointer-events:none;transition:transform var(--incident-cursor-duration, .65s) cubic-bezier(.4,.1,.6,.9),opacity .15s; }
     .incident-cursor.visible { opacity:1; }.incident-cursor:before { content:'➤';display:block;color:#ffb000;font-size:28px;filter:drop-shadow(0 2px 2px #0008);transform:rotate(-25deg); }
     .incident-cursor span { position:absolute;inset:0;border:2px solid #ffb000;border-radius:50%;opacity:0; }.incident-cursor.clicked span { animation:click-ring .5s; }

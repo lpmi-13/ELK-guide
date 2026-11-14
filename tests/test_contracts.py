@@ -225,7 +225,7 @@ class ContractTests(unittest.TestCase):
         client = (ROOT / "kibana-coach/src/session-client.js").read_text(encoding="utf-8")
         content = (ROOT / "kibana-coach/src/content-script.js").read_text(encoding="utf-8")
         learning_service = (ROOT / "learning-service/server.py").read_text(encoding="utf-8")
-        gateway = (ROOT / "kibana-gateway/nginx.conf").read_text(encoding="utf-8")
+        bootstrap = (ROOT / "kibana-coach/src/kibana-bootstrap.js").read_text(encoding="utf-8")
 
         # The report's moments are clock times beside how long ago they were, from the instants the
         # service sends, so they stay true however late the briefing is read.
@@ -251,7 +251,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("await coach.showBriefing(briefing)", content)
         self.assertIn('elif message_type == "briefing_ack":', learning_service)
         self.assertIn("build_incident_briefing(session)", learning_service)
-        self.assertIn("/incident-coach/assets/src/ui/incident-briefing.js", gateway)
+        self.assertIn("'src/ui/incident-briefing.js'", bootstrap)
         self.assertTrue((ROOT / "kibana-coach/assets/incident-signal.webp").is_file())
 
     def test_guided_mode_can_reopen_the_incident_briefing_without_a_pause_control(self):

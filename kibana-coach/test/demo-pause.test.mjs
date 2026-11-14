@@ -37,6 +37,9 @@ async function makeDemo({carried = null} = {}) {
   let adapter;
   class Coach {
     constructor() { coach = this; this.paused = false; this.briefing = {active: false}; }
+    startObserving() {}
+    stopWatchingMutations() {}
+    stopObserving() {}
     showRecovery(card) { this.phase = 'recovery'; calls.recoveries.push(card); }
     showRecoveryWorking(headline) { calls.working = headline; }
     celebrate(reason) { calls.celebrations.push(reason); }

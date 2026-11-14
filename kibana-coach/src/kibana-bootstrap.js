@@ -34,7 +34,7 @@
 // screen until they return). The action observer reads a result only after the search an action started
 // has come back, so an old hit count is never reported as the action's result. Installed here, before
 // Kibana's own code captures window.fetch.
-(function trackKibanaSearches() {
+function trackKibanaSearches() {
   const searchRequest = /\/internal\/(search|bsearch)\b|\/internal\/esql|\/api\/esql/;
   const state = {started: 0, finished: 0, failed: 0, inFlight: 0};
   window.__coachSearches = state;
@@ -53,7 +53,7 @@
     };
     return nativeFetch.apply(this, arguments).then(response => { settle(response.ok); return response; }, error => { settle(false); throw error; });
   };
-})();
+}
 
 // Seed the same local preferences as each Discover callout's Dismiss action
 // before the Kibana application starts, so the prompts never flash into view.
@@ -82,35 +82,49 @@ for (const key of [
   // we only ever hide a floating overlay, never Kibana's own content.
   const appShell = '#kibana-body, [data-test-subj="kibanaChrome"], .kbnAppWrapper, #app-fixed-viewport';
 
-  const hideSurvey = () => {
-    const body = document.body;
-    if (!body) return;
-    for (const child of Array.from(body.children)) {
-      if (child.nodeType !== 1) continue;
-      if (child.tagName === 'SCRIPT' || child.tagName === 'STYLE') continue;
-      if (child.style.display === 'none') continue;
-      if (child.matches(appShell) || child.querySelector(appShell)) continue;
-      if (surveyText.test(child.textContent || '')) {
-        // Neutralise, do not detach: React keeps managing the node, so its later
-        // updates and unmount stay valid. !important overrides the survey's own styles.
-        child.style.setProperty('display', 'none', 'important');
-      }
-    }
-  };
-
   const start = () => {
-    let scheduled = false;
-    const sweep = () => {
-      scheduled = false;
-      hideSurvey();
+    const body = document.body;
+    const portalObservers = new Map();
+    const watch = child => {
+      if (child.nodeType !== 1 || child.tagName === 'SCRIPT' || child.tagName === 'STYLE') return;
+      if (portalObservers.has(child)) return;
+      if (child.matches(appShell) || child.querySelector(appShell)) return;
+      const inspect = () => {
+        if (child.style.display === 'none') return true;
+        if (child.matches(appShell) || child.querySelector(appShell)) return true;
+        if (!surveyText.test(child.textContent || '')) return false;
+        // Keep the React-owned portal attached so its later unmount remains valid.
+        child.style.setProperty('display', 'none', 'important');
+        return true;
+      };
+      if (inspect()) return;
+      let scheduled = false;
+      const observer = new MutationObserver(() => {
+        if (scheduled) return;
+        scheduled = true;
+        requestAnimationFrame(() => {
+          scheduled = false;
+          if (!child.isConnected || inspect()) {
+            observer.disconnect();
+            portalObservers.delete(child);
+          }
+        });
+      });
+      observer.observe(child, {childList: true, subtree: true, characterData: true});
+      portalObservers.set(child, observer);
     };
-    const observer = new MutationObserver(() => {
-      if (scheduled) return;
-      scheduled = true;
-      requestAnimationFrame(sweep);
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-    hideSurvey();
+    // Portals are added directly to body; Kibana's much larger app subtree is
+    // never observed or searched on every React update.
+    new MutationObserver(records => {
+      for (const record of records) {
+        for (const node of record.addedNodes) watch(node);
+        for (const node of record.removedNodes) {
+          portalObservers.get(node)?.disconnect();
+          portalObservers.delete(node);
+        }
+      }
+    }).observe(body, {childList: true});
+    for (const child of body.children) watch(child);
   };
 
   if (document.body) start();
@@ -211,5 +225,34 @@ if (coachParameterNames.some(name => handoffParameters.has(name))) {
     sessionStorage.setItem(activeSessionKey, JSON.stringify(config));
     // A valid coach session is auto-starting: mask Kibana's boot until the briefing.
     showCoachBootOverlay();
+  }
+}
+
+// The gateway adds this small bootstrap to every Kibana page, including its
+// off-screen cache warm-up. Only a tab with a learner session needs the coach's
+// other scripts, DOM observers, and search-request instrumentation.
+if (sessionStorage.getItem(activeSessionKey)) {
+  trackKibanaSearches();
+  for (const path of [
+    'src/ui/cursor.js',
+    'src/ui/spotlight.js',
+    'src/ui/incident-briefing.js',
+    'src/ui/coach-panel.js',
+    'src/ui/debrief.js',
+    'src/adapters/common.js',
+    'src/adapters/discover.js',
+    'src/adapters/dashboard.js',
+    'src/adapters/apm.js',
+    'src/adapters/infrastructure.js',
+    'src/adapters/alerts.js',
+    'src/kibana-adapter.js',
+    'src/action-observer.js',
+    'src/session-client.js',
+    'src/content-script.js',
+  ]) {
+    const script = document.createElement('script');
+    script.async = false; // keep the plain-script globals in dependency order
+    script.src = `/incident-coach/assets/${path}`;
+    document.head.append(script);
   }
 }

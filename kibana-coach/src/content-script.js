@@ -49,7 +49,7 @@ class GuidedStepClock {
   }
 
   // Any pointer or key input: the learner is busy, so a due check-in waits.
-  input() { this.lastInput = this.now(); }
+  input() { if (this.stepId) this.lastInput = this.now(); }
 
   schedule() { this.timer = this.setTimer(() => this.tick(), this.tickMs); }
 
@@ -86,7 +86,10 @@ class GuidedStepClock {
 /** @type {any} */ (globalThis).GuidedStepClock = GuidedStepClock;
 
 function startIncidentCoach() {
-  if (document.querySelector('#adaptive-incident-coach')) return;
+  const activeSessionKey = 'incident-coach:auto-connect';
+  let savedConfig = null;
+  try { savedConfig = sessionStorage.getItem(activeSessionKey); } catch (_error) { /* storage unavailable */ }
+  if (!savedConfig || document.querySelector('#adaptive-incident-coach')) return;
   const host = document.createElement('div');
   host.id = 'adaptive-incident-coach';
   host.hidden = true;
@@ -129,7 +132,6 @@ function startIncidentCoach() {
   for (const type of ['pointerdown', 'pointermove', 'keydown', 'wheel']) {
     document.addEventListener(type, () => stepClock.input(), {capture: true, passive: true});
   }
-  const activeSessionKey = 'incident-coach:auto-connect';
   // A step that opens another page tells its result there, where what it talks about is on screen.
   const carriedResultKey = 'incident-coach:carried-result';
   let carriedResult = null;
@@ -690,6 +692,7 @@ function startIncidentCoach() {
     windowWatch = null;
     try { carriedResult = JSON.parse(sessionStorage.getItem(carriedResultKey) || 'null'); } catch (_error) { carriedResult = null; }
     await adapter.initialize();
+    coach.startObserving();
     client = new IncidentSessionClient(config);
     client.stepClock = () => stepClock.stepId ? {step_id: stepClock.stepId, seconds_active: stepClock.seconds} : null;
     client.currentView = () => {
@@ -710,11 +713,13 @@ function startIncidentCoach() {
       investigationFinished = true;
       debriefShown = true;
       stepClock.stop();
+      clearTimeout(deadEndPoll);
       checkIn = null;
       try {
         const feedback = await client.getFeedback();
         observer?.stop();
         coach.showCompletion(client.mode);
+        coach.stopObserving();
         showFeedback(feedback);
       } catch (error) {
         investigationFinished = false;
@@ -737,6 +742,7 @@ function startIncidentCoach() {
       sessionStorage.removeItem(carriedResultKey);
       window.__coachBootOverlay?.release();
       coach.showSessionEnded({headline: message.error, detail: SESSION_ENDED_DETAIL[message.reason], launcherUrl: message.launcher_url});
+      coach.stopObserving();
     };
     client.onHint = hint => coach.showHint(hint);
     client.onWindowSlid = message => {
@@ -848,11 +854,13 @@ function startIncidentCoach() {
     });
     observer.start();
     clearTimeout(deadEndPoll);
-    const pollDeadEnd = () => {
-      checkDeadEnd();
+    if (client.mode === 'guided') {
+      const pollDeadEnd = () => {
+        checkDeadEnd();
+        deadEndPoll = setTimeout(pollDeadEnd, 500);
+      };
       deadEndPoll = setTimeout(pollDeadEnd, 500);
-    };
-    deadEndPoll = setTimeout(pollDeadEnd, 500);
+    }
     coach.onPause = paused => {
       if (paused) {
         if (activeReadingBeat) activeReadingBeat.pause();
@@ -921,10 +929,10 @@ function startIncidentCoach() {
     };
   }
 
-  const savedConfig = sessionStorage.getItem(activeSessionKey);
   if (savedConfig) {
     startSession(JSON.parse(savedConfig)).catch(error => {
       window.__coachBootOverlay?.release();
+      coach.stopObserving();
       host.hidden = false;
       coach.toast(`Automatic connection failed: ${error.message}`, true);
     });

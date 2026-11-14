@@ -12,7 +12,11 @@
     body { margin:0;min-height:100vh;display:grid;place-items:center;isolation:isolate;background:radial-gradient(ellipse 90% 70% at 50% 45%,#07182a,#03080c); }
     #board,#current { position:fixed;inset:0;z-index:-1;width:100%;height:100%;pointer-events:none; }
     #board { z-index:-2; }
-    main { box-sizing:border-box;width:min(480px,calc(100% - 32px));padding:34px 36px 36px;text-align:center;background:#030b12a6;border:1px solid #19c6f324;border-radius:16px;box-shadow:0 30px 80px #000a;-webkit-backdrop-filter:blur(12px) saturate(1.4);backdrop-filter:blur(12px) saturate(1.4); }
+    #current { overflow:hidden;contain:paint; }
+    .current-pulse { position:absolute;left:0;top:0;width:72px;height:8px;border-radius:999px;opacity:0;transform-origin:right center;will-change:transform,opacity;background:linear-gradient(90deg,transparent,#0b7eb5 30%,#19c6f3 76%,#e8ffff);box-shadow:0 0 13px 2px #19c6f380; }
+    .current-pulse::after { content:'';position:absolute;right:0;top:2.5px;width:14px;height:3px;border-radius:999px;background:#fff; }
+    .circuit-glint { position:absolute;width:3px;height:3px;border-radius:50%;background:#b9f5ff;box-shadow:0 0 9px 3px #19c6f385;opacity:.1;animation:glint 2.4s ease-in-out infinite;will-change:opacity; }
+    main { box-sizing:border-box;width:min(480px,calc(100% - 32px));padding:34px 36px 36px;text-align:center;background:#030b12e8;border:1px solid #19c6f324;border-radius:16px;box-shadow:0 30px 80px #000a; }
     h1 { margin:0 0 8px;font-size:21px;font-weight:600;letter-spacing:-.01em; }
     #msg { margin:0 0 24px;color:#9fbccd;line-height:1.5; }
     progress { display:block;width:100%;height:6px;border:0;border-radius:999px;background:#19c6f314;accent-color:#19c6f3;filter:drop-shadow(0 0 6px #19c6f3a0); }
@@ -24,13 +28,18 @@
     a:focus-visible { outline:3px solid #ffb000;outline-offset:3px; }
     [hidden] { display:none; }
     @keyframes filament { to { background-position:300% 0,0 0; } }
+    @keyframes glint { 50% { opacity:.75; } }
     @media (max-width:480px) { main { padding:30px 24px; } }
-    @media (prefers-reduced-motion:reduce) { progress::-webkit-progress-value,progress::-moz-progress-bar { animation:none; } }
+    @media (prefers-reduced-motion:reduce) {
+      progress::-webkit-progress-value { animation:none; }
+      progress::-moz-progress-bar { animation:none; }
+      .circuit-glint { animation:none; }
+    }
   </style>
 </head>
 <body>
   <canvas id="board" aria-hidden="true"></canvas>
-  <canvas id="current" aria-hidden="true"></canvas>
+  <div id="current" aria-hidden="true"></div>
   <main>
     <h1 id="h">Preparing your investigation…</h1>
     <p id="msg">Setting up evidence in Kibana…</p>
@@ -108,30 +117,43 @@
         window.__done = true;
         if (document.hidden) location.replace(url);
       });
+      document.addEventListener('visibilitychange', () => {
+        lastFrame = performance.now();
+      });
       requestAnimationFrame(step);
     })();
   </script>
   <script>
-    // Current crackling through banks of circuit traces. Each pulse runs a bank
-    // with its bits slightly staggered: the head burns white-hot, the trace behind
-    // it shimmers electric cyan and slowly sinks to deep blue, like disturbed
-    // plankton. Pads flare where current lands, small arcs crackle off them, and
-    // the resting board twinkles.
+    // The board keeps its routed circuitry. Small composited light streaks
+    // follow its traces, so the visible animation never redraws a full canvas.
     (() => {
-      const board = document.getElementById('board'), canvas = document.getElementById('current');
-      const btx = board && board.getContext('2d'), ctx = canvas && canvas.getContext('2d');
-      if (!btx || !ctx) return;
+      const board = document.getElementById('board'), layer = document.getElementById('current');
+      const btx = board && board.getContext('2d');
+      if (!btx || !layer) return;
       const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       const TAU = Math.PI * 2, rand = (lo, hi) => lo + Math.random() * (hi - lo);
-      // Everything is drawn as batched strokes on a reduced-resolution layer so it
-      // stays smooth on CPU-only machines; the static board keeps full resolution.
-      // Wider chunks keep the moving glow continuous while avoiding thousands of
-      // tiny canvas path segments on each frame.
-      const LEVELS = 5, CHUNK = 8;
-      const GRID = 20, STEP = 3, PITCH = 7, MAX_POINTS = 70000;
+      const GRID = 20, PITCH = 7;
       const DIRS = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
-      let W = 0, H = 0, dpr = 1, lay = .5, t = 0, total = 0, xs, ys, en, lines = [], banks = [], near = new Map();
-      const pulses = [], sparks = [], glints = [];
+      let W = 0, H = 0, dpr = 1, lines = [], banks = [], nextBank = .2;
+      const progress = document.getElementById('p');
+      // Near completion, let currents run faster and leave a longer pad glow.
+      // The fixed pulse pool bounds the work even when the bar stays near full.
+      const BOOST = 3;
+      const intensity = () => Math.min(1, progress.value / progress.max);
+      const NORMAL_PULSES = 24, BURST_PULSES = 48;
+      const pulses = Array.from({length: BURST_PULSES}, () => {
+        const node = document.createElement('span');
+        node.className = 'current-pulse';
+        layer.append(node);
+        return {node, active: false};
+      });
+      const glints = Array.from({length: 12}, () => {
+        const node = document.createElement('span');
+        node.className = 'circuit-glint';
+        node.style.animationDelay = '-' + rand(0, 3).toFixed(2) + 's';
+        layer.append(node);
+        return node;
+      });
 
       // Route banks of parallel traces on a grid, 45° jogs only, never crossing
       // another bank, so the board reads as ordered circuitry rather than noise.
@@ -194,34 +216,29 @@
       function build() {
         dpr = Math.min(window.devicePixelRatio || 1, 1.5);
         W = window.innerWidth; H = window.innerHeight;
-        // The moving current is a glow over the sharp, full-resolution board.
-        // Rasterising that glow more finely costs paint time without adding detail.
-        lay = Math.min(.5, .35 * dpr);
         board.width = Math.round(W * dpr); board.height = Math.round(H * dpr);
-        canvas.width = Math.round(W * lay); canvas.height = Math.round(H * lay);
-        xs = new Float32Array(MAX_POINTS); ys = new Float32Array(MAX_POINTS); en = new Float32Array(MAX_POINTS);
-        lines = []; banks = []; near = new Map(); pulses.length = 0; sparks.length = 0; glints.length = 0;
-        let used = 0;
+        lines = []; banks = []; nextBank = .2;
+        for (const pulse of pulses) { pulse.active = false; pulse.node.style.opacity = '0'; }
         for (const path of route()) {
-          const bank = { lines: [] };
-          for (let j = 0; j < path.width && used < MAX_POINTS - 2000; j++) {
-            const verts = offset(path.pts, (j - (path.width - 1) / 2) * PITCH), start = used;
-            for (let v = 0; v < verts.length - 1; v++) {
-              const [ax, ay] = verts[v], [bx, by] = verts[v + 1], steps = Math.max(1, Math.round(Math.hypot(bx - ax, by - ay) / STEP));
-              for (let s = 0; s < steps; s++, used++) { xs[used] = ax + (bx - ax) * s / steps; ys[used] = ay + (by - ay) * s / steps; }
-            }
-            xs[used] = verts[verts.length - 1][0]; ys[used] = verts[verts.length - 1][1]; used++;
-            const line = { start, count: used - start, verts, bank, padA: 0, padB: 0 };
-            for (let k = start; k < used; k += 2) {
-              const key = Math.floor(xs[k] / 24) * 4096 + Math.floor(ys[k] / 24);
-              if (!near.has(key)) near.set(key, []); near.get(key).push(k, lines.length);
-            }
-            lines.push(line); bank.lines.push(line);
+          const bank = {lines: []};
+          for (let j = 0; j < path.width; j++) {
+            const verts = offset(path.pts, (j - (path.width - 1) / 2) * PITCH);
+            const distances = [0];
+            for (let i = 1; i < verts.length; i++)
+              distances.push(distances[i - 1] + Math.hypot(verts[i][0] - verts[i - 1][0], verts[i][1] - verts[i - 1][1]));
+            const line = {verts, distances, length: distances[distances.length - 1], bank};
+            if (line.length) { lines.push(line); bank.lines.push(line); }
           }
           if (bank.lines.length) banks.push(bank);
         }
-        total = used;
         drawBoard();
+        for (const glint of glints) {
+          const line = lines[Math.floor(rand(0, lines.length))];
+          if (!line) continue;
+          const point = pointAt(line, rand(0, line.length));
+          glint.style.left = point.x.toFixed(1) + 'px';
+          glint.style.top = point.y.toFixed(1) + 'px';
+        }
       }
 
       // The resting board: faint traces and pads on near-black.
@@ -240,207 +257,191 @@
         }
       }
 
-      const fire = (line, at, dir, o = {}) => pulses.push({
-        line, pos: at, dir, speed: (o.speed ?? rand(260, 620)) / STEP, power: o.power ?? rand(.95, 1.35), delay: o.delay ?? 0,
-      });
-      // A whole bank carries the signal, each bit a few milliseconds apart.
-      const fireBank = (bank, o = {}) => {
-        const reverse = o.reverse ?? Math.random() < .5, speed = o.speed ?? rand(260, 620), power = o.power ?? rand(.95, 1.35);
-        for (const line of bank.lines) fire(line, reverse ? line.count - 1 : 0, reverse ? -1 : 1, { speed, power, delay: rand(0, o.stagger ?? .09) });
-      };
-      const spark = (x, y, o = {}) => sparks.push({ x, y, age: 0, life: o.life ?? rand(.08, .2), reach: o.reach ?? rand(16, 34), heading: o.heading ?? rand(0, TAU), power: o.power ?? 1 });
-
-      // Match the visible progress bar: current becomes more frequent, faster and
-      // brighter in proportion to preparation.
-      const progress = document.getElementById('p');
-      let nextBank = .2;
-      const fade = τ => Math.exp(-1 / τ);
-      function update(dt) {
-        const intensity = Math.min(1, progress.value / progress.max);
-        t += dt * (7 + 8 * intensity);
-        // A few concurrent currents read clearly; lighting more banks mainly
-        // increases the number of strokes rasterised every frame.
-        const bankRate = 2 + 4 * intensity;
-        nextBank -= dt;
-        while (nextBank <= 0 && banks.length) {
-          fireBank(banks[Math.floor(rand(0, banks.length))], {
-            speed: rand(260 + 540 * intensity, 620 + 660 * intensity),
-            power: rand(.95 + .4 * intensity, 1.35 + .45 * intensity),
-          });
-          nextBank += rand(.7, 1.3) / bankRate;
+      function pointAt(line, distance) {
+        const at = Math.max(0, Math.min(line.length, distance));
+        for (let i = 0; i < line.verts.length - 1; i++) {
+          if (at > line.distances[i + 1] && i < line.verts.length - 2) continue;
+          const a = line.verts[i], b = line.verts[i + 1];
+          const length = line.distances[i + 1] - line.distances[i];
+          const fraction = length ? (at - line.distances[i]) / length : 0;
+          return {x: a[0] + (b[0] - a[0]) * fraction,
+            y: a[1] + (b[1] - a[1]) * fraction,
+            angle: Math.atan2(b[1] - a[1], b[0] - a[0])};
         }
-        for (let i = pulses.length - 1; i >= 0; i--) {
-          const p = pulses[i];
-          if (p.delay > 0) { p.delay -= dt; continue; }
-          const from = p.pos, last = p.line.count - 1;
-          p.pos = Math.max(0, Math.min(last, p.pos + p.dir * p.speed * dt));
-          const lo = Math.floor(Math.min(from, p.pos)), hi = Math.ceil(Math.max(from, p.pos));
-          for (let k = lo; k <= hi; k++) { const g = p.line.start + k; if (en[g] < p.power) en[g] = p.power; }
-          // Soft crackle: the hot head occasionally throws a tiny arc sideways.
-          if (Math.random() < dt * (3 + 3 * intensity)) {
-            const g = p.line.start + Math.round(p.pos);
-            spark(xs[g], ys[g], { reach: rand(9, 18), life: rand(.06, .14), power: .85 });
-          }
-          if (p.pos === 0 || p.pos === last) {
-            if (p.pos === last) p.line.padB = 1.5; else p.line.padA = 1.5;
-            if (Math.random() < .45) {
-              const g = p.line.start + p.pos;
-              spark(xs[g], ys[g]);
-            }
-            pulses.splice(i, 1);
-          }
-        }
-        // Resting traces twinkle: brief glints scattered over the whole board.
-        for (let n = Math.floor(dt * (70 + 70 * intensity) + Math.random()); n > 0 && total; n--) glints.push({ k: Math.floor(rand(0, total)), age: 0, life: rand(.12, .35), power: rand(.35, 1) });
-        const trace = Math.pow(fade(.5 + .2 * intensity), dt), pad = Math.pow(fade(1.1), dt);
-        for (let k = 0; k < total; k++) if (en[k] > .004) en[k] *= trace; else en[k] = 0;
-        for (const line of lines) { line.padA *= pad; line.padB *= pad; }
-        // Short-lived effects survive until drawn at least once, so they still
-        // show when a busy machine only manages a few frames a second.
-        for (const list of [sparks, glints]) for (let i = list.length - 1; i >= 0; i--) {
-          const item = list[i]; if ((item.age += dt) >= item.life && item.shown) list.splice(i, 1);
-        }
+        return {x: 0, y: 0, angle: 0};
       }
 
-      // Sparks are re-jagged every frame, which is what makes them crackle.
-      function arc(s) {
-        let x = s.x, y = s.y, heading = s.heading;
-        ctx.beginPath(); ctx.moveTo(x, y);
-        for (let seg = 0, segs = 4; seg < segs; seg++) {
-          heading += rand(-1, 1); const len = s.reach / segs * rand(.6, 1.4);
-          x += Math.cos(heading) * len; y += Math.sin(heading) * len; ctx.lineTo(x, y);
+      function paint(pulse, fading = 1) {
+        if (pulse.delay > 0 || pulse.pos < 0 || pulse.pos > pulse.line.length) {
+          pulse.node.style.opacity = '0';
+          return;
         }
-        ctx.stroke();
-      }
-      const dots = (points, radius) => {
-        ctx.beginPath();
-        for (let i = 0; i < points.length; i += 2) { ctx.moveTo(points[i] + radius, points[i + 1]); ctx.arc(points[i], points[i + 1], radius, 0, TAU); }
-        ctx.fill();
-      };
-
-      function draw() {
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.setTransform(lay, 0, 0, lay, 0, 0);
-        ctx.lineJoin = 'round';
-        // Bucket lit chunks of trace by brightness, so each pass is a few strokes.
-        // A ripple of brightness running along the current is the shimmer.
-        const buckets = Array.from({ length: LEVELS }, () => []), hot = [];
-        const ripple = t;
-        for (const line of lines) {
-          const end = line.start + line.count - 1;
-          for (let k = line.start; k < end; k += CHUNK) {
-            const e = en[k]; if (e < .04) continue;
-            const next = Math.min(k + CHUNK, end), lit = e * (.7 + .3 * Math.sin(k * .45 - ripple));
-            buckets[Math.min(LEVELS - 1, Math.floor(lit / 1.4 * LEVELS))].push(k, next);
-            if (lit > .85) hot.push(k, next);
-          }
-        }
-        ctx.lineCap = 'butt';
-        // The static board supplies the dark-blue trace. Draw the moving current
-        // in one pass, rather than rasterising the same full-screen paths three
-        // times for concentric glow layers.
-        ctx.lineWidth = 6; ctx.strokeStyle = '#19c6f3';
-        buckets.forEach((chunks, level) => {
-          if (!chunks.length) return;
-          ctx.globalAlpha = Math.min(1, (level + .5) / LEVELS * 1.4);
-          ctx.beginPath();
-          for (let i = 0; i < chunks.length; i += 2) { ctx.moveTo(xs[chunks[i]], ys[chunks[i]]); ctx.lineTo(xs[chunks[i + 1]], ys[chunks[i + 1]]); }
-          ctx.stroke();
-        });
-        if (hot.length) {
-          ctx.lineWidth = 1.3; ctx.strokeStyle = '#f4ffff'; ctx.globalAlpha = .85;
-          ctx.beginPath();
-          for (let i = 0; i < hot.length; i += 2) { ctx.moveTo(xs[hot[i]], ys[hot[i]]); ctx.lineTo(xs[hot[i + 1]], ys[hot[i + 1]]); }
-          ctx.stroke();
-        }
-        // Pulse heads and the pads current has just reached.
-        const heads = [];
-        for (const p of pulses) if (p.delay <= 0) { const g = p.line.start + Math.round(p.pos); heads.push(xs[g], ys[g]); }
-        ctx.fillStyle = '#19c6f3'; ctx.globalAlpha = .35; dots(heads, 10);
-        ctx.fillStyle = '#f4ffff'; ctx.globalAlpha = .95; dots(heads, 2.2);
-        for (const line of lines) for (const [amount, [x, y]] of [[line.padA, line.verts[0]], [line.padB, line.verts[line.verts.length - 1]]]) {
-          if (amount < .03) continue;
-          ctx.fillStyle = '#19c6f3'; ctx.globalAlpha = Math.min(1, amount * .22); dots([x, y], 6 + amount * 6);
-          ctx.fillStyle = '#e8ffff'; ctx.globalAlpha = Math.min(1, amount * .7); dots([x, y], 2.6);
-        }
-        for (const g of glints) {
-          g.shown = true;
-          const a = g.power * Math.sin(Math.PI * Math.min(1, g.age / g.life));
-          ctx.fillStyle = '#19c6f3'; ctx.globalAlpha = a * .35; dots([xs[g.k], ys[g.k]], 6);
-          ctx.fillStyle = '#c8faff'; ctx.globalAlpha = a; dots([xs[g.k], ys[g.k]], 1.7);
-        }
-        ctx.lineCap = 'round';
-        for (const s of sparks) {
-          s.shown = true;
-          const flicker = s.power * (.45 + .55 * Math.random()) * Math.max(.3, 1 - s.age / s.life);
-          ctx.strokeStyle = '#19c6f3'; ctx.lineWidth = 5; ctx.globalAlpha = flicker * .4; arc(s);
-          ctx.strokeStyle = '#e8ffff'; ctx.lineWidth = 1.4; ctx.globalAlpha = flicker; arc(s);
-        }
+        const point = pointAt(pulse.line, pulse.pos);
+        const angle = point.angle + (pulse.dir < 0 ? Math.PI : 0);
+        pulse.node.style.transform = 'translate3d(' + (point.x - 72).toFixed(1) + 'px,' +
+          (point.y - 4).toFixed(1) + 'px,0) rotate(' + angle.toFixed(3) + 'rad) scaleX(' + fading.toFixed(2) + ')';
+        pulse.node.style.opacity = String(pulse.power * fading);
       }
 
-      // The pointer is a probe: touching a trace sends current both ways from there.
-      const nearest = (x, y, radius) => {
+      function fire(line, at, dir, options = {}) {
+        const limit = options.burst ? BURST_PULSES : NORMAL_PULSES;
+        let pulse = null;
+        for (let i = 0; i < limit; i++) {
+          if (!pulses[i].active) { pulse = pulses[i]; break; }
+        }
+        if (!pulse) return;
+        pulse.active = true;
+        pulse.line = line;
+        pulse.pos = at;
+        pulse.dir = dir;
+        const level = options.level ?? intensity();
+        pulse.speed = (options.speed ?? rand(280, 650)) * (1 + .25 * BOOST * level);
+        pulse.power = options.power ?? rand(.65, .95);
+        pulse.delay = options.delay ?? 0;
+        pulse.fadeDuration = .5 * BOOST * level;
+        pulse.fadeRemaining = 0;
+        pulse.node.style.opacity = '0';
+        return pulse;
+      }
+
+      function fireBank(bank, level = 0) {
+        if (pulses.filter(pulse => pulse.active).length >= 16 + Math.min(6, Math.floor(3 * BOOST * level))) return;
+        const dir = Math.random() < .5 ? 1 : -1;
+        const speed = rand(300 + 250 * level, 600 + 380 * level);
+        for (const line of bank.lines)
+          fire(line, dir > 0 ? 0 : line.length, dir, {speed, delay: rand(0, .1), level});
+      }
+
+      function nearest(x, y, radius) {
         let best = null, bestD = radius * radius;
-        for (let cx = Math.floor((x - radius) / 24); cx <= Math.floor((x + radius) / 24); cx++)
-          for (let cy = Math.floor((y - radius) / 24); cy <= Math.floor((y + radius) / 24); cy++) {
-            const hits = near.get(cx * 4096 + cy); if (!hits) continue;
-            for (let i = 0; i < hits.length; i += 2) {
-              const d = (xs[hits[i]] - x) ** 2 + (ys[hits[i]] - y) ** 2;
-              if (d < bestD) { bestD = d; best = { point: hits[i], line: lines[hits[i + 1]] }; }
-            }
+        for (const line of lines) for (let i = 0; i < line.verts.length - 1; i++) {
+          const a = line.verts[i], b = line.verts[i + 1];
+          const dx = b[0] - a[0], dy = b[1] - a[1], length2 = dx * dx + dy * dy;
+          if (!length2) continue;
+          const fraction = Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / length2));
+          const px = a[0] + fraction * dx, py = a[1] + fraction * dy;
+          const distance2 = (px - x) ** 2 + (py - y) ** 2;
+          if (distance2 < bestD) {
+            bestD = distance2;
+            best = {line, distance: line.distances[i] + fraction * Math.sqrt(length2)};
           }
+        }
         return best;
-      };
+      }
+
       let lastProbe = 0;
       window.addEventListener('pointermove', event => {
         if (still || document.hidden || window.__halt || window.__done) return;
-        const now = performance.now(); if (now - lastProbe < 90) return;
-        const hit = nearest(event.clientX, event.clientY, 14); if (!hit) return;
+        const now = performance.now();
+        if (now - lastProbe < 90) return;
+        const hit = nearest(event.clientX, event.clientY, 14);
+        if (!hit) return;
         lastProbe = now;
-        const at = hit.point - hit.line.start;
-        fire(hit.line, at, 1, { power: 1.2 }); fire(hit.line, at, -1, { power: 1.2 });
-        spark(xs[hit.point], ys[hit.point], { power: .8 });
-      }, { passive: true });
+        fire(hit.line, hit.distance, 1, {power: 1});
+        fire(hit.line, hit.distance, -1, {power: 1});
+      }, {passive: true});
       window.addEventListener('pointerdown', event => {
         if (still || document.hidden || window.__halt || window.__done) return;
-        const hit = nearest(event.clientX, event.clientY, 60); if (!hit) return;
-        const at = (hit.point - hit.line.start) / hit.line.count;
+        const hit = nearest(event.clientX, event.clientY, 60);
+        if (!hit) return;
+        const fraction = hit.distance / hit.line.length;
         for (const line of hit.line.bank.lines) {
-          const k = Math.round(at * (line.count - 1));
-          fire(line, k, 1, { power: 1.45, speed: 700 }); fire(line, k, -1, { power: 1.45, speed: 700 });
+          fire(line, fraction * line.length, 1, {power: 1, speed: 700});
+          fire(line, fraction * line.length, -1, {power: 1, speed: 700});
         }
-        for (let i = 0; i < 3; i++) spark(xs[hit.point], ys[hit.point], { reach: rand(18, 34), power: 1.2 });
-      }, { passive: true });
+      }, {passive: true});
+
+      function showStill() {
+        for (const bank of banks.slice(0, 4)) for (const line of bank.lines)
+          fire(line, line.length * rand(.3, .7), 1, {power: .8});
+        for (const pulse of pulses) if (pulse.active) paint(pulse);
+      }
+
+      // The ready fill lasts 650 ms. Double the ordinary pulse budget for one
+      // bright surge across separated banks, then let navigation take over.
+      function startBurst() {
+        for (const pulse of pulses) { pulse.active = false; pulse.node.style.opacity = '0'; }
+        const count = Math.min(16, banks.length);
+        if (!count) return;
+        const first = Math.floor(rand(0, banks.length));
+        const stride = Math.max(1, Math.floor(banks.length / count));
+        let launched = 0;
+        for (let pass = 0; pass < 2 && launched < BURST_PULSES; pass++) {
+          for (let i = 0; i < count && launched < BURST_PULSES; i++) {
+            const bank = banks[(first + i * stride + pass) % banks.length];
+            const dir = Math.random() < .5 ? 1 : -1;
+            for (const line of bank.lines) {
+              const at = line.length * (dir > 0 ? rand(.1, .35) : rand(.65, .9));
+              if (fire(line, at, dir, {burst: true, level: 1, speed: rand(450, 750), power: 1, delay: rand(0, .12)})) launched++;
+            }
+          }
+        }
+      }
 
       build();
+      layer.hidden = Boolean(document.hidden || window.__halt);
+      if (window.__halt) return;
       if (still) {
-        // Reduced motion: settle a single still frame of a few lit banks.
-        const settle = () => { for (let i = 0; i < 6 && banks.length; i++) fireBank(banks[Math.floor(rand(0, banks.length))], { speed: 900 }); for (let i = 0; i < 70; i++) update(1 / 60); sparks.length = 0; draw(); };
-        settle(); window.addEventListener('resize', () => { build(); settle(); });
+        showStill();
+        window.addEventListener('resize', () => { build(); showStill(); });
+        document.addEventListener('visibilitychange', () => { layer.hidden = document.hidden; });
         return;
       }
-      let rebuild = 0;
-      window.addEventListener('resize', () => { clearTimeout(rebuild); rebuild = setTimeout(build, 150); });
-      // Keep real time even when frames are scarce, and cap at ~30fps to leave
-      // the CPU to Kibana, which is booting in the background meanwhile.
-      let prev = performance.now(), drawn = -Infinity, pendingFrame = 0;
+      let previous = performance.now(), pendingFrame = 0, rebuild = 0, burstAt = null, burstFinished = false;
       function scheduleFrame() {
-        if (!pendingFrame && !document.hidden && !window.__halt && !window.__done) pendingFrame = requestAnimationFrame(frame);
+        if (!pendingFrame && !document.hidden && !window.__halt && !burstFinished)
+          pendingFrame = requestAnimationFrame(frame);
       }
       function frame(now) {
         pendingFrame = 0;
-        if (document.hidden || window.__halt || window.__done) return;
+        if (document.hidden || window.__halt) { layer.hidden = true; return; }
+        if (window.__done && burstAt === null) { burstAt = now; startBurst(); }
+        if (burstAt !== null && now - burstAt >= 650) { burstFinished = true; layer.hidden = true; return; }
         scheduleFrame();
-        if (now - drawn < 32) return;
-        const dt = Math.min(.25, Math.max(0, now - prev) / 1000); prev = drawn = now;
-        update(dt); draw();
+        const dt = Math.min(.1, Math.max(0, now - previous) / 1000);
+        previous = now;
+        if (burstAt === null) {
+          const level = intensity();
+          nextBank -= dt;
+          if (nextBank <= 0 && banks.length) {
+            fireBank(banks[Math.floor(rand(0, banks.length))], level);
+            nextBank = rand(.7, 1.3) / (1.5 + (2.4 + 1.3 * BOOST) * level);
+          }
+        }
+        for (const pulse of pulses) {
+          if (!pulse.active) continue;
+          if (pulse.fadeRemaining > 0) {
+            pulse.fadeRemaining = Math.max(0, pulse.fadeRemaining - dt);
+            if (pulse.fadeRemaining === 0) { pulse.active = false; pulse.node.style.opacity = '0'; }
+            else paint(pulse, pulse.fadeRemaining / pulse.fadeDuration);
+            continue;
+          }
+          if (pulse.delay > 0) pulse.delay -= dt;
+          else pulse.pos += pulse.dir * pulse.speed * dt;
+          if (pulse.fadeDuration > 0 && (pulse.pos < 0 || pulse.pos > pulse.line.length)) {
+            pulse.pos = Math.max(0, Math.min(pulse.line.length, pulse.pos));
+            pulse.fadeRemaining = pulse.fadeDuration;
+            paint(pulse);
+          } else if (pulse.pos < -72 || pulse.pos > pulse.line.length + 72) {
+            pulse.active = false;
+            pulse.node.style.opacity = '0';
+          } else paint(pulse);
+        }
       }
       document.addEventListener('visibilitychange', () => {
-        if (document.hidden) { cancelAnimationFrame(pendingFrame); pendingFrame = 0; }
-        else { prev = performance.now(); scheduleFrame(); }
+        if (document.hidden) {
+          cancelAnimationFrame(pendingFrame);
+          pendingFrame = 0;
+          layer.hidden = true;
+        } else {
+          layer.hidden = Boolean(window.__halt || burstFinished);
+          previous = performance.now();
+          scheduleFrame();
+        }
+      });
+      window.addEventListener('resize', () => {
+        clearTimeout(rebuild);
+        rebuild = setTimeout(build, 150);
       });
       scheduleFrame();
     })();

@@ -46,13 +46,15 @@ test('queued Advance is visibly disabled until the action finishes', () => {
 });
 
 test('the coach can be dragged and stays clear of a newly added column', () => {
+  let frame, requested = 0;
   const header = {
     classList: {add() {}, remove() {}},
     setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {},
   };
   const column = {textContent: 'service.version', getBoundingClientRect: () => ({left: 1420, right: 1580, top: 300, width: 160})};
   const Panel = loadClass('../src/ui/coach-panel.js', 'IncidentCoachPanel',
-    ['innerWidth', 'innerHeight', 'document'], [1920, 1080, {querySelectorAll: () => [column]}]);
+    ['innerWidth', 'innerHeight', 'document', 'requestAnimationFrame', 'cancelAnimationFrame'],
+    [1920, 1080, {querySelectorAll: () => [column]}, callback => { frame = callback; return ++requested; }, () => {}]);
   const panel = Object.create(Panel.prototype);
   panel.root = {querySelector: () => header};
   panel.panel = {hidden: false, style: {}, getBoundingClientRect: () => ({left: 18, top: 72, width: 468, height: 390})};
@@ -63,7 +65,10 @@ test('the coach can be dragged and stays clear of a newly added column', () => {
   panel.evidenceTargets = [];
 
   panel.startDrag({button: 0, pointerId: 1, clientX: 40, clientY: 100, target: {closest: () => null}, preventDefault() {}});
+  panel.moveDrag({pointerId: 1, clientX: 1400, clientY: 480});
   panel.moveDrag({pointerId: 1, clientX: 1442, clientY: 500});
+  assert.equal(requested, 1);
+  frame();
   assert.deepEqual(panel.pos, {left: 1420, top: 472});
   panel.evidenceField = 'service.version';
   panel.endDrag({pointerId: 1});

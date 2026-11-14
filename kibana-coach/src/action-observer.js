@@ -29,9 +29,10 @@ class KibanaActionObserver {
         return;
       }
       this.captureTimeRange(false);
-      this.captureSort();
       this.captureFilterRemoval();
-      this.captureApmTrace();
+      const app = this.appName();
+      if (app === 'discover') this.captureSort();
+      if (app === 'apm') this.captureApmTrace();
     }, 700);
   }
 
