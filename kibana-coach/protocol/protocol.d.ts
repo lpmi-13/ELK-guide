@@ -80,8 +80,11 @@ export interface TimeWindow {
 
 export interface EarnedFilter {
   field: string;
-  value: string | number;
+  /** A list for "is one of" (type 'phrases'). */
+  value: string | number | string[];
   negate: boolean;
+  /** 'exists' for "Filter for field present" (value "exists"); 'phrases' for "is one of"; a value filter otherwise. */
+  type?: 'exists' | 'phrases';
 }
 
 /** What the guided coach puts back when the learner's search reaches a dead end. */
@@ -94,7 +97,7 @@ export interface RestoreState {
 
 /** What a result card rings on the page (or the opening goal card, for goal_focus). */
 export interface EvidenceFocus {
-  kind: 'histogram' | 'query' | 'filter' | 'top_values' | 'document' | 'columns' | 'table_row' | 'request_line' | 'panel_filter'
+  kind: 'histogram' | 'query' | 'filter' | 'top_values' | 'document' | 'columns' | 'table_row' | 'request_line' | 'panel_filter' | 'no_results' | 'field_cardinality'
     | 'entity' | 'inventory_outlier' | 'esql_row' | 'span_details' | 'alert_summary';
   field?: string;
   fields?: string[];
@@ -103,6 +106,8 @@ export interface EvidenceFocus {
   metric?: string;
   open?: boolean;
   panels?: string[];
+  /** 'filter': ring the histogram too, for what the filter leaves (a value filtered out). */
+  histogram?: boolean;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -140,7 +145,9 @@ export interface IncidentBriefing {
 
 export type AnswerCommandType = 'request_answer' | 'request_diagnosis';
 export type StepCommandType =
-  | 'set_time_range' | 'enter_kql' | 'add_filter' | 'add_column' | 'sort_column' | 'open_field_statistics' | 'inspect_field'
+  | 'set_time_range' | 'enter_kql' | 'add_filter' | 'filter_top_value' | 'set_filter_inclusion' | 'filter_field_present'
+  | 'show_field_statistics' | 'open_surrounding_documents'
+  | 'add_column' | 'sort_column' | 'open_field_statistics' | 'inspect_field'
   | 'expand_document' | 'switch_query_language' | 'enter_esql' | 'inspect_panel' | 'interact_with_panel_value'
   | 'view_panel_underlying_data' | 'select_apm_service' | 'open_transaction_group' | 'select_trace_sample' | 'select_span'
   | 'navigate_to_correlated_logs' | 'select_inventory_type' | 'select_metric' | 'select_infrastructure_entity'
@@ -156,7 +163,7 @@ export interface DemonstrationSummary {
 export type CommandValue =
   | string
   | {
-    field?: string; value?: string | number; operator?: string; direction?: 'asc' | 'desc'; from?: string; to?: string;
+    field?: string; value?: string | number | string[]; operator?: string; fields?: string[]; negate?: boolean; include?: boolean; direction?: 'asc' | 'desc'; from?: string; to?: string;
     language?: string; query?: string; panel?: string; service?: string; transaction?: string; span?: string; type?: string; metric?: string;
   };
 
@@ -183,6 +190,8 @@ interface CommandBase {
   evidence_focus: EvidenceFocus | null;
   goal_focus: EvidenceFocus | null;
   answer_schema: AnswerSchema;
+  /** The step's answer is an empty search (a boolean check for what must not exist). */
+  empty_result_expected?: true;
 }
 
 export interface DemonstrationStepCommand extends CommandBase {
@@ -422,6 +431,8 @@ export interface RunPublic {
   created_at: string;
   ready_at: string | null;
   completed_at: string | null;
+  /** When a completed run's Space and data are reclaimed (sooner if the learner closes it). */
+  reclaim_at: string | null;
   evidence: {completed: number; required: number; validators?: Record<string, ValidatorReading>};
   error: string | null;
   investigation_url: string;
@@ -445,6 +456,8 @@ export interface SessionStatus {
   run_state: RunState | 'MISSING' | null;
   available: boolean;
   feedback_available: boolean;
+  /** A finished investigation stays open to explore until its run is reclaimed; null before it is finished. */
+  exploration: {ends_in_seconds: number} | null;
   launcher_url: string;
 }
 

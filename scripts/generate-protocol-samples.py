@@ -71,6 +71,10 @@ class FakeNetwork:
             run = self.runs[match.group(1)]
             if match.group(2):
                 run["state"] = payload["state"]
+                if payload["state"] == "COMPLETED":
+                    # As the controller records it: a finished run stays to explore until it is reclaimed.
+                    run["completed_at"] = server.now_iso()
+                    run["reclaim_at"] = (datetime.now(timezone.utc) + timedelta(seconds=controller.COMPLETED_RETENTION_SECONDS)).isoformat()
             return 200, controller.public_state(run)
         if url.startswith(server.ELASTICSEARCH_URL):
             if "/_query" in url:
@@ -283,6 +287,8 @@ def build():
             session = new_session(pack, mode)
             walk(session, detours if mode != "demonstration" else None)
             finish(session)
+            # As GET /api/sessions/<id> does: the run's state (and a finished run's reclaim time) first.
+            server.refresh_run_ready(session)
             samples.body("session_status", server.session_status(session))
             # A reload after completion: the service says the session is complete.
             samples.message(server.complete_message(session))

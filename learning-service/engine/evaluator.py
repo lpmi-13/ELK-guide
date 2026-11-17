@@ -159,11 +159,16 @@ def validate_time_range(session, action, _evidence, validator):
 
 
 def validate_query_contains(session, action, _evidence, validator):
-    query = re.sub(r"\s+", "", action_text(action)).casefold()
+    text = action_text(action)
+    query = re.sub(r"\s+", "", text).casefold()
     fields = validator.get("fields", [])
     has_values = any(key in validator for key in ("value", "values", "values_from_truth", "value_from_truth", "value_from_expected"))
     values = _expected_values(session, validator) if has_values else []
-    return all(str(field).casefold() in query for field in fields) and all(str(value).casefold().replace(" ", "") in query for value in values)
+    # Operators the query must use as words ("not", "or"), not merely contain as letters.
+    keywords = validator.get("keywords", [])
+    return (all(str(field).casefold() in query for field in fields)
+            and all(str(value).casefold().replace(" ", "") in query for value in values)
+            and all(re.search(rf"(?<![\w.]){re.escape(str(word))}(?![\w.])", text, re.IGNORECASE) for word in keywords))
 
 
 def validate_query_language(_session, action, _evidence, validator):
@@ -186,6 +191,48 @@ def validate_filter_contains(session, action, _evidence, validator):
 
 def validate_filter_excludes(session, action, evidence, validator):
     return validate_filter_contains(session, action, evidence, {**validator, "negate": True})
+
+
+def validate_filter_values(session, action, _evidence, validator):
+    """A pill keeps any of several values of the field ("is one of", Kibana's phrases filter), and those
+    include every expected value."""
+    expected = [str(value).casefold() for value in _expected_values(session, validator)]
+    for item in _filters(action):
+        field = item.get("field") or _lookup(item, "meta.key")
+        values = item.get("value", _lookup(item, "meta.params"))
+        if isinstance(values, str):
+            values = [part.strip() for part in values.split(",")] if "," in values else [values]
+        negate = bool(item.get("negate", _lookup(item, "meta.negate", False)))
+        if (isinstance(values, list) and not negate and not item.get("disabled")
+                and _same(_base_field(field), _base_field(validator.get("field")))
+                and set(expected) <= {str(value).casefold() for value in values}):
+            return True
+    return False
+
+
+def validate_result_empty(_session, action, evidence, _validator):
+    """The search left nothing on screen: the browser measured no results, or (when it reported no count,
+    as for the coach's own search) the view holds no records."""
+    if _after(action).get("result_settled") is False:
+        return False
+    count = _after(action).get("result_count", _details(action).get("result_count"))
+    if count is None:
+        count = (evidence or {}).get("view_count")
+    return count is not None and _number(count) == 0
+
+
+def validate_filter_exists(_session, action, _evidence, validator):
+    """A pill keeps only the records that carry the field ("Filter for field present", or Add filter's
+    "exists" operator): Kibana reads it as ``<field>: exists``."""
+    for item in _filters(action):
+        field = item.get("field") or _lookup(item, "meta.key")
+        kind = str(item.get("type") or _lookup(item, "meta.type") or "").casefold()
+        operator = str(item.get("operator") or "").casefold()
+        exists = kind == "exists" or operator == "exists" or str(item.get("value", "")).casefold() == "exists"
+        negate = bool(item.get("negate", _lookup(item, "meta.negate", False)))
+        if exists and not negate and not item.get("disabled") and _same(_base_field(field), _base_field(validator.get("field"))):
+            return True
+    return False
 
 
 def validate_result_assertion(_session, _action, evidence, validator):
@@ -314,6 +361,9 @@ VALIDATORS = {
     "query_language": validate_query_language,
     "filter_contains": validate_filter_contains,
     "filter_excludes": validate_filter_excludes,
+    "filter_exists": validate_filter_exists,
+    "filter_values": validate_filter_values,
+    "result_empty": validate_result_empty,
     "result_assertion": validate_result_assertion,
     "result_count": validate_result_count,
     "evidence_minimum": validate_evidence_minimum,
@@ -416,7 +466,9 @@ def _holds_filter(filters, query, earned):
         negate = bool(item.get("negate", _lookup(item, "meta.negate", False)))
         if item.get("disabled") or _lookup(item, "meta.disabled"):
             continue
-        if _same(_base_field(field), _base_field(earned.get("field"))) and _same(value, earned.get("value")) and negate == bool(earned.get("negate")):
+        same_value = (sorted(map(str, value)) == sorted(map(str, earned.get("value"))) if isinstance(value, list) and isinstance(earned.get("value"), list)
+                      else _same(value, earned.get("value")))
+        if _same(_base_field(field), _base_field(earned.get("field"))) and same_value and negate == bool(earned.get("negate")):
             return True
     compact = re.sub(r"\s+", "", str(query or "")).casefold()
     return not earned.get("negate") and bool(compact) and str(earned.get("field", "")).casefold() in compact \
@@ -505,6 +557,16 @@ def drift_note(session, action):
     return None
 
 
+def _advances_a_goal(session, action, evidence, needs=None):
+    """Some unfinished goal whose requirements are met accepts this observation (through a route with a
+    ``needs`` validator, when given)."""
+    completed = session["completed_goals"]
+    return any(goal["id"] not in completed and set(goal.get("requires", [])).issubset(completed)
+               and any(_route_matches(session, action, evidence, route) for route in goal.get("accepts", [])
+                       if needs is None or any(validator.get("kind") == needs for validator in route.get("validators", [])))
+               for goal in playbook_goals(session))
+
+
 def evaluate_action(session, action, evidence=None, earned_state=None):
     """Progress every eligible goal satisfied by this normalized observation.
 
@@ -514,6 +576,14 @@ def evaluate_action(session, action, evidence=None, earned_state=None):
     evidence = evidence or {}
     ignored = action.get("type") in IGNORED_ACTIONS
     blocked = None if ignored else dead_end(session, action, earned_state)
+    if blocked and blocked["reason_code"] == "lost_earned_state" and _advances_a_goal(session, action, evidence):
+        # The step itself changes that filter (turning an excluding pill to include its value, say):
+        # what an earlier step earned is meant to change here, so it is not lost.
+        blocked = None
+    if blocked and blocked["reason_code"] == "empty_result" and _advances_a_goal(session, action, evidence, needs="result_empty"):
+        # The step asks for an empty search (a boolean query for what must not exist): nothing found
+        # is its evidence, not a dead end.
+        blocked = None
     if blocked:
         goal = current_goal(session)
         return {"outcome": "dead_end", "goals_progressed": [], "meaningful": False,

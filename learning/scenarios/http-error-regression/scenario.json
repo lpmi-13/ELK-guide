@@ -6,76 +6,252 @@
   "type": "investigation",
   "classification": "core",
   "difficulty": 1,
-  "estimated_minutes": 12,
+  "estimated_minutes": 14,
   "brief": "HTTP server errors increased after a release. Identify the failing endpoint or service and a representative error.",
-  "skills": ["kql", "filters", "documents"],
-  "required_capabilities": ["discover", "spaces", "saved_objects"],
+  "skills": [
+    "kql",
+    "filters",
+    "documents"
+  ],
+  "required_capabilities": [
+    "discover",
+    "spaces",
+    "saved_objects"
+  ],
   "parameters": {
     "incident": {
       "choose": [
-        {"service": "orders", "route_path": "/api/orders", "signal_field": "url.path", "finding": "/api/orders", "status": 500, "status_family": "HTTP 5xx", "error_type": "OrderValidationError", "message": "order validation failed after release", "version": "2.4.1"},
-        {"service": "orders", "route_path": "/api/orders/refund", "signal_field": "url.path", "finding": "/api/orders/refund", "status": 500, "status_family": "HTTP 5xx", "error_type": "RefundLedgerError", "message": "refund ledger write failed after release", "version": "2.6.0"},
-        {"service": "payments", "route_path": "/api/payments/authorize", "signal_field": "service.name", "finding": "payments", "status": 502, "status_family": "HTTP 502", "error_type": "PaymentGatewayTimeout", "message": "payment authorization timed out after release", "version": "3.1.0"},
-        {"service": "payments", "route_path": "/api/payments/capture", "signal_field": "url.path", "finding": "/api/payments/capture", "status": 502, "status_family": "HTTP 502", "error_type": "CaptureGatewayError", "message": "capture gateway rejected the request after release", "version": "3.2.1"},
-        {"service": "catalog", "route_path": "/api/catalog/search", "signal_field": "url.path", "finding": "/api/catalog/search", "status": 503, "status_family": "HTTP 503", "error_type": "CatalogBackendUnavailable", "message": "catalog backend unavailable after release", "version": "1.9.2"},
-        {"service": "auth", "route_path": "/api/auth/token", "signal_field": "service.name", "finding": "auth", "status": 500, "status_family": "HTTP 5xx", "error_type": "TokenSigningError", "message": "token signing failed after release", "version": "4.0.3"}
+        {
+          "service": "orders",
+          "route_path": "/api/orders",
+          "signal_field": "url.path",
+          "finding": "/api/orders",
+          "status": 500,
+          "status_family": "HTTP 5xx",
+          "error_type": "OrderValidationError",
+          "message": "order validation failed after release",
+          "version": "2.4.1"
+        },
+        {
+          "service": "orders",
+          "route_path": "/api/orders/refund",
+          "signal_field": "url.path",
+          "finding": "/api/orders/refund",
+          "status": 500,
+          "status_family": "HTTP 5xx",
+          "error_type": "RefundLedgerError",
+          "message": "refund ledger write failed after release",
+          "version": "2.6.0"
+        },
+        {
+          "service": "payments",
+          "route_path": "/api/payments/authorize",
+          "signal_field": "service.name",
+          "finding": "payments",
+          "status": 502,
+          "status_family": "HTTP 502",
+          "error_type": "PaymentGatewayTimeout",
+          "message": "payment authorization timed out after release",
+          "version": "3.1.0"
+        },
+        {
+          "service": "payments",
+          "route_path": "/api/payments/capture",
+          "signal_field": "url.path",
+          "finding": "/api/payments/capture",
+          "status": 502,
+          "status_family": "HTTP 502",
+          "error_type": "CaptureGatewayError",
+          "message": "capture gateway rejected the request after release",
+          "version": "3.2.1"
+        },
+        {
+          "service": "catalog",
+          "route_path": "/api/catalog/search",
+          "signal_field": "url.path",
+          "finding": "/api/catalog/search",
+          "status": 503,
+          "status_family": "HTTP 503",
+          "error_type": "CatalogBackendUnavailable",
+          "message": "catalog backend unavailable after release",
+          "version": "1.9.2"
+        },
+        {
+          "service": "auth",
+          "route_path": "/api/auth/token",
+          "signal_field": "service.name",
+          "finding": "auth",
+          "status": 500,
+          "status_family": "HTTP 5xx",
+          "error_type": "TokenSigningError",
+          "message": "token signing failed after release",
+          "version": "4.0.3"
+        }
       ]
     }
   },
   "provisioning": {
-    "strategies": ["seeded-events", "saved-objects"],
+    "strategies": [
+      "seeded-events",
+      "saved-objects"
+    ],
     "seeded_events": {
       "signal_count": 32,
       "noise_count": 90,
       "signal": {
-        "service": {"name": "${param.incident.service}", "version": "${param.incident.version}"},
-        "event": {"outcome": "failure"},
-        "http": {"response": {"status_code": "${param.incident.status}"}},
-        "url": {"path": "${param.incident.route_path}"},
-        "error": {"type": "${param.incident.error_type}"},
+        "service": {
+          "name": "${param.incident.service}",
+          "version": "${param.incident.version}"
+        },
+        "event": {
+          "outcome": "failure"
+        },
+        "http": {
+          "response": {
+            "status_code": "${param.incident.status}"
+          }
+        },
+        "url": {
+          "path": "${param.incident.route_path}"
+        },
+        "error": {
+          "type": "${param.incident.error_type}"
+        },
         "message": "${param.incident.message}"
       },
       "companions": [
         {
           "count": 3,
           "event": {
-            "service": {"name": "${param.incident.service}", "version": "${param.incident.version}"},
-            "event": {"outcome": "failure"},
-            "http": {"response": {"status_code": "${param.incident.status}"}},
-            "url": {"path": "${param.incident.route_path}"},
-            "error": {"type": "${param.incident.error_type}"},
+            "service": {
+              "name": "${param.incident.service}",
+              "version": "${param.incident.version}"
+            },
+            "event": {
+              "outcome": "failure"
+            },
+            "http": {
+              "response": {
+                "status_code": "${param.incident.status}"
+              }
+            },
+            "url": {
+              "path": "${param.incident.route_path}"
+            },
+            "error": {
+              "type": "${param.incident.error_type}"
+            },
             "message": "representative ${param.incident.error_type} request failed"
           }
         }
       ]
     },
     "readiness_validators": [
-      {"id": "seeded-signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.message}"}}}
+      {
+        "id": "seeded-signal",
+        "kind": "es_count",
+        "minimum": 20,
+        "query": {
+          "term": {
+            "message.keyword": "${param.incident.message}"
+          }
+        }
+      }
     ]
   },
-  "starting_view": {"app": "discover", "saved_object": "incident-investigation", "path": "/app/discover#/view/incident-investigation"},
+  "starting_view": {
+    "app": "discover",
+    "saved_object": "incident-investigation",
+    "path": "/app/discover#/view/incident-investigation"
+  },
   "truth": {
     "answers": {
       "finding": "${param.incident.finding}",
       "scope": "${param.incident.status_family}",
       "conclusion": "${param.incident.error_type} on ${param.incident.finding} is the post-release regression."
     },
-    "accept": {"scope": ["${param.incident.status}", "5xx"], "error_type": ["${param.incident.error_type}"]},
+    "accept": {
+      "scope": [
+        "${param.incident.status}",
+        "5xx"
+      ],
+      "error_type": [
+        "${param.incident.error_type}"
+      ]
+    },
     "assertions": [
-      {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.message}"}}},
-      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "representative ${param.incident.error_type} request failed"}}}
+      {
+        "id": "signal",
+        "kind": "es_count",
+        "minimum": 20,
+        "query": {
+          "term": {
+            "message.keyword": "${param.incident.message}"
+          }
+        }
+      },
+      {
+        "id": "corroboration",
+        "kind": "es_count",
+        "minimum": 1,
+        "query": {
+          "term": {
+            "message.keyword": "representative ${param.incident.error_type} request failed"
+          }
+        }
+      },
+      {
+        "id": "healthy_in_view",
+        "kind": "es_count",
+        "maximum": 0,
+        "query": {
+          "range": {
+            "http.response.status_code": {
+              "lt": 500
+            }
+          }
+        }
+      }
     ]
   },
   "answer_schema": {
     "type": "diagnosis",
     "fields": [
-      {"id": "finding", "label": "Affected endpoint or service", "kind": "string", "weight": 2},
-      {"id": "scope", "label": "Status family", "kind": "string", "weight": 1},
-      {"id": "conclusion", "label": "Error conclusion", "kind": "statement", "mentions": ["finding", "error_type"], "weight": 1},
-      {"id": "evidence", "label": "Representative document", "kind": "text", "scored": false}
+      {
+        "id": "finding",
+        "label": "Affected endpoint or service",
+        "kind": "string",
+        "weight": 2
+      },
+      {
+        "id": "scope",
+        "label": "Status family",
+        "kind": "string",
+        "weight": 1
+      },
+      {
+        "id": "conclusion",
+        "label": "Error conclusion",
+        "kind": "statement",
+        "mentions": [
+          "finding",
+          "error_type"
+        ],
+        "weight": 1
+      },
+      {
+        "id": "evidence",
+        "label": "Representative document",
+        "kind": "text",
+        "scored": false
+      }
     ]
   },
   "playbook": "playbook.json",
   "rubric": "rubric.json",
-  "cleanup": {"delete_space": true, "delete_run_data": true, "managed_resources": []}
+  "cleanup": {
+    "delete_space": true,
+    "delete_run_data": true,
+    "managed_resources": []
+  }
 }

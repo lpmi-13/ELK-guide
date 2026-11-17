@@ -559,7 +559,8 @@ class KibanaAdapter {
     } catch (error) {
       if (signal?.aborted) throw error;
       const input = await this.waitFor('kibana.query_bar', 20000, signal);
-      const clause = `${negate ? 'not ' : ''}${filter.field}: "${filter.value}"`;
+      const value = Array.isArray(filter.value) ? `(${filter.value.map(item => `"${item}"`).join(' or ')})` : `"${filter.value}"`;
+      const clause = `${negate ? 'not ' : ''}${filter.field}: ${value}`;
       const query = input.value.trim() ? `(${input.value.trim()}) and ${clause}` : clause;
       await this.enterQuery(query, coach, timingScale, signal, input, `Add ${clause} to the query.`);
       return {type: 'filter_added', details: filter, state_after: {query, filters: [{field: filter.field, value: filter.value, negate}]}};
@@ -573,18 +574,35 @@ class KibanaAdapter {
     await this.pointAt(fieldInput, coach, timingScale, signal, `Choose the ${filter.field} field.`, {activate: true, hold: false});
     await this.typeValue(fieldInput, filter.field, signal, coach);
     await this.pickComboOption(filter.field, signal);
-    const operatorLabel = negate ? 'is not' : 'is';
+    // "is one of" keeps any of several values (verified 9.5.2: a phrases filter, read on its pill as
+    // "<field>: is one of a, b"); its value box is a combo box that takes each value with Enter.
+    const values = Array.isArray(filter.value) ? filter.value.map(String) : [String(filter.value)];
+    const named = String(filter.operator || '').toLowerCase();
+    const operatorLabel = ['is', 'is not', 'is one of', 'is not one of'].includes(named) ? named
+      : values.length > 1 ? (negate ? 'is not one of' : 'is one of') : negate ? 'is not' : 'is';
     const operatorInput = await this.waitFor('kibana.filter_operator', 8000, signal);
     await this.pointAt(operatorInput, coach, timingScale, signal, `Set the operator to "${operatorLabel}".`, {activate: true, hold: false});
     await this.typeValue(operatorInput, operatorLabel, signal, coach);
     await this.pickComboOption(operatorLabel, signal, true);
     const valueInput = await this.waitFor('kibana.filter_params', 8000, signal);
-    await this.pointAt(valueInput, coach, timingScale, signal, `Enter the value ${filter.value}.`, {activate: true, hold: false});
-    await this.typeValue(valueInput, String(filter.value), signal, coach);
+    if (/one of/.test(operatorLabel)) {
+      const listed = values.length > 1 ? `${values.slice(0, -1).join(', ')} and ${values[values.length - 1]}` : values[0];
+      await this.pointAt(valueInput, coach, timingScale, signal, `Enter ${listed}, pressing Enter after each value.`, {activate: true, hold: false});
+      for (const value of values) {
+        const input = this.resolve('kibana.filter_params') || valueInput;
+        await this.typeValue(input, value, signal, coach);
+        input.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true}));
+        await this.wait(350, signal);
+      }
+    } else {
+      await this.pointAt(valueInput, coach, timingScale, signal, `Enter the value ${filter.value}.`, {activate: true, hold: false});
+      await this.typeValue(valueInput, values[0], signal, coach);
+    }
     const save = await this.waitFor('kibana.filter_save', 8000, signal);
     await this.pointAt(save, coach, timingScale, signal, `Click ${save.textContent?.trim() || 'Add filter'} to apply it.`, {activate: true});
     await this.settle(400, timingScale, signal);
-    return {type: 'filter_added', details: filter, state_after: {filters: [{field: filter.field, value: filter.value, negate}]}};
+    const value = /one of/.test(operatorLabel) ? values : filter.value;
+    return {type: 'filter_added', details: {...filter, value, operator: operatorLabel}, state_after: {}};
   }
 
   async pickComboOption(text, signal, exact = false) {
@@ -650,7 +668,12 @@ class KibanaAdapter {
       // Discover redraws its histogram; every panel of a dashboard follows the picker above them.
       case 'set_time_range': return /\/app\/dashboards/.test(location.pathname) ? registered('kibana.time_picker') : {kind: 'histogram'};
       case 'enter_kql': return {kind: 'query'};
-      case 'add_filter': return {kind: 'filter', field: value.field, value: value.value};
+      case 'add_filter':
+      case 'filter_top_value':
+      case 'set_filter_inclusion': return {kind: 'filter', field: value.field, value: value.value};
+      case 'filter_field_present': return {kind: 'filter', field: value.field, value: 'exists'};
+      case 'show_field_statistics': return {kind: 'field_cardinality', fields: value.fields || []};
+      case 'open_surrounding_documents': return {kind: 'document', fields: ['message', 'trace.id']};
       case 'sort_column': return {kind: 'columns', fields: [value.field || '@timestamp']};
       case 'open_field_statistics': return {kind: 'top_values', field: value.field};
       case 'inspect_field': return command.target === 'kibana.esql_first_result' ? {kind: 'esql_row', value: value.value} : {kind: 'top_values', field: value.field};
@@ -704,12 +727,29 @@ class KibanaAdapter {
     if (focus.kind === 'alert_summary') return this.alertSummaryEvidence(focus, signal);
     if (focus.kind === 'request_line') return this.requestLineEvidence(focus.text, signal);
     if (focus.kind === 'table_row') return [await this.tableRowEvidence(focus, signal)];
+    // A boolean check that should find nothing: the query that asked and Discover's "No results".
+    if (focus.kind === 'no_results') {
+      const prompt = () => document.querySelector("[data-test-subj='discoverNoResults']");
+      const deadline = Date.now() + 8000;
+      while (!prompt() && Date.now() < deadline) await this.wait(100, signal);
+      return [registered('kibana.query_bar'), prompt];
+    }
+    // Field statistics (verified 9.5.2: one `dataVisualizerRow row-<field>` table row per field, its
+    // distinct count in `dataVisualizerTableColumnDistinctValues`): each named field's row, so its name
+    // and its count of distinct values are ringed together and the card keeps clear of both.
+    if (focus.kind === 'field_cardinality') {
+      const deadline = Date.now() + 10000;
+      while (!document.querySelector("[data-test-subj='dataVisualizerTable-loaded']") && Date.now() < deadline) await this.wait(100, signal);
+      return (focus.fields || []).map(field => () => document.querySelector(`[data-test-subj~='row-${String(field).replace(/['\\]/g, '\\$&')}']`));
+    }
     // A goal card can ask for these before Discover has first drawn them.
     await this.waitForTargets(['kibana.result_count'], signal, 8000);
     await this.resultsSettled(signal);
     if (focus.kind === 'histogram') return [registered('kibana.histogram'), registered('kibana.result_count')];
     if (focus.kind === 'query') return [registered('kibana.query_bar'), registered('kibana.result_count')];
-    if (focus.kind === 'filter') return [() => this.findFilterPill(focus.field, focus.value), registered('kibana.result_count')];
+    if (focus.kind === 'filter') {
+      return [() => this.findFilterPill(focus.field, focus.value), registered('kibana.result_count'), ...(focus.histogram ? [registered('kibana.histogram')] : [])];
+    }
     return [];
   }
 
@@ -902,21 +942,8 @@ class KibanaAdapter {
       this.performing = true;
       try { this.resolve('kibana.first_result')?.click(); } finally { this.performing = false; }
     }
-    const viewer = await this.waitFor('kibana.doc_viewer', 8000, signal);
-    // A logs view opens the record on its overview; the fields are on the Table tab (verified 9.5.2).
-    const tableTab = viewer.querySelector("[data-test-subj='docViewerTab-doc_view_table']");
-    if (tableTab && tableTab.getAttribute('aria-selected') !== 'true') {
-      tableTab.click();
-      await this.wait(300, signal);
-    }
-    const anyRow = () => viewer.querySelector("[data-test-subj^='tableDocViewRow-']");
-    const deadline = Date.now() + 8000;
-    while (!anyRow() && Date.now() < deadline) await this.wait(100, signal);
-    const row = field => {
-      const name = document.querySelector(`[data-test-subj='docViewerFlyout'] [data-test-subj='tableDocViewRow-${String(field).replace(/['\\]/g, '\\$&')}-name']`);
-      return name?.closest("[role='row'], tr") || name;
-    };
-    const scroller = fields.length && anyRow() ? this.scrollableAncestor(anyRow(), viewer) : null;
+    const {viewer, row, scroller: fieldsScroller} = await this.documentTable(signal);
+    const scroller = fields.length ? fieldsScroller : null;
     if (scroller) {
       let found = await this.locateRows(fields, row, scroller, signal);
       if (found.size < fields.length && await this.showMoreDocumentRows(viewer, signal)) {
@@ -933,6 +960,68 @@ class KibanaAdapter {
       await this.wait(150, signal);
     }
     return fields.map(field => () => row(field));
+  }
+
+  // The open document's field table: the viewer, a lookup for a field's row, and the element its rows
+  // scroll in (null when they all fit).
+  async documentTable(signal) {
+    const viewer = await this.waitFor('kibana.doc_viewer', 8000, signal);
+    // A logs view opens the record on its overview; the fields are on the Table tab (verified 9.5.2).
+    const tableTab = viewer.querySelector("[data-test-subj='docViewerTab-doc_view_table']");
+    if (tableTab && tableTab.getAttribute('aria-selected') !== 'true') {
+      tableTab.click();
+      await this.wait(300, signal);
+    }
+    const anyRow = () => viewer.querySelector("[data-test-subj^='tableDocViewRow-']");
+    const deadline = Date.now() + 8000;
+    while (!anyRow() && Date.now() < deadline) await this.wait(100, signal);
+    const row = field => {
+      const name = document.querySelector(`[data-test-subj='docViewerFlyout'] [data-test-subj='tableDocViewRow-${String(field).replace(/['\\]/g, '\\$&')}-name']`);
+      return name?.closest("[role='row'], tr") || name;
+    };
+    return {viewer, row, scroller: anyRow() ? this.scrollableAncestor(anyRow(), viewer) : null};
+  }
+
+  // Pin the fields a step compares the way a learner would, one at a time, so the demonstration shows
+  // how it's done. Kibana draws a row's pin only while the pointer is over that row (verified 9.5.2:
+  // `.kbnDocViewer__fieldsGrid__pinAction` is transparent until then), and the coach's cursor is drawn,
+  // not a real pointer, so the pin is shown while the cursor goes to it. A pinned row moves to the top.
+  // False when the viewer has no pin controls (the result beat then scrolls the rows into view instead).
+  async pinFieldsVisibly(fields, coach, timingScale, signal) {
+    const {viewer, row, scroller} = await this.documentTable(signal);
+    const pinFor = field => document.querySelector(`[data-test-subj='docViewerFlyout'] [data-test-subj='unifiedDocViewer_pinControlButton_${String(field).replace(/['\\]/g, '\\$&')}']`);
+    let shown = 0;
+    for (const field of fields) {
+      if (scroller) {
+        let found = await this.locateRows([field], row, scroller, signal);
+        if (!found.size && await this.showMoreDocumentRows(viewer, signal)) found = await this.locateRows([field], row, scroller, signal);
+        const place = found.get(field);
+        if (!place) continue;
+        scroller.scrollTop = Math.max(0, place.top - (scroller.clientHeight - (place.bottom - place.top)) / 2);
+        await this.wait(150, signal);
+      }
+      const pin = pinFor(field);
+      if (!pin) return false;
+      if (/unpin/i.test(pin.getAttribute('aria-label') || '')) continue;
+      const shows = pin.closest('.kbnDocViewer__fieldsGrid__pinAction');
+      shows?.style.setProperty('opacity', '1');
+      try {
+        if (shown === 0 && !this.pinTaught) {
+          // The first pin is shown in two beats: where the icon comes from, then the click.
+          await this.pointAt(row(field) || pin, coach, timingScale, signal, `To pin ${field}, point at its row: a pin icon appears at the row’s left edge.`, {showClick: false});
+          await this.pointAt(pin, coach, timingScale, signal, 'Click the pin. A pinned field moves to the top of the document’s table.', {activate: true});
+        } else {
+          await this.pointAt(pin, coach, timingScale, signal, `Pin ${field} the same way, with the pin icon at the left of its row.`, {activate: true});
+        }
+      } finally {
+        shows?.style.removeProperty('opacity');
+      }
+      shown += 1;
+      this.pinTaught = true;
+      await this.wait(250, signal);
+    }
+    if (scroller) scroller.scrollTop = 0;
+    return true;
   }
 
   // Pin each field (verified 9.5.2: unifiedDocViewer_pinControlButton_<field>, labelled "Pin field" /
@@ -1116,6 +1205,23 @@ class KibanaAdapter {
     const esql = typeof app.query?.esql === 'string';
     const pill = filter => {
       const value = filter.value == null ? '' : String(filter.value);
+      // "is one of" (verified 9.5.2: meta type phrases, params and value the list of values).
+      if (Array.isArray(filter.value)) {
+        const values = filter.value.map(String);
+        return {
+          '$state': {store: 'appState'},
+          meta: {alias: null, disabled: false, index: dataViewId, key: filter.field, negate: Boolean(filter.negate), params: values, type: 'phrases', value: values},
+          query: {bool: {minimum_should_match: 1, should: values.map(item => ({match_phrase: {[filter.field]: item}}))}},
+        };
+      }
+      // "Filter for field present" (verified 9.5.2: meta type exists, value "exists").
+      if (filter.type === 'exists') {
+        return {
+          '$state': {store: 'appState'},
+          meta: {alias: null, disabled: false, index: dataViewId, key: filter.field, negate: Boolean(filter.negate), type: 'exists', value: 'exists'},
+          query: {exists: {field: filter.field}},
+        };
+      }
       return {
         '$state': {store: 'appState'},
         meta: {alias: null, disabled: false, index: dataViewId, key: filter.field, negate: Boolean(filter.negate), params: {query: value}, type: 'phrase'},
@@ -1128,7 +1234,8 @@ class KibanaAdapter {
       const existing = [...(app.filters || []), ...(global.filters || [])];
       const holds = filter => existing.some(item => !item.meta?.disabled
         && String(item.meta?.key || '').replace(/\.(keyword|text)$/, '') === filter.field
-        && String(item.meta?.params?.query ?? '') === String(filter.value ?? '')
+        && (Array.isArray(filter.value) ? Array.isArray(item.meta?.params) && [...item.meta.params].map(String).sort().join() === filter.value.map(String).sort().join()
+          : String(item.meta?.type === 'exists' ? 'exists' : item.meta?.params?.query ?? '') === String(filter.value ?? ''))
         && Boolean(item.meta?.negate) === Boolean(filter.negate));
       app.filters = [...(app.filters || []), ...(state.filters || []).filter(filter => !holds(filter)).map(pill)];
     } else {

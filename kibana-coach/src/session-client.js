@@ -15,6 +15,9 @@
 // Reconnect delays after a drop, in milliseconds: quick at first, then steady while the service is away.
 const RECONNECT_DELAYS = [1500, 3000, 5000, 10000];
 
+// Where the launcher is when the service can't say: the same host, on the launcher's published port.
+const defaultLauncherUrl = () => `${location.protocol}//${location.hostname}:8090/`;
+
 class IncidentSessionClient {
   /** @param {{server: string, session: string, token?: string, runId?: string, mode?: Mode}} config */
   constructor(config) {
@@ -136,7 +139,7 @@ class IncidentSessionClient {
     /** @type {{launcher_url?: string, available?: boolean, run_state?: string | null}} */
     let body = {};
     try { body = await response.json(); } catch (_error) { /* not JSON: a proxy error page */ }
-    const launcher = body.launcher_url || `${location.protocol}//${location.hostname}:8090/`;
+    const launcher = body.launcher_url || defaultLauncherUrl();
     if (response.status === 404 || response.status === 401) {
       this.end({message_type: 'failed', session_id: this.sessionId, reason: 'missing', error: 'This investigation is no longer available.', launcher_url: launcher});
       return true;
@@ -273,6 +276,33 @@ class IncidentSessionClient {
   forget() {
     this.stop();
     sessionStorage.removeItem(`incident-coach:${this.sessionId}`);
+  }
+
+  /**
+   * The session's status: among other things how long a finished investigation can still be explored,
+   * and where the launcher is. Null when the service doesn't answer with it in time.
+   * @returns {Promise<Partial<import('../protocol/protocol').SessionStatus> | null>}
+   */
+  async status() {
+    try {
+      const response = await fetch(`${this.server}/api/sessions/${this.sessionId}`, {headers: {Authorization: `Bearer ${this.token}`}, cache: 'no-store', signal: AbortSignal.timeout(2000)});
+      return await response.json();
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  /**
+   * Close a finished investigation and say where the launcher is. The run is reclaimed now rather than
+   * when its retention window ends; the request is sent with keepalive, so it completes after the tab
+   * has closed or left for the launcher. The session is forgotten, so this tab won't reconnect to it.
+   * @returns {Promise<string>} the launcher's URL
+   */
+  async close() {
+    const status = await this.status();
+    if (this.runId) fetch(`${this.server}/api/runs/${encodeURIComponent(this.runId)}`, {method: 'DELETE', keepalive: true}).catch(() => {});
+    this.forget();
+    return status?.launcher_url || defaultLauncherUrl();
   }
 }
 

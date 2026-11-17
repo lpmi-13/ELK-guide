@@ -50,3 +50,21 @@ test('restoreDiscoverState leaves pages without Discover URL state alone', () =>
   assert.equal(new KibanaAdapter().restoreDiscoverState({}), false);
   assert.equal(location.hash, '#/view/x');
 });
+
+test('an earned "field present" filter is put back as an exists pill', () => {
+  const location = {pathname: '/s/lab/app/discover', hash: deadEndHash};
+  const {KibanaRison, KibanaAdapter} = loadAdapter(location);
+  new KibanaAdapter().restoreDiscoverState({filters: [{field: 'error.type', value: 'exists', negate: false, type: 'exists'}]});
+  const app = KibanaRison.parse(decodeURIComponent(location.hash.match(/_a=([^&]*)/)[1]));
+  assert.deepEqual(app.filters[0].meta, {alias: null, disabled: false, index: '930ca85b-2b16', key: 'error.type', negate: false, type: 'exists', value: 'exists'});
+  assert.deepEqual(app.filters[0].query, {exists: {field: 'error.type'}});
+});
+
+test('an earned "is one of" filter is put back as one phrases pill', () => {
+  const location = {pathname: '/s/lab/app/discover', hash: deadEndHash};
+  const {KibanaRison, KibanaAdapter} = loadAdapter(location);
+  new KibanaAdapter().restoreDiscoverState({filters: [{field: 'service.version', value: ['2.4.0', '2.4.1'], negate: false, type: 'phrases'}]});
+  const app = KibanaRison.parse(decodeURIComponent(location.hash.match(/_a=([^&]*)/)[1]));
+  assert.deepEqual(app.filters[0].meta, {alias: null, disabled: false, index: '930ca85b-2b16', key: 'service.version', negate: false, params: ['2.4.0', '2.4.1'], type: 'phrases', value: ['2.4.0', '2.4.1']});
+  assert.deepEqual(app.filters[0].query.bool.should, [{match_phrase: {'service.version': '2.4.0'}}, {match_phrase: {'service.version': '2.4.1'}}]);
+});

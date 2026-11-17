@@ -394,7 +394,7 @@ def public_state(run, include_manifest=False):
         "run_id": manifest["run_id"], "space_id": manifest["space_id"], "state": run["state"], "seed": manifest["seed"],
         "scenario_key": manifest.get("scenario_key"), "template_id": manifest["template_id"], "title": manifest["scenario"]["title"],
         "brief": manifest["scenario"]["brief"], "scenario_type": manifest["scenario"]["type"], "created_at": manifest["created_at"],
-        "ready_at": run.get("ready_at"), "completed_at": run.get("completed_at"), "evidence": run.get("evidence", {}),
+        "ready_at": run.get("ready_at"), "completed_at": run.get("completed_at"), "reclaim_at": run.get("reclaim_at"), "evidence": run.get("evidence", {}),
         "error": run.get("error"), "investigation_url": starting_url(manifest),
     }
     if include_manifest:
@@ -1247,8 +1247,14 @@ def stop_run(run_id):
     run["stop"].set()
     cleanup_run(run)
     run.setdefault("reclaimed", threading.Event()).set()
-    update_run(run_id, state="ABORTED", completed_at=now_iso())
-    emit("scenario aborted", run_id=run_id, action="aborted", state="ABORTED")
+    if run["state"] == "COMPLETED":
+        # The learner closed a finished investigation: it is reclaimed now rather than when its retention
+        # window ends, and stays COMPLETED, since it was finished rather than stopped.
+        update_run(run_id, reclaim_at=now_iso())
+        emit("scenario closed", run_id=run_id, action="closed", state="COMPLETED")
+    else:
+        update_run(run_id, state="ABORTED", completed_at=now_iso())
+        emit("scenario aborted", run_id=run_id, action="aborted", state="ABORTED")
     forget_after_retention(run_id)
     return True
 
@@ -1269,6 +1275,8 @@ def transition_run(run_id, requested_state):
             run["stop"].set()
             clear_active_fault(run)
             run["completed_at"] = now_iso()
+            # Until then the learner can keep exploring the finished investigation; the coach says when.
+            run["reclaim_at"] = (datetime.now(timezone.utc) + timedelta(seconds=COMPLETED_RETENTION_SECONDS)).isoformat()
         emit(f"scenario {requested_state.lower()}", run_id=run_id, action=requested_state.lower(), state=requested_state)
         snapshot = public_state(run)
     # Reclaim this run's per-run artifacts (lab-{run_id} index, filtered alias,

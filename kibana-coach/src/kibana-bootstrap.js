@@ -29,6 +29,17 @@
   });
 })();
 
+// The coach's "Close investigation" leaves the page on purpose, but Discover with unsaved changes makes
+// Kibana ask "Leave site?" first (verified 9.5.2), and staying would strand the learner on a run that is
+// being reclaimed. Kibana's beforeunload listener is on window, where listeners run in the order they
+// were added (a capture listener added later does not run first), so this one is added here, before
+// Kibana's, and stops it once the coach has called __coachAllowLeave().
+(function guardDeliberateLeave() {
+  let leaving = false;
+  window.addEventListener('beforeunload', event => { if (leaving) event.stopImmediatePropagation(); });
+  window.__coachAllowLeave = () => { leaving = true; };
+})();
+
 // Count Kibana's own search requests (verified 9.5.2: Discover POSTs /internal/search/ese, twice per
 // search, ~350-650 ms after Enter — even for an unchanged query — and keeps the previous hit count on
 // screen until they return). The action observer reads a result only after the search an action started

@@ -292,6 +292,12 @@ class ContractTests(unittest.TestCase):
         self.assertIn(("index-pattern", "microservices"), identities)
         self.assertIn(("search", "incident-investigation"), identities)
         self.assertIn(("dashboard", "incident-overview"), identities)
+        # Kibana 9.5.2 keeps a Discover session as tabs; a legacy search is migrated into one tab labelled
+        # "Untitled", so the search ships already tabbed, with a short label for its tab.
+        search = next(item for item in objects if item["type"] == "search")
+        self.assertEqual(search["typeMigrationVersion"], "10.13.0")
+        self.assertEqual([tab["label"] for tab in search["attributes"]["tabs"]], ["Incident"])
+        self.assertEqual(len(search["attributes"]["tabs"][0]["attributes"]["columns"]), 7)
         # Legacy aggregation-based XY visualizations throw in Kibana 9.5.2 and offer neither Inspect nor
         # Explore in Discover, so every panel is a Lens visualization reading the run's data view.
         self.assertNotIn("visualization", {object_type for object_type, _identifier in identities})

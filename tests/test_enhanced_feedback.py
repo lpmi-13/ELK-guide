@@ -147,6 +147,134 @@ def move_incident_back(s, minutes):
     s["manifest"]["created_at"] = (datetime.fromisoformat(s["manifest"]["created_at"]) - timedelta(minutes=minutes)).isoformat()
 
 
+REASON = "authentication.rejection_reason"
+
+
+def include_exclude_session(completed=()):
+    """The authentication pack's route: leave the surging reason out, then turn that pill around."""
+    s = session(completed=completed)
+    scope, *_rest = goals()
+    s["playbook"]["goals"] = [
+        scope,
+        {"id": "baseline", "title": "See the window without the surge", "requires": ["scope"],
+         "accepts": [{"action": ["filter_added", "filter_changed"], "validators": [{"kind": "filter_excludes", "field": REASON, "value": "token_reuse"}]}],
+         "reference_action": {"command": "filter_top_value", "arguments": {"field": REASON, "value": "token_reuse", "negate": True}}},
+        {"id": "isolate", "title": "Turn the filter around", "requires": ["baseline"],
+         "accepts": [{"action": ["filter_added", "filter_changed"], "validators": [{"kind": "filter_contains", "field": REASON, "value": "token_reuse"}]}],
+         "reference_action": {"command": "set_filter_inclusion", "arguments": {"field": REASON, "value": "token_reuse", "include": True}}},
+        {"id": "inspect", "title": "Check one event", "requires": ["isolate"],
+         "accepts": [{"action": "document_expanded", "validators": []}], "reference_action": {"command": "expand_document"}},
+    ]
+    return s
+
+
+class IncludeExcludeTests(unittest.TestCase):
+    def test_the_earned_search_follows_the_pill_from_excluding_to_including(self):
+        excluding = server.restore_state(include_exclude_session(completed={"scope", "baseline"}))
+        self.assertEqual(excluding["filters"], [{"field": REASON, "value": "token_reuse", "negate": True}])
+        including = server.restore_state(include_exclude_session(completed={"scope", "baseline", "isolate"}))
+        self.assertEqual(including["filters"], [{"field": REASON, "value": "token_reuse", "negate": False}])
+
+    def test_turning_the_earned_pill_around_completes_the_step_instead_of_losing_the_filter(self):
+        s = include_exclude_session(completed={"scope", "baseline"})
+        earned = server.restore_state(s)
+        pill = {"field": REASON, "value": "token_reuse", "negate": False}
+        turned = {"type": "filter_changed", "actor": "learner", "details": pill, "state_after": {"filters": [pill], "query": ""}}
+        result = evaluator.evaluate_action(s, turned, {}, earned_state=earned)
+        self.assertEqual((result["outcome"], result["goals_progressed"]), ("accepted", ["isolate"]))
+
+    def test_deleting_the_earned_pill_is_still_a_dead_end(self):
+        s = include_exclude_session(completed={"scope", "baseline"})
+        earned = server.restore_state(s)
+        removed = {"type": "filter_removed", "actor": "learner", "details": {}, "state_after": {"filters": [], "query": ""}}
+        result = evaluator.evaluate_action(s, removed, {}, earned_state=earned)
+        self.assertEqual(result["reason_code"], "lost_earned_state")
+
+    def test_a_field_present_filter_is_earned_and_checked_as_an_exists_pill(self):
+        s = session(completed={"scope", "isolate"})
+        s["playbook"]["goals"][1]["reference_action"] = {"command": "filter_field_present", "arguments": {"field": "error.type"}}
+        self.assertEqual(server.restore_state(s)["filters"], [{"field": "error.type", "value": "exists", "negate": False, "type": "exists"}])
+        check = {"kind": "filter_exists", "field": "error.type"}
+        present = {"field": "error.type", "value": "exists", "negate": False, "type": "exists"}
+        self.assertTrue(evaluator.validate_filter_exists(s, {"details": present}, {}, check))
+        self.assertTrue(evaluator.validate_filter_exists(s, {"state_after": {"filters": [{"meta": {"key": "error.type.keyword", "type": "exists", "negate": False}}]}}, {}, check))
+        self.assertFalse(evaluator.validate_filter_exists(s, {"details": {**present, "negate": True}}, {}, check))
+        self.assertFalse(evaluator.validate_filter_exists(s, {"details": {**present, "field": "service.name"}}, {}, check))
+        self.assertFalse(evaluator.validate_filter_exists(s, {"details": {"field": "error.type", "value": "LedgerRoundingError", "negate": False}}, {}, check))
+
+
+class ShowcaseStepTests(unittest.TestCase):
+    """The steps that show off a Kibana feature: a boolean check that should find nothing, a range or
+    "is one of" filter read off the page, and claims about what the screen no longer holds."""
+
+    def boolean_session(self):
+        s = session(completed={"scope", "isolate"})
+        s["playbook"]["goals"].insert(2, {
+            "id": "confined", "title": "Check no other client has it", "requires": ["isolate"], "empty_result_expected": True,
+            "accepts": [{"action": ["query_submitted"], "validators": [
+                {"kind": "query_contains", "fields": [REASON, "client.application.name"], "values": ["token_reuse", "mobile-web"], "keywords": ["not"]},
+                {"kind": "result_empty"}]}],
+            "reference_action": {"command": "enter_kql", "arguments": f'{REASON}: token_reuse and not client.application.name: "mobile-web"'}})
+        return s
+
+    def test_an_empty_boolean_check_completes_its_step_instead_of_being_a_dead_end(self):
+        s = self.boolean_session()
+        query = f'{REASON}: token_reuse and not client.application.name: "mobile-web"'
+        result = evaluator.evaluate_action(s, {"type": "query_submitted", "actor": "learner", "details": {"query": query}, "state_after": {"result_count": 0}}, {})
+        self.assertEqual((result["outcome"], result["goals_progressed"]), ("accepted", ["confined"]))
+        self.assertTrue(server.next_command(self.boolean_session() | {"completed_goals": {"scope", "isolate"}})["empty_result_expected"])
+
+    def test_an_empty_search_that_is_not_the_check_is_still_a_dead_end(self):
+        # Without "not", the query asks for the wrong thing; its empty result is the usual dead end.
+        s = self.boolean_session()
+        query = f'{REASON}: token_reuse and client.application.name: "mobile-web-2"'
+        result = evaluator.evaluate_action(s, {"type": "query_submitted", "actor": "learner", "details": {"query": query}, "state_after": {"result_count": 0}}, {})
+        self.assertEqual(result["reason_code"], "empty_result")
+
+    def test_a_pill_read_off_the_page_takes_its_kind_from_the_url(self):
+        pills = [{"field": STATUS, "value": "500 to 599", "negate": False}, {"field": "url.path", "value": "/x", "negate": False}]
+        url = [{"field": STATUS, "type": "range", "value": {"gte": 500, "lt": 599}, "negate": False, "disabled": False},
+               {"field": "url.path.keyword", "type": "phrase", "value": "/x", "negate": False, "disabled": False}]
+        self.assertEqual(server.typed_filters(pills, url), [
+            {"field": STATUS, "value": {"gte": 500, "lt": 599}, "negate": False, "type": "range"},
+            {"field": "url.path", "value": "/x", "negate": False},
+        ])
+
+    def test_an_earned_is_one_of_filter_is_held_whatever_the_order_of_its_values(self):
+        s = session(completed={"scope", "isolate"})
+        s["playbook"]["goals"][1]["reference_action"] = {"command": "add_filter", "arguments": {"field": "service.version", "operator": "is one of", "value": ["2.4.0", "2.4.1"]}}
+        earned = server.restore_state(s)
+        self.assertEqual(earned["filters"], [{"field": "service.version", "value": ["2.4.0", "2.4.1"], "negate": False, "type": "phrases"}])
+        held = {"type": "filter_added", "actor": "learner", "state_after": {"filters": [{"field": "service.version", "value": ["2.4.1", "2.4.0"], "negate": False, "type": "phrases"}]}}
+        self.assertNotEqual(evaluator.evaluate_action(s, held, {}, earned_state=earned)["outcome"], "dead_end")
+        check = {"kind": "filter_values", "field": "service.version", "values": ["2.4.0", "2.4.1"]}
+        self.assertTrue(evaluator.validate_filter_values(s, held, {}, check))
+        self.assertFalse(evaluator.validate_filter_values(s, {"state_after": {"filters": [{"field": "service.version", "value": ["2.4.1", "2.3.7"], "negate": False}]}}, {}, check))
+
+    def test_a_ceiling_assertion_is_judged_inside_the_view_for_the_coach_too(self):
+        s = session(mode="demonstration")
+        s["manifest"]["scenario"].setdefault("truth", {})["assertions"] = [{"id": "healthy_in_view", "kind": "es_count", "maximum": 0, "query": {"range": {STATUS: {"lt": 500}}}}]
+        s["view"] = {"time_from": "now-15m", "time_to": "now", "language": "kql", "query": f"{STATUS} >= 500", "filters": []}
+        searches = []
+
+        def answer(total):
+            def fake(url, method="GET", payload=None, timeout=10):
+                searches.append(payload)
+                return 200, {"hits": {"total": {"value": total}}}
+            return fake
+        action = {"type": "query_submitted", "actor": "tutorial", "details": {"query": f"{STATUS} >= 500"}, "state_after": {}}
+        with patch.object(server, "http_json", answer(0)):
+            evidence = server.action_evidence(s, action)
+        self.assertTrue(evidence["assertions"]["healthy_in_view"])
+        self.assertEqual(evidence["view_count"], 0)
+        self.assertIn({"range": {STATUS: {"gte": "500"}}}, json.loads(json.dumps(searches[-1]))["query"]["bool"]["filter"][1]["bool"]["filter"])
+        with patch.object(server, "http_json", answer(3)):
+            self.assertFalse(server.action_evidence(s, action)["assertions"]["healthy_in_view"])
+        s.pop("view")
+        with patch.object(server, "http_json", answer(0)):
+            self.assertFalse(server.action_evidence(s, action)["assertions"]["healthy_in_view"], "no view, so nothing can be claimed about it")
+
+
 class WindowFeedbackTests(unittest.TestCase):
     def test_relative_windows_are_named_as_the_picker_names_them(self):
         names = {"now-15m": "the last 15 minutes", "now-1h": "the last hour", "now-24h": "the last 24 hours",

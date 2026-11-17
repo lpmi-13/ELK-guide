@@ -6,43 +6,128 @@
   "type": "investigation",
   "classification": "core",
   "difficulty": 2,
-  "estimated_minutes": 15,
+  "estimated_minutes": 18,
   "brief": "Only part of the fleet appears unhealthy after a rolling deployment. Determine whether version is the differentiator and identify its first appearance.",
-  "skills": ["multi-value-filtering", "field-comparison", "sorting"],
-  "required_capabilities": ["discover", "spaces", "saved_objects"],
+  "skills": [
+    "multi-value-filtering",
+    "field-comparison",
+    "sorting"
+  ],
+  "required_capabilities": [
+    "discover",
+    "spaces",
+    "saved_objects"
+  ],
   "parameters": {
     "incident": {
       "choose": [
-        {"service": "orders", "bad_version": "2.4.1", "good_version": "2.4.0", "status": 500},
-        {"service": "payments", "bad_version": "3.2.0", "good_version": "3.1.4", "status": 502},
-        {"service": "catalog", "bad_version": "1.9.0", "good_version": "1.8.5", "status": 503},
-        {"service": "auth", "bad_version": "4.1.0", "good_version": "4.0.7", "status": 500}
+        {
+          "service": "orders",
+          "bad_version": "2.4.1",
+          "good_version": "2.4.0",
+          "status": 500,
+          "legacy_version": "2.3.7"
+        },
+        {
+          "service": "payments",
+          "bad_version": "3.2.0",
+          "good_version": "3.1.4",
+          "status": 502,
+          "legacy_version": "3.0.9"
+        },
+        {
+          "service": "catalog",
+          "bad_version": "1.9.0",
+          "good_version": "1.8.5",
+          "status": 503,
+          "legacy_version": "1.7.2"
+        },
+        {
+          "service": "auth",
+          "bad_version": "4.1.0",
+          "good_version": "4.0.7",
+          "status": 500,
+          "legacy_version": "3.9.4"
+        }
       ]
     },
     "timing": {
       "choose": [
-        {"rollout": 14, "first": 12.5, "noticed": 8, "first_seconds": 750, "signal_oldest_seconds": 730, "before_rollout_seconds": 870},
-        {"rollout": 16, "first": 14.5, "noticed": 9, "first_seconds": 870, "signal_oldest_seconds": 850, "before_rollout_seconds": 990},
-        {"rollout": 18, "first": 16, "noticed": 10, "first_seconds": 960, "signal_oldest_seconds": 940, "before_rollout_seconds": 1110}
+        {
+          "rollout": 14,
+          "first": 12.5,
+          "noticed": 8,
+          "first_seconds": 750,
+          "signal_oldest_seconds": 730,
+          "before_rollout_seconds": 870
+        },
+        {
+          "rollout": 16,
+          "first": 14.5,
+          "noticed": 9,
+          "first_seconds": 870,
+          "signal_oldest_seconds": 850,
+          "before_rollout_seconds": 990
+        },
+        {
+          "rollout": 18,
+          "first": 16,
+          "noticed": 10,
+          "first_seconds": 960,
+          "signal_oldest_seconds": 940,
+          "before_rollout_seconds": 1110
+        }
       ]
     }
   },
   "provisioning": {
-    "strategies": ["seeded-events", "saved-objects"],
+    "strategies": [
+      "seeded-events",
+      "saved-objects"
+    ],
     "seeded_events": {
       "signal_count": 35,
       "noise_count": 100,
-      "noise_exclude_services": ["${param.incident.service}"],
-      "signal_window_seconds": [10, "${param.timing.signal_oldest_seconds}"],
+      "noise_exclude_services": [
+        "${param.incident.service}"
+      ],
+      "signal_window_seconds": [
+        10,
+        "${param.timing.signal_oldest_seconds}"
+      ],
       "signal": {
-        "service": {"name": "${param.incident.service}", "version": "${param.incident.bad_version}"},
-        "event": {"outcome": "failure"},
-        "http": {"response": {"status_code": "${param.incident.status}"}},
-        "transaction": {"result": "HTTP 5xx"},
+        "service": {
+          "name": "${param.incident.service}",
+          "version": "${param.incident.bad_version}"
+        },
+        "event": {
+          "outcome": "failure"
+        },
+        "http": {
+          "response": {
+            "status_code": "${param.incident.status}"
+          }
+        },
+        "transaction": {
+          "result": "HTTP 5xx"
+        },
         "message": "request failed on newly deployed ${param.incident.service} ${param.incident.bad_version}"
       },
       "distractors": [
-        {"service": {"name": "${param.incident.service}", "version": "${param.incident.good_version}"}, "event": {"outcome": "success"}, "http": {"response": {"status_code": 200}}}
+        {
+          "service": {
+            "name": "${param.incident.service}",
+            "version": "${param.incident.good_version}"
+          },
+          "event": {
+            "outcome": "success"
+          },
+          "http": {
+            "response": {
+              "status_code": 200
+            }
+          }
+        }
       ],
       "companions": [
         {
@@ -51,9 +136,18 @@
           "interval_seconds": 26,
           "trace": "own",
           "event": {
-            "service": {"name": "${param.incident.service}", "version": "${param.incident.good_version}"},
-            "event": {"outcome": "success"},
-            "http": {"response": {"status_code": 200}},
+            "service": {
+              "name": "${param.incident.service}",
+              "version": "${param.incident.good_version}"
+            },
+            "event": {
+              "outcome": "success"
+            },
+            "http": {
+              "response": {
+                "status_code": 200
+              }
+            },
             "message": "healthy request on previous version ${param.incident.good_version}"
           }
         },
@@ -63,9 +157,18 @@
           "interval_seconds": 45,
           "trace": "own",
           "event": {
-            "service": {"name": "${param.incident.service}", "version": "${param.incident.good_version}"},
-            "event": {"outcome": "success"},
-            "http": {"response": {"status_code": 200}},
+            "service": {
+              "name": "${param.incident.service}",
+              "version": "${param.incident.good_version}"
+            },
+            "event": {
+              "outcome": "success"
+            },
+            "http": {
+              "response": {
+                "status_code": 200
+              }
+            },
             "message": "healthy request on previous version ${param.incident.good_version}"
           }
         },
@@ -74,20 +177,65 @@
           "offset_seconds": "${param.timing.first_seconds}",
           "trace": "own",
           "event": {
-            "service": {"name": "${param.incident.service}", "version": "${param.incident.bad_version}"},
-            "event": {"outcome": "failure"},
-            "http": {"response": {"status_code": "${param.incident.status}"}},
-            "transaction": {"result": "HTTP 5xx"},
+            "service": {
+              "name": "${param.incident.service}",
+              "version": "${param.incident.bad_version}"
+            },
+            "event": {
+              "outcome": "failure"
+            },
+            "http": {
+              "response": {
+                "status_code": "${param.incident.status}"
+              }
+            },
+            "transaction": {
+              "result": "HTTP 5xx"
+            },
             "message": "request failed on newly deployed ${param.incident.service} ${param.incident.bad_version}"
+          }
+        },
+        {
+          "count": 24,
+          "offset_seconds": 20,
+          "interval_seconds": 40,
+          "trace": "own",
+          "event": {
+            "service": {
+              "name": "${param.incident.service}",
+              "version": "${param.incident.legacy_version}"
+            },
+            "event": {
+              "outcome": "success"
+            },
+            "http": {
+              "response": {
+                "status_code": 200
+              }
+            },
+            "message": "healthy request on the legacy pool, ${param.incident.legacy_version}"
           }
         }
       ]
     },
     "readiness_validators": [
-      {"id": "seeded-signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "request failed on newly deployed ${param.incident.service} ${param.incident.bad_version}"}}}
+      {
+        "id": "seeded-signal",
+        "kind": "es_count",
+        "minimum": 20,
+        "query": {
+          "term": {
+            "message.keyword": "request failed on newly deployed ${param.incident.service} ${param.incident.bad_version}"
+          }
+        }
+      }
     ]
   },
-  "starting_view": {"app": "discover", "saved_object": "incident-investigation", "path": "/app/discover#/view/incident-investigation"},
+  "starting_view": {
+    "app": "discover",
+    "saved_object": "incident-investigation",
+    "path": "/app/discover#/view/incident-investigation"
+  },
   "truth": {
     "answers": {
       "finding": "${param.incident.bad_version}",
@@ -95,24 +243,129 @@
       "conclusion": "${param.incident.service} version ${param.incident.bad_version} returned HTTP ${param.incident.status} while ${param.incident.good_version} returned 200, identifying the new version as the regression.",
       "first_seen": "${incident.first_clock}"
     },
-    "accept": {"finding": ["v${param.incident.bad_version}"]},
+    "accept": {
+      "finding": [
+        "v${param.incident.bad_version}"
+      ]
+    },
     "assertions": [
-      {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "request failed on newly deployed ${param.incident.service} ${param.incident.bad_version}"}}},
-      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"bool": {"filter": [{"term": {"service.name.keyword": "${param.incident.service}"}}, {"term": {"service.version.keyword": "${param.incident.good_version}"}}, {"term": {"http.response.status_code": 200}}]}}},
-      {"id": "first_appearance", "kind": "es_count", "minimum": 1, "query": {"bool": {"filter": [{"term": {"service.version.keyword": "${param.incident.bad_version}"}}, {"range": {"@timestamp": {"lte": "${incident.first_at}||+5s"}}}]}}}
+      {
+        "id": "signal",
+        "kind": "es_count",
+        "minimum": 20,
+        "query": {
+          "term": {
+            "message.keyword": "request failed on newly deployed ${param.incident.service} ${param.incident.bad_version}"
+          }
+        }
+      },
+      {
+        "id": "corroboration",
+        "kind": "es_count",
+        "minimum": 1,
+        "query": {
+          "bool": {
+            "filter": [
+              {
+                "term": {
+                  "service.name.keyword": "${param.incident.service}"
+                }
+              },
+              {
+                "term": {
+                  "service.version.keyword": "${param.incident.good_version}"
+                }
+              },
+              {
+                "term": {
+                  "http.response.status_code": 200
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "first_appearance",
+        "kind": "es_count",
+        "minimum": 1,
+        "query": {
+          "bool": {
+            "filter": [
+              {
+                "term": {
+                  "service.version.keyword": "${param.incident.bad_version}"
+                }
+              },
+              {
+                "range": {
+                  "@timestamp": {
+                    "lte": "${incident.first_at}||+5s"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "legacy_in_view",
+        "kind": "es_count",
+        "maximum": 0,
+        "query": {
+          "term": {
+            "service.version.keyword": "${param.incident.legacy_version}"
+          }
+        }
+      }
     ]
   },
   "answer_schema": {
     "type": "diagnosis",
     "fields": [
-      {"id": "finding", "label": "Affected version", "kind": "string", "weight": 2},
-      {"id": "scope", "label": "Service", "kind": "string", "weight": 1},
-      {"id": "first_seen", "label": "First failure", "kind": "clock", "at": "first", "weight": 1, "placeholder": "The time Discover shows for it (HH:MM)"},
-      {"id": "conclusion", "label": "Comparison conclusion", "kind": "statement", "mentions": ["finding", "scope"], "weight": 1},
-      {"id": "evidence", "label": "Version and HTTP status evidence", "kind": "text", "scored": false}
+      {
+        "id": "finding",
+        "label": "Affected version",
+        "kind": "string",
+        "weight": 2
+      },
+      {
+        "id": "scope",
+        "label": "Service",
+        "kind": "string",
+        "weight": 1
+      },
+      {
+        "id": "first_seen",
+        "label": "First failure",
+        "kind": "clock",
+        "at": "first",
+        "weight": 1,
+        "placeholder": "The time Discover shows for it (HH:MM)"
+      },
+      {
+        "id": "conclusion",
+        "label": "Comparison conclusion",
+        "kind": "statement",
+        "mentions": [
+          "finding",
+          "scope"
+        ],
+        "weight": 1
+      },
+      {
+        "id": "evidence",
+        "label": "Version and HTTP status evidence",
+        "kind": "text",
+        "scored": false
+      }
     ]
   },
   "playbook": "playbook.json",
   "rubric": "rubric.json",
-  "cleanup": {"delete_space": true, "delete_run_data": true, "managed_resources": []}
+  "cleanup": {
+    "delete_space": true,
+    "delete_run_data": true,
+    "managed_resources": []
+  }
 }

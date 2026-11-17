@@ -59,7 +59,8 @@ class KibanaActionObserver {
   // popover, its clear button, "Clear all", browser back). In Discover additions only move the
   // baseline; the click that applied them reports filter_added. A dashboard pill usually comes from a
   // click on a chart (a bar on the canvas, a legend entry's "Filter for") with no control to recognise,
-  // so there a new pill reports filter_added itself.
+  // so there a new pill reports filter_added itself. A pill turned between "Include results" and
+  // "Exclude results" (its menu's `negateFilter`) is the same filter changed, not one removed.
   captureFilterRemoval(since = null) {
     const filters = this.readFilterPills();
     const key = filter => `${filter.negate ? '-' : ''}${filter.field}=${filter.value}`;
@@ -70,6 +71,12 @@ class KibanaActionObserver {
     this.lastFilters = filters;
     if (added.length) {
       this.report({type: 'filter_added', details: {...added[added.length - 1]}, state_after: {filters, query: this.queryValue(), app: 'dashboard'}});
+      return;
+    }
+    const flipped = lost.map(filter => filters.find(item => !item.disabled && item.field === filter.field
+      && String(item.value) === String(filter.value) && Boolean(item.negate) !== Boolean(filter.negate) && !before.has(key(item)))).find(Boolean);
+    if (flipped) {
+      this.reportWithCount({type: 'filter_changed', details: {...flipped}, state_after: {filters, query: this.queryValue()}}, since);
       return;
     }
     if (!lost.length) return;
@@ -295,7 +302,15 @@ class KibanaActionObserver {
       const value = (spaced ?? (valueToken ? valueToken[1] : fromText)).replace(/^"|"$/g, '');
       const negate = /(^|\s)filter-negated(\s|$)/.test(subject) || /^NOT\s+/i.test(text);
       const disabled = /(^|\s)filter-disabled(\s|$)/.test(subject);
-      return disabled ? {field, value, negate, disabled} : {field, value, negate};
+      // "Filter for field present" reads "<field>: exists" (verified 9.5.2: `filter-value-exists`).
+      const exists = value === 'exists' && /:\s*exists$/i.test(withoutNot) ? {type: 'exists'} : {};
+      // "is one of" reads "<field>: is one of a, b" (verified 9.5.2: a phrases filter).
+      const oneOf = /^is one of\s+(.+)$/i.exec(fromText);
+      if (oneOf) {
+        const values = oneOf[1].split(/,\s*/).map(item => item.trim()).filter(Boolean);
+        return disabled ? {field, value: values, negate, type: 'phrases', disabled} : {field, value: values, negate, type: 'phrases'};
+      }
+      return disabled ? {field, value, negate, ...exists, disabled} : {field, value, negate, ...exists};
     }).filter(filter => filter.field);
   }
 
@@ -563,10 +578,11 @@ class KibanaActionObserver {
       // a preset equal to the view's current window (the saved search opens at now-1h) is still a
       // deliberate step.
       setTimeout(() => this.captureTimeRange(true), 250);
-    } else if (subject.includes('saveFilter') || /^(plus|minus)-/.test(subject) || /filterFor|filterOut|addFilterForValue|addFilterOutValue|-filter(In|Out)$/i.test(subject)) {
+    } else if (subject.includes('saveFilter') || /^(plus|minus)-/.test(subject) || /filterFor|filterOut|addFilterForValue|addFilterOutValue|AddExistFilter|-filter(In|Out)$/i.test(subject)) {
       // A pill was applied — via the Add-filter popover's Save (`saveFilter`), or a
       // filter-for / filter-out on a field's top value (`plus-<field>-<value>` /
-      // `minus-<field>-<value>`, verified in Kibana 9.5.2), or a document-cell filter.
+      // `minus-<field>-<value>`, verified in Kibana 9.5.2), a field popover's "Filter for field present"
+      // (`discoverFieldListPanelAddExistFilter-<field>`), or a document-cell filter.
       // Read the resulting pills generically so the run's decisive field/value/negate are
       // captured for ANY scenario. The legacy branch hard-coded service.name and dropped
       // the negate state, so it only matched one pack and never lit the filter-out route.
@@ -605,7 +621,9 @@ class KibanaActionObserver {
       // page), so this branch is dormant there and kept only for builds that expose one.
       setTimeout(() => this.report(this.readAutoRefresh()), 100);
     } else if (/fieldStats|fieldStatistics/i.test(subject)) {
-      this.report({type: 'field_statistics_opened', details: {subject}});
+      // Discover's Field statistics view (verified 9.5.2: `dscViewModeFieldStatsButton`), which counts
+      // each field's distinct values.
+      this.report({type: 'field_statistics_opened', details: /ViewModeFieldStats/i.test(subject) ? {subject, view: 'field_statistics'} : {subject}});
     } else if (this.fieldPreviewSubject(event.target)) {
       // A field's preview popover was opened from the sidebar. Kibana 9.5.2 renders each field row
       // as `dscFieldListPanelField-<field>` wrapping a `field-<field>-showDetails` "Preview" button;
@@ -619,8 +637,14 @@ class KibanaActionObserver {
       this.waitUntil(() => !wasOpen && this.fieldPopover(), KibanaActionObserver.UI_WAIT_MS).then(open => {
         if (open && !this.stopped) this.report({type: 'field_statistics_opened', details: {field, subject: containerSubject}});
       });
-    } else if (/surrounding/i.test(subject)) {
-      this.report({type: 'surrounding_documents_opened', details: {subject}});
+    } else if (/surrounding/i.test(subject) || (subject === 'docTableRowAction' && /surrounding/i.test(node?.getAttribute('aria-label') || ''))) {
+      // The open document's "View surrounding documents" (verified 9.5.2: a `docTableRowAction` named
+      // only by its label). Report it once Discover shows the context view, so the view sent with it is
+      // that one (its filters switched off), not the filtered search it was opened from.
+      const shown = () => /#\/context\//.test(location.hash || '') && document.querySelector("[data-test-subj='docTableExpandToggleColumnAnchor']");
+      this.waitUntil(shown, KibanaActionObserver.DOCUMENT_WAIT_MS).then(() => {
+        if (!this.stopped) this.report({type: 'surrounding_documents_opened', details: {subject}});
+      });
     } else if (/field.*(action|name|value)/i.test(subject)) {
       this.report({type: 'field_inspected', details: {subject}});
     } else if (subject === 'docTableExpandToggleColumn' || subject.includes('docTableExpand')) {

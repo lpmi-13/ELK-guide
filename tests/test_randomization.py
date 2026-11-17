@@ -111,8 +111,11 @@ class RandomizationTests(unittest.TestCase):
             )
             with self.subTest(seed=seed):
                 service_rows = [document for document in documents if document["service"]["name"] == incident["service"]]
+                # The rollout's two releases, and an older one on a legacy pool the rollout doesn't touch
+                # (the multi-value step leaves it out); the legacy pool is healthy.
                 self.assertEqual({row["service"]["version"] for row in service_rows},
-                                 {incident["bad_version"], incident["good_version"]})
+                                 {incident["bad_version"], incident["good_version"], incident["legacy_version"]})
+                self.assertEqual({row["http"]["response"]["status_code"] for row in service_rows if row["service"]["version"] == incident["legacy_version"]}, {200})
                 # The first visible Discover page must show both outcomes after the service/all-
                 # versions query. Otherwise the next comparison looks decided before it begins.
                 self.assertTrue({200, incident["status"]}.issubset(
@@ -161,6 +164,9 @@ class RandomizationTests(unittest.TestCase):
                 self.assertGreater(len(findings), 1, "findings should differ across seeds")
                 if pack == "schema-drift-data-quality":
                     self.assertEqual(queries, {"schema.route_present: false"})
+                elif pack == "rare-error-signature":
+                    # Kept by the field's presence: the filter is the same every run, what it keeps is not.
+                    self.assertEqual(queries, {json.dumps({"field": "error.type"})})
                 else:
                     self.assertGreater(len(queries), 1, "the demonstrated narrowing should differ across seeds")
 
@@ -392,7 +398,9 @@ class RandomizationTests(unittest.TestCase):
         """No demonstrated filter may name a value the learner hasn't been shown on screen.
 
         Each pack reads a field's Top values before its first filter, and that filter (or the phrase
-        it excludes) is the value the survey step rings — never one taken from the answer key.
+        it excludes) is the value the survey step rings — never one taken from the answer key. A filter
+        for the field's presence names no value at all; the authentication pack first leaves the
+        surveyed value out (its baseline step) and then turns that same pill around to include it.
         """
         for pack in ("discover-time-window", "http-error-regression", "rare-error-signature", "auth-rejection-surge",
                      "log-pattern-noise-reduction", "deployment-version-regression"):
@@ -400,26 +408,39 @@ class RandomizationTests(unittest.TestCase):
                 manifest = self.materialize(pack, seed)
                 playbook = self.server.load_manifest_definition(manifest, "playbook")
                 goals = {goal["id"]: goal for goal in playbook["goals"]}
-                survey, isolate = goals["survey"], goals["isolate"]
+                order = [goal["id"] for goal in playbook["goals"]]
+                survey = goals["survey"]
+                first = goals[order[order.index("survey") + 1]]
                 focus = survey["demonstration"]["evidence_focus"]
-                arguments = isolate["reference_action"]["arguments"]
                 with self.subTest(pack=pack, seed=seed):
-                    self.assertEqual([goal["id"] for goal in playbook["goals"]][:3], ["scope", "survey", "isolate"])
-                    self.assertEqual(isolate["requires"], ["survey"])
+                    self.assertEqual(order[:2], ["scope", "survey"])
+                    self.assertIn(first["id"], {"isolate", "baseline"})
+                    self.assertEqual(first["requires"], ["survey"])
+                    if first["id"] == "baseline":
+                        self.assertEqual(goals["isolate"]["requires"], ["baseline"])
                     self.assertEqual(survey["reference_action"], {"command": "open_field_statistics", "target": "kibana.field_list", "arguments": {"field": focus["field"]}})
-                    if isinstance(arguments, dict):
-                        self.assertEqual((arguments["field"], str(arguments["value"])), (focus["field"], str(focus["value"])))
-                    else:
-                        # A query may only name what was on screen: the surveyed value, or a phrase of the
-                        # ringed line when it excludes noise.
-                        fragment = manifest["parameters"]["incident"].get("exclude_fragment")
-                        if fragment:
-                            self.assertIn(fragment, focus["value"])
-                            self.assertIn(f'not {focus["field"]}: "{fragment}"', arguments)
-                        else:
-                            self.assertIn(f'{focus["field"]}: {focus["value"]}', arguments)
+                    for step in {first["id"]: first, "isolate": goals["isolate"]}.values():
+                        self._assert_filter_names_the_survey(step, focus, manifest)
                     for phase in ("narration", "reasoning"):
                         self.assertNotIn(str(focus["value"]), survey["demonstration"][phase])
+
+    def _assert_filter_names_the_survey(self, step, focus, manifest):
+        arguments = step["reference_action"]["arguments"]
+        if isinstance(arguments, dict):
+            self.assertEqual(arguments["field"], focus["field"])
+            if "value" in arguments:
+                self.assertEqual(str(arguments["value"]), str(focus["value"]))
+            else:
+                self.assertEqual(step["reference_action"]["command"], "filter_field_present")
+        else:
+            # A query may only name what was on screen: the surveyed value, or a phrase of the
+            # ringed line when it excludes noise.
+            fragment = manifest["parameters"]["incident"].get("exclude_fragment")
+            if fragment:
+                self.assertIn(fragment, focus["value"])
+                self.assertIn(f'not {focus["field"]}: "{fragment}"', arguments)
+            else:
+                self.assertIn(f'{focus["field"]}: {focus["value"]}', arguments)
 
     def test_time_window_copy_names_the_incident_in_clock_times_for_every_variant(self):
         """The incident window is stated as the clock times Discover shows, for every timing variant;

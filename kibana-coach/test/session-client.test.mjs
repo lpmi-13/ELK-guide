@@ -135,3 +135,21 @@ test('an action observed while the socket is reconnecting is sent, in order, onc
   sockets[1].open();
   assert.deepEqual(sockets[1].sent.map(message => [message.action.type, message.action.sequence]), [['panel_underlying_data_opened', 1], ['column_added', 2]]);
 });
+
+test('closing a finished investigation reclaims its run, forgets the session and names the launcher', async () => {
+  const {client, fetches} = harness({probe: {status: 200, body: {available: true, launcher_url: 'http://lab.example:8090/'}}});
+  await client.connect();
+  const launcher = await client.close();
+  assert.equal(launcher, 'http://lab.example:8090/');
+  assert.equal(fetches[0].url, 'http://localhost:5601/incident-coach/learning/api/sessions/session-1');
+  // Sent with keepalive: the tab is already leaving for the launcher while the run is reclaimed.
+  assert.equal(fetches[1].url, 'http://localhost:5601/incident-coach/learning/api/runs/run-1');
+  assert.deepEqual([fetches[1].options.method, fetches[1].options.keepalive], ['DELETE', true]);
+  assert.equal(client.stopped, true);
+});
+
+test('closing when the service does not answer still leads to the launcher', async () => {
+  const {client} = harness({probe: 'unreachable'});
+  await client.connect();
+  assert.equal(await client.close(), 'http://localhost:8090/');
+});

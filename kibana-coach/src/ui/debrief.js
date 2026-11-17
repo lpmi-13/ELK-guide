@@ -1,6 +1,12 @@
 class IncidentDebrief {
   constructor(root) {
     this.root = root;
+    // Set by the panel once the investigation is finished: closes it and leaves for the launcher.
+    /** @type {(() => void) | null} */
+    this.onReturnToMenu = null;
+    // Set with it: the learner chose Keep exploring (the panel folds away).
+    /** @type {(() => void) | null} */
+    this.onKeepExploring = null;
     if (root.querySelector && !root.querySelector('style[data-incident-debrief]')) {
       const style = document.createElement('style');
       style.dataset.incidentDebrief = '';
@@ -28,6 +34,39 @@ class IncidentDebrief {
     task_correctness: 'Answer', evidence_quality: 'Evidence', goal_coverage: 'Investigation covered',
     relevance: 'Relevant actions', efficiency: 'Efficiency',
   };
+
+  // How a debrief ends: keep exploring the investigation (the dialog closes), or close it and go back to
+  // the launcher for another scenario or mode. Only the guided debrief, whose footer stays in view,
+  // focuses Keep exploring on opening; elsewhere focus starts at the top, so a long debrief opens there.
+  // Either way Enter never closes the investigation.
+  footer(className, {focus = '', keep = 'Keep exploring', leave = 'Close investigation &amp; return to main menu'} = {}) {
+    const back = this.onReturnToMenu
+      ? `<button type="button" class="debrief-return" data-choice="return-to-menu"${focus === 'return' ? ' autofocus' : ''}>${leave}</button>` : '';
+    return `<footer class="${className}"><form method="dialog"><button class="debrief-keep"${focus === 'keep' ? ' autofocus' : ''}>${back ? keep : 'Done'}</button></form>${back}</footer>`;
+  }
+
+  // The finished investigation's time for exploring ran out at `endedAt` and its data is gone: a short
+  // notice, so Kibana suddenly finding nothing is no surprise. Staying keeps the page (the debrief can
+  // still be reviewed); the main menu is where to go next, so it takes the focus.
+  showTimeUp(endedAt) {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'incident-debrief incident-time-up';
+    dialog.innerHTML = `<h2>Time’s up for this investigation</h2><p></p>
+      ${this.footer('debrief-footer', {focus: 'return', keep: 'Stay on this page', leave: 'Return to main menu'})}`;
+    dialog.querySelector('p').textContent = `A finished investigation stays open for exploring for a limited time. This one closed at ${endedAt}, and its data has been removed. Return to the main menu to choose another scenario or mode.`;
+    this.wireFooter(dialog, {exploring: false});
+    this.root.append(dialog);
+    dialog.addEventListener('close', () => dialog.remove());
+    dialog.showModal();
+  }
+
+  wireFooter(dialog, {exploring = true} = {}) {
+    const leave = dialog.querySelector('.debrief-return');
+    if (leave && this.onReturnToMenu) leave.onclick = () => this.onReturnToMenu?.();
+    // Its own button: the × (or Escape) just closes the debrief.
+    const keep = dialog.querySelector('.debrief-keep');
+    if (exploring && keep && this.onKeepExploring) keep.onclick = () => this.onKeepExploring?.();
+  }
 
   show(feedback) {
     const dialog = document.createElement('dialog');
@@ -76,7 +115,7 @@ class IncidentDebrief {
             <li class="gd-stat stat-shown"><span>Show me used</span><strong>${help.demonstrated_steps} times across ${help.shown_steps} of ${steps} steps</strong></li>
           </ul>
         </div>
-        <footer class="gd-footer"><form method="dialog"><button class="gd-done" autofocus>Done</button></form></footer>`;
+        ${this.footer('gd-footer', {focus: 'keep'})}`;
       dialog.querySelector('.gd-summary').textContent = feedback.summary;
       const list = dialog.querySelector('.gd-steps');
       for (const [index, step] of (feedback.steps || []).entries()) {
@@ -94,6 +133,7 @@ class IncidentDebrief {
         list.append(item);
       }
       dialog.querySelector('.gd-steps-section').hidden = !list.children.length;
+      this.wireFooter(dialog);
       this.root.append(dialog);
       dialog.addEventListener('close', () => dialog.remove());
       dialog.showModal();
@@ -110,7 +150,8 @@ class IncidentDebrief {
       <section class="debrief-answers" hidden><h3>Your answer</h3><ul></ul></section>
       <ul>${components}</ul><p>Assistance: ${feedback.assistance.hints} hints; ${feedback.assistance.demonstrated_steps} demonstrated steps.</p>
       <p class="debrief-route"><strong>Reference route:</strong> <span></span></p>
-      <section class="debrief-detours" hidden><h3>Detours</h3><ul></ul></section>`;
+      <section class="debrief-detours" hidden><h3>Detours</h3><ul></ul></section>
+      ${this.footer('debrief-footer')}`;
     // Each graded answer beside what the evidence showed, so a miss says what it should have been.
     // The learner's own text goes in as text, never markup.
     const answers = dialog.querySelector('.debrief-answers');
@@ -142,6 +183,7 @@ class IncidentDebrief {
       detours.querySelector('ul').append(item);
     }
     detours.hidden = !detourSteps.length;
+    this.wireFooter(dialog);
     this.root.append(dialog);
     dialog.addEventListener('close', () => dialog.remove());
     dialog.showModal();
@@ -156,7 +198,8 @@ class IncidentDebrief {
     dialog.innerHTML = `<form method="dialog"><button class="dialog-close" aria-label="Close summary">×</button></form>
       <h2></h2>
       <div class="incident-problem"><strong>Problem found</strong><p></p></div>
-      <ul class="demo-checks"></ul>`;
+      <ul class="demo-checks"></ul>
+      ${this.footer('debrief-footer')}`;
     dialog.querySelector('h2').textContent = summary.title || 'Demonstration complete';
     const problem = summary.answer?.conclusion || summary.conclusion || '';
     const problemBox = dialog.querySelector('.incident-problem');
@@ -170,6 +213,7 @@ class IncidentDebrief {
       checks.append(item);
     }
     checks.hidden = !checks.children.length;
+    this.wireFooter(dialog);
     this.root.append(dialog);
     dialog.addEventListener('close', () => dialog.remove());
     dialog.showModal();
@@ -237,8 +281,15 @@ IncidentDebrief.styles = `
     .gd-stat strong { color:#0f2231;font-size:16px;line-height:1.3; }
     .gd-footer { position:sticky;bottom:0;display:flex;justify-content:flex-end;margin-top:14px;padding:14px 30px;border-top:1px solid #d6e0e7;background:#fff;box-shadow:0 -8px 28px #1730470c; }
     .gd-footer form { margin:0; }
-    .gd-done { border:0;border-radius:8px;padding:10px 20px;background:#0879a5;color:#fff;font:700 13px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;box-shadow:0 5px 14px #0879a52e;cursor:pointer; }
-    .gd-done:hover { background:#06688e; } .gd-done:focus-visible { outline:3px solid #55bde4;outline-offset:3px; }
+    .debrief-footer { display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:10px;margin-top:20px;padding-top:16px;border-top:1px solid #e1e7ec; }
+    .gd-footer { flex-wrap:wrap;gap:10px; }
+    .debrief-footer form, .gd-footer form { margin:0; }
+    .debrief-keep, .debrief-return { border-radius:8px;padding:10px 18px;font:700 13px system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;cursor:pointer; }
+    .debrief-keep { border:1px solid #9fb2c2;background:#fff;color:#17304a; } .debrief-keep:hover { background:#eef4f8; }
+    .debrief-return, footer > form:only-child .debrief-keep { border:1px solid #0879a5;background:#0879a5;color:#fff;box-shadow:0 5px 14px #0879a52e; }
+    .debrief-return:hover, footer > form:only-child .debrief-keep:hover { background:#06688e; } .debrief-return:disabled { opacity:.75;cursor:wait; }
+    .debrief-keep:focus-visible, .debrief-return:focus-visible { outline:3px solid #55bde4;outline-offset:3px; }
+    dialog.incident-time-up { width:min(500px,calc(100vw - 48px)); } .incident-time-up h2 { margin:0 0 10px;text-transform:none; } .incident-time-up p { margin:0;line-height:1.5;color:#2c3e4d; }
     @media (max-width:640px) { .gd-hero { flex-direction:column-reverse;align-items:flex-start;padding:22px 18px; } .gd-ring { width:104px;height:104px; } .gd-body { padding:18px 18px 6px; } .guided-debrief .gd-stats { grid-template-columns:1fr; } .gd-footer { padding:12px 18px; } }
     @media (prefers-reduced-motion:reduce) { dialog.guided-debrief,.gd-ring-fill,.guided-debrief .guided-score-unearned,.guided-debrief .gd-step { animation:none!important; } dialog.guided-debrief::backdrop { backdrop-filter:none; } }
 `;

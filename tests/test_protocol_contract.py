@@ -8,6 +8,7 @@ also drive the real HTTP/WebSocket server in-process for the session-ending and 
 """
 
 import base64
+from datetime import datetime
 import importlib.util
 import json
 import os
@@ -219,6 +220,23 @@ class SessionEndingTests(unittest.TestCase):
         self.assertEqual(message, {"message_type": "complete", "session_id": session["id"]})
         self.assertEqual((status, body["available"], body["feedback_available"]), (200, True, True))
 
+    def test_a_finished_session_says_how_long_it_can_still_be_explored(self):
+        # The coach shows when a finished investigation's data goes, and a notice once it has.
+        with LiveServer() as live:
+            session = live.session(mode="challenge")
+            session["briefing_acknowledged"] = True
+            server.refresh_run_ready(session)
+            path, token = f"/api/sessions/{session['id']}", session["controller_token"]
+            _status, investigating = live.request(path, token=token)
+            server.submit_answer(session, {"finding": "x"})
+            _status, finished = live.request(path, token=token)
+            live.fake.network.runs[session["run_id"]]["state"] = "ABORTED"
+            _status, gone = live.request(path, token=token)
+        self.assertIsNone(investigating["exploration"])
+        window = controller.COMPLETED_RETENTION_SECONDS
+        self.assertTrue(window - 5 <= finished["exploration"]["ends_in_seconds"] <= window, finished["exploration"])
+        self.assertEqual(gone["exploration"], {"ends_in_seconds": 0})
+
     def test_a_rejected_action_is_reported_and_the_session_carries_on(self):
         with LiveServer() as live:
             session = live.session()
@@ -286,7 +304,7 @@ class SettlementTests(unittest.TestCase):
     def session_at_isolate(self):
         session = generator.new_session("http-error-regression", "guided")
         session["briefing_acknowledged"] = True
-        isolate = next(goal for goal in server.playbook_goals(session) if goal.get("reference_action", {}).get("command") in {"add_filter", "enter_kql"})
+        isolate = next(goal for goal in server.playbook_goals(session) if goal.get("reference_action", {}).get("command") in {"add_filter", "filter_top_value", "filter_field_present", "enter_kql"})
         for goal in server.playbook_goals(session):
             if goal["id"] == isolate["id"]:
                 break
@@ -529,6 +547,7 @@ class ForgetRunTests(unittest.TestCase):
                 patch.object(controller, "forget_after_retention") as forget:
             controller.stop_run("run-00000000000a")
         forget.assert_called_once_with("run-00000000000a")
+        self.assertEqual(run["state"], "ABORTED")
         completed = ended("run-00000000000c")
         completed["manifest"] = {"run_id": "run-00000000000c"}
         with patch.dict(controller.runs, {"run-00000000000c": completed}, clear=True), \
@@ -536,6 +555,31 @@ class ForgetRunTests(unittest.TestCase):
             controller.reclaim_after_retention(completed)
             self.assertNotIn("run-00000000000c", controller.runs)
         cleanup.assert_called_once()
+
+    def test_completing_a_run_records_when_it_will_be_reclaimed(self):
+        run = ended("run-00000000000e", "INVESTIGATING")
+        with patch.dict(controller.runs, {"run-00000000000e": run}, clear=True), patch.object(controller, "emit"), \
+                patch.object(controller, "clear_active_fault"), patch.object(controller, "public_state", return_value={}), \
+                patch.object(controller, "reclaim_after_retention"):
+            controller.transition_run("run-00000000000e", "COMPLETED")
+        window = datetime.fromisoformat(run["reclaim_at"]) - datetime.fromisoformat(run["completed_at"])
+        self.assertAlmostEqual(window.total_seconds(), controller.COMPLETED_RETENTION_SECONDS, delta=2)
+
+    def test_closing_a_completed_run_reclaims_it_now_and_keeps_it_completed(self):
+        # "Close investigation" on the coach's finished card stops the run so its Space and data go at
+        # once, not when the retention window ends. The learner finished it, so it is not ABORTED.
+        run = ended("run-00000000000d")
+        with patch.dict(controller.runs, {"run-00000000000d": run}, clear=True), \
+                patch.object(controller, "cleanup_run") as cleanup, patch.object(controller, "emit") as emit, \
+                patch.object(controller, "forget_after_retention") as forget:
+            self.assertTrue(controller.stop_run("run-00000000000d"))
+        cleanup.assert_called_once_with(run)
+        self.assertEqual(run["state"], "COMPLETED")
+        self.assertTrue(run["reclaimed"].is_set())
+        # Its time for exploring ended now, not when the retention window would have.
+        self.assertLess(abs((datetime.fromisoformat(run["reclaim_at"]) - datetime.now(controller.timezone.utc)).total_seconds()), 5)
+        self.assertEqual(emit.call_args.kwargs["action"], "closed")
+        forget.assert_called_once_with("run-00000000000d")
 
 
 class SessionRetentionTests(unittest.TestCase):

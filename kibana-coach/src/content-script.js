@@ -108,6 +108,10 @@ function startIncidentCoach() {
   let investigationFinished = false;
   // Set once this page has shown a debrief: a reconnect's "complete" then leaves it closed.
   let debriefShown = false;
+  // A finished investigation can be explored until its run is reclaimed: when (ms since the epoch, 0 when
+  // not known) and the timer that tells the learner the time is up.
+  let explorationEndsAt = 0;
+  let explorationTimer;
   // Guided dead-end recovery: set while the coach explains and undoes a search that left no results.
   let recoveryController = null;
   // The scope step's "choose again" card, and the watch on a relative window that will slide.
@@ -341,6 +345,12 @@ function startIncidentCoach() {
   // learner fixes it themselves first, the coach steps aside.
   function checkDeadEnd() {
     if (!recoveryEligible() || !KibanaActionObserver.noResultsShown()) {
+      deadEndSince = 0;
+      return;
+    }
+    // A step whose answer is an empty search (a boolean check for what must not exist) leaves "No
+    // results" on purpose: only the service, judging the search, can call it a dead end (deadEndSince 1).
+    if (currentCommand?.empty_result_expected && deadEndSince !== 1) {
       deadEndSince = 0;
       return;
     }
@@ -587,6 +597,37 @@ function startIncidentCoach() {
     });
   }
 
+  // A finished investigation stays open to explore until the controller reclaims its run. The service
+  // says how long is left (in seconds, so the browser's clock needn't agree with the server's); the card
+  // shows the time it ends, and a short notice says when it has, rather than Kibana failing to find the
+  // data. A reload asks again, so the notice also comes up on a page opened after the time is up.
+  async function watchExploration() {
+    clearTimeout(explorationTimer);
+    const seconds = (await client?.status())?.exploration?.ends_in_seconds;
+    if (seconds == null || !investigationFinished) return;
+    explorationEndsAt = Date.now() + seconds * 1000;
+    if (seconds <= 0) {
+      explorationEnded();
+      return;
+    }
+    coach.showExplorationDeadline(clockText(new Date(explorationEndsAt)));
+    explorationTimer = setTimeout(explorationEnded, explorationEndsAt - Date.now());
+  }
+
+  function explorationEnded() {
+    if (!explorationEndsAt) return;
+    clearTimeout(explorationTimer);
+    const endedAt = clockText(new Date(Math.min(Date.now(), explorationEndsAt)));
+    explorationEndsAt = 0;
+    observer?.stop();
+    coach.showExplorationEnded(endedAt);
+  }
+
+  // A hidden tab's timers are slowed to about once a minute, so check again when the learner comes back.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && explorationEndsAt && Date.now() >= explorationEndsAt) explorationEnded();
+  });
+
   function dismissWindowMiss() {
     if (!windowMiss) return;
     const controller = windowMiss;
@@ -664,6 +705,7 @@ function startIncidentCoach() {
       debriefShown = true;
       coach.showCompletion('demonstration');
       coach.debrief.showDemonstration(summary);
+      watchExploration();
     } catch (error) {
       coach.toast(error.message, true);
     }
@@ -688,6 +730,8 @@ function startIncidentCoach() {
     observer?.stop();
     investigationFinished = false;
     debriefShown = false;
+    clearTimeout(explorationTimer);
+    explorationEndsAt = 0;
     dismissWindowMiss();
     clearTimeout(windowWatch?.timer);
     windowWatch = null;
@@ -722,6 +766,7 @@ function startIncidentCoach() {
         coach.showCompletion(client.mode);
         coach.stopObserving();
         showFeedback(feedback);
+        watchExploration();
       } catch (error) {
         investigationFinished = false;
         debriefShown = false;
@@ -878,6 +923,24 @@ function startIncidentCoach() {
       try { showFeedback(await client.getFeedback()); }
       catch (error) { coach.toast(error.message, true); }
     };
+    // The finished investigation is closed (its run reclaimed now) and the learner goes back to the
+    // launcher to choose another scenario or mode. Offered only once the session has its feedback.
+    coach.onReturnToMenu = async () => {
+      // Leaving discards the investigation on purpose: no "Leave site?" prompt (see kibana-bootstrap.js).
+      window.__coachAllowLeave?.();
+      clearTimeout(explorationTimer);
+      explorationEndsAt = 0;
+      observer?.stop();
+      sessionStorage.removeItem(activeSessionKey);
+      sessionStorage.removeItem(carriedResultKey);
+      const launcher = await client.close();
+      // The launcher opened this tab, so closing it returns the learner to the launcher, wherever that is
+      // (its own tab, or a playground's frame). A script can't close a tab the learner opened themselves
+      // (verified Chrome 156: a launcher-opened tab closes even after Kibana's COOP cut its opener), so
+      // if this one is still here a moment later it goes to the launcher instead.
+      window.close();
+      setTimeout(() => location.assign(launcher), 500);
+    };
     coach.onDemonstrate = () => currentCommand && execute(currentCommand, true);
     coach.onAdvance = () => {
       if (!currentCommand) return;
@@ -926,6 +989,7 @@ function startIncidentCoach() {
         debriefShown = true;
         coach.showCompletion('challenge');
         coach.debrief.show(feedback);
+        watchExploration();
       } catch (error) { coach.toast(error.message, true); }
     };
   }

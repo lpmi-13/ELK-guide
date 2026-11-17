@@ -27,7 +27,9 @@ COMMAND_OBSERVATIONS = {
     "select_inventory_type":"inventory_type_selected", "select_metric":"metric_selected",
     "navigate_from_metrics_to_logs":"metrics_logs_opened", "open_alert":"alert_opened", "inspect_alert_reason":"alert_reason_inspected",
     "navigate_from_alert_to_source":"alert_source_opened",
-    "navigate_to_app":"app_navigated", "request_answer":"answer_submitted"
+    "navigate_to_app":"app_navigated", "request_answer":"answer_submitted",
+    "filter_top_value":"filter_added", "set_filter_inclusion":"filter_changed", "filter_field_present":"filter_added",
+    "show_field_statistics":"field_statistics_opened", "open_surrounding_documents":"surrounding_documents_opened",
 }
 
 
@@ -70,7 +72,7 @@ def action_for(goal, scenario):
                 for part in truth_key.split("."):
                     value = value[part]
                 values = value if isinstance(value, list) else [value]
-            details["query"] = " ".join([*validator.get("fields", []), *map(str, values)])
+            details["query"] = " ".join([*validator.get("fields", []), *validator.get("keywords", []), *map(str, values)])
         elif kind in {"filter_contains", "filter_excludes"}:
             value = resolve_truth(validator.get("value", (validator.get("values") or [None])[0]), scenario)
             if validator.get("value_from_truth"):
@@ -78,6 +80,13 @@ def action_for(goal, scenario):
                 for part in validator["value_from_truth"].split("."):
                     value = value[part]
             details.update({"field": validator["field"], "value": value, "negate": kind == "filter_excludes"})
+        elif kind == "filter_values":
+            values = [resolve_truth(value, scenario) for value in validator.get("values", [])]
+            details.update({"field": validator["field"], "value": values, "type": "phrases", "negate": False})
+        elif kind == "result_empty":
+            state_after["result_count"] = 0
+        elif kind == "filter_exists":
+            details.update({"field": validator["field"], "value": "exists", "type": "exists", "negate": False})
         elif kind in {"inspected", "selected_entity"}:
             details.update({"entity_type": validator.get("entity_type"), "id": validator.get("value", "representative")})
         elif kind == "selected_value":

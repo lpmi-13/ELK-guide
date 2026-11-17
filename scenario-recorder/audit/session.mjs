@@ -241,10 +241,13 @@ export class LearnerTab {
     if (state.page.busy) problems.push('the result card was shown while Discover was still searching');
     if (message.type === 'set_time_range' && value?.from && appOf(state.page.url) === 'discover' && !url.includes(value.from)) problems.push(`the window does not start at ${value.from}`);
     if (message.type === 'enter_kql' && typeof value === 'string' && state.page.queryBar !== null && state.page.queryBar.trim() !== value.trim()) problems.push(`the query bar shows ${JSON.stringify(state.page.queryBar)}, not ${JSON.stringify(value)}`);
-    if (message.type === 'add_filter' && value?.value !== undefined && !state.page.pills.some(text => text.includes(String(value.value)))) problems.push(`no filter pill for ${value.field}: ${value.value}`);
+    if (['add_filter', 'filter_top_value'].includes(message.type) && value?.value !== undefined && !state.page.pills.some(text => text.includes(String(value.value)))) problems.push(`no filter pill for ${value.field}: ${value.value}`);
+    if (message.type === 'filter_top_value' && value?.value !== undefined && !state.page.pills.some(text => text.includes(String(value.value)) && /^NOT /.test(text) === Boolean(value.negate))) problems.push(`the ${value.field}: ${value.value} pill does not ${value.negate ? 'exclude' : 'include'} its value`);
+    if (message.type === 'set_filter_inclusion' && !state.page.pills.some(text => text.includes(String(value?.value)) && /^NOT /.test(text) === (value?.include === false))) problems.push(`the ${value?.field}: ${value?.value} pill does not ${value?.include === false ? 'exclude' : 'include'} its value`);
+    if (message.type === 'filter_field_present' && !state.page.pills.some(text => text.includes(`${value?.field}: exists`))) problems.push(`no ${value?.field}: exists pill`);
     if (message.type === 'expand_document' && !state.page.documentOpen) problems.push('no document is open');
     if (message.type === 'sort_column' && value?.field && !url.includes(`'${value.field}',${value.direction || 'asc'}`) && !url.includes(`${value.field},${value.direction || 'asc'}`)) problems.push(`the table is not sorted by ${value.field}`);
-    if (['enter_kql', 'add_filter'].includes(message.type) && state.page.noResults) problems.push('the search the step ran shows no results');
+    if (['enter_kql', 'add_filter', 'filter_top_value', 'set_filter_inclusion', 'filter_field_present'].includes(message.type) && state.page.noResults) problems.push('the search the step ran shows no results');
     return problems;
   }
 

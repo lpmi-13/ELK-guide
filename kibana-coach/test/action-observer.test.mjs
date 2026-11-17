@@ -99,6 +99,64 @@ test('a top-value filter-out (minus-<field>-<value>) reports filter_added with t
   assert.equal(reports[0].details.negate, true);
 });
 
+test('"Filter for field present" is read as an exists pill and reported when clicked', async () => {
+  const {dom, document} = makeDom();
+  const {observer, reports} = makeObserver(document);
+  observer.onClick({target: element({subject: 'discoverFieldListPanelAddExistFilter-error.type'})});
+  // Verified 9.5.2: the pill Kibana adds for it.
+  dom.pills = [element({subject: 'filter-badge-1732518498 filter filter-enabled filter-key-error.type filter-value-exists filter-unpinned filter-id-0', text: 'error.type: exists'})];
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].type, 'filter_added');
+  assert.deepEqual(reports[0].details, {field: 'error.type', value: 'exists', negate: false, type: 'exists'});
+});
+
+test('an "is one of" pill is read as the list of values it keeps', () => {
+  const {dom, document} = makeDom();
+  const {observer} = makeObserver(document);
+  // Verified 9.5.2 (Add filter → service.version → is one of → two values).
+  dom.pills = [element({subject: 'filter-badge-805631625 filter filter-enabled filter-key-service.version filter-value-2.4.0,2.4.1 filter-unpinned filter-id-0', text: 'service.version: is one of 2.4.0, 2.4.1'})];
+  assert.deepEqual(observer.readFilterPills(), [{field: 'service.version', value: ['2.4.0', '2.4.1'], negate: false, type: 'phrases'}]);
+});
+
+test('Field statistics is reported as that view, and surrounding documents once the context view shows', async () => {
+  const {dom, document} = makeDom();
+  const location = {pathname: '/app/discover', hash: '#/view/x', href: ''};
+  const {observer, reports} = makeObserver(document, location);
+  observer.onClick({target: element({subject: 'dscViewModeFieldStatsButton'})});
+  assert.deepEqual(reports[0], {type: 'field_statistics_opened', details: {subject: 'dscViewModeFieldStatsButton', view: 'field_statistics'}});
+  const action = element({subject: 'docTableRowAction', text: 'View surrounding documents'});
+  observer.onClick({target: action});
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.equal(reports.length, 1, 'not before Discover shows the context view');
+  location.hash = '#/context/dv/doc?_a=()';
+  dom.bySubject.docTableExpandToggleColumnAnchor = element({subject: 'docTableExpandToggleColumnAnchor'});
+  await new Promise(resolve => setTimeout(resolve, 300));
+  assert.equal(reports[1].type, 'surrounding_documents_opened');
+});
+
+test('turning a pill between Exclude and Include results is a changed filter, not a removed one', () => {
+  const {dom, document} = makeDom();
+  const {observer, reports} = makeObserver(document);
+  observer.reportWithCount = action => reports.push(action);
+  const pill = negate => element({
+    subject: `filter-badge-643839242 filter filter-enabled filter-key-authentication.rejection_reason.keyword filter-value-token_reuse filter-unpinned${negate ? ' filter-negated' : ''} filter-id-0`,
+    text: `${negate ? 'NOT ' : ''}authentication.rejection_reason.keyword: token_reuse`,
+  });
+  dom.pills = [pill(true)];
+  observer.rebaselineFilters();
+  // The learner opens the pill and chooses Include results (its `negateFilter`).
+  dom.pills = [pill(false)];
+  observer.captureFilterRemoval();
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].type, 'filter_changed');
+  assert.deepEqual(reports[0].details, {field: 'authentication.rejection_reason', value: 'token_reuse', negate: false});
+  // A pill that is really gone is still reported as removed.
+  dom.pills = [];
+  observer.captureFilterRemoval();
+  assert.equal(reports[1].type, 'filter_removed');
+});
+
 test('fieldToggle add/remove is disambiguated by the button aria-label', () => {
   const {document} = makeDom();
   const {observer, reports} = makeObserver(document);

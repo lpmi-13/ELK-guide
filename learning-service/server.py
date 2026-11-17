@@ -20,7 +20,7 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qs, quote, urlparse
 from urllib.request import Request, urlopen
 
-from engine.evaluator import IGNORED_ACTIONS, TIME_WINDOW_TOLERANCE_MINUTES, answer_phrases, current_goal, evaluate_action, guided_feedback, incident_moments, incident_timing, parse_instant, playbook_goals, recommended_window_start, relative_window, reveals_answer, score_session, scope_complete, window_miss, window_reaches_incident, window_reference, window_start
+from engine.evaluator import IGNORED_ACTIONS, SEARCH_ACTIONS, TIME_WINDOW_TOLERANCE_MINUTES, answer_phrases, current_goal, evaluate_action, guided_feedback, incident_moments, incident_timing, parse_instant, playbook_goals, recommended_window_start, relative_window, reveals_answer, score_session, scope_complete, window_miss, window_reaches_incident, window_reference, window_start
 from engine.contracts import assert_catalog_valid, insert_goals
 from engine.kql import view_query
 
@@ -64,6 +64,11 @@ PACE_DEFAULTS = {
     "open_field_statistics": 45,
     "inspect_field": 45,
     "add_filter": 60,
+    "filter_top_value": 45,
+    "set_filter_inclusion": 45,
+    "filter_field_present": 45,
+    "show_field_statistics": 45,
+    "open_surrounding_documents": 60,
     "enter_kql": 60,
     "expand_document": 45,
 }
@@ -674,6 +679,20 @@ def opening_time(session):
     return {"from": opening.group(1).strip("'"), "to": opening.group(2).strip("'")} if opening else None
 
 
+def typed_filters(pills, url_filters):
+    """The pills the browser read, each with the kind and parameters Kibana keeps for it in the URL
+    (a range's bounds, an "is one of" list) when the URL holds the same filter. A pill read off the page
+    names its field and shows its value as text ("500 to 599"), which a search can't use as it is."""
+    typed = [item for item in url_filters or [] if isinstance(item, dict) and item.get("type") in {"range", "phrases", "exists"}]
+    result = []
+    for pill in pills:
+        match = next((item for item in typed
+                      if re.sub(r"\.(keyword|text)$", "", str(item.get("field") or "")) == re.sub(r"\.(keyword|text)$", "", str(pill.get("field") or ""))
+                      and bool(item.get("negate")) == bool(pill.get("negate")) and bool(item.get("disabled")) == bool(pill.get("disabled"))), None)
+        result.append({**pill, "type": match["type"], "value": match["value"]} if match else pill)
+    return result
+
+
 def track_view(session, action):
     """The search on the learner's screen after this action: time range, query and its language,
     and filter pills. The coach reports it with each action (read from Kibana's URL state, so a
@@ -695,7 +714,7 @@ def track_view(session, action):
     if kind in {"query_submitted", "esql_submitted"}:
         view["query"] = details.get("query", after.get("query", view.get("query", "")))
     if isinstance(after.get("filters"), list):
-        view["filters"] = after["filters"]
+        view["filters"] = typed_filters(after["filters"], reported.get("filters"))
     elif kind == "filter_added" and details.get("field") and not reported.get("filters"):
         view["filters"] = [*(view.get("filters") or []), details]
     session["view"] = view
@@ -724,13 +743,25 @@ def restore_state(session):
         value = substitute(reference.get("arguments"), session)
         if command == "set_time_range" and isinstance(value, dict):
             state["time"] = {"from": value.get("from"), "to": value.get("to", "now")}
-        elif command == "add_filter" and isinstance(value, dict) and value.get("field"):
-            operator = str(value.get("operator", "is"))
-            state["filters"].append({
+        elif command in {"add_filter", "filter_top_value"} and isinstance(value, dict) and value.get("field"):
+            operator = str(value.get("operator", "is")).lower()
+            earned = {
                 "field": value["field"],
                 "value": value.get("value"),
-                "negate": operator.lower() in {"is not", "not"} or bool(value.get("negate")),
-            })
+                "negate": operator in {"is not", "not", "is not one of"} or bool(value.get("negate")),
+            }
+            # "is one of" (Kibana's phrases filter) keeps any of several values of the field.
+            if isinstance(earned["value"], list):
+                earned["type"] = "phrases"
+            state["filters"].append(earned)
+        elif command == "filter_field_present" and isinstance(value, dict) and value.get("field"):
+            state["filters"].append({"field": value["field"], "value": "exists", "negate": False, "type": "exists"})
+        elif command == "set_filter_inclusion" and isinstance(value, dict) and value.get("field"):
+            # The same pill, turned to keep (include) or leave out its value: it replaces the earlier one.
+            negate = value.get("include") is False
+            state["filters"] = [item for item in state["filters"]
+                                if not (item["field"] == value["field"] and str(item.get("value")) == str(value.get("value")))]
+            state["filters"].append({"field": value["field"], "value": value.get("value"), "negate": negate})
         elif command in {"enter_kql", "enter_query"}:
             state["query"] = value.get("query", "") if isinstance(value, dict) else str(value or "")
     return state
@@ -796,6 +827,10 @@ def next_command(session):
         "concept": explanation_text("concept") if session["mode"] == "demonstration" else "",
         "answer_schema": session["manifest"]["scenario"].get("answer_schema", {}),
     }
+    if step.get("empty_result_expected"):
+        # The step's answer is an empty search (a boolean query for what must not exist), so the coach
+        # must not treat "No results" as a dead end and put the search back.
+        command["empty_result_expected"] = True
     if session["mode"] == "guided" and command_type not in {"request_diagnosis", "request_answer"}:
         # "Show me" performs this step immediately, then explains its scenario-specific reasoning
         # and result (e.g. why the range reaches back N minutes).
@@ -873,6 +908,7 @@ def refresh_run_ready(session):
     if status == 200:
         session["run_state"] = run.get("state")
         session["run_error"] = run.get("error")
+        session["run_reclaim_at"] = run.get("reclaim_at")
     elif status == 404:
         session["run_state"] = "MISSING"
     state = session.get("run_state")
@@ -933,10 +969,27 @@ def action_result_message(session, action, evaluation):
     return reply
 
 
+def exploration(session):
+    """How long a finished investigation stays open to explore: the controller reclaims a completed run's
+    Space and data a fixed time after it completes. None until the session has its feedback (or when the
+    run doesn't say); 0 once the run is gone (reclaimed, closed, replaced or forgotten)."""
+    if not session["feedback"]:
+        return None
+    state = session.get("run_state")
+    if state in {"ABORTED", "MISSING"}:
+        return {"ends_in_seconds": 0}
+    reclaim_at = session.get("run_reclaim_at")
+    if state != "COMPLETED" or not reclaim_at:
+        return None
+    remaining = (datetime.fromisoformat(reclaim_at) - datetime.now(timezone.utc)).total_seconds()
+    return {"ends_in_seconds": max(0, int(remaining))}
+
+
 def session_status(session):
-    """GET /api/sessions/<id>: whether the session can still be investigated or reviewed."""
+    """GET /api/sessions/<id>: whether the session can still be investigated or reviewed, and for how long
+    a finished one can still be explored."""
     return {"session": learner_session(session), "run_state": session.get("run_state"), "available": run_unavailable(session) is None,
-            "feedback_available": bool(session["feedback"]), "launcher_url": LAUNCHER_URL}
+            "feedback_available": bool(session["feedback"]), "exploration": exploration(session), "launcher_url": LAUNCHER_URL}
 
 
 def complete_message(session):
@@ -1014,11 +1067,30 @@ def action_evidence(session, action):
     # learner's view only matters where the learner's own work is judged.
     learner_judged = session["mode"] != "demonstration"
     scope = view_query(view) if view and learner_judged and action.get("actor") != "tutorial" else None
+    # What is on screen, whoever acted: a claim that something is absent from the view ("no successful
+    # request left", an empty boolean check) can only be judged there.
+    on_screen = view_query(view) if view else None
+    if action.get("type") in SEARCH_ACTIONS and on_screen is not None:
+        status, result = http_json(f"{ELASTICSEARCH_URL}/lab-{session['run_id']}/_search?allow_no_indices=true", "POST",
+                                   {"size": 0, "track_total_hits": True, "query": on_screen})
+        if status < 400:
+            evidence["view_count"] = hit_total(result)
     if action.get("type") == "esql_submitted" and learner_judged:
         evidence["esql_result"] = esql_result(session, details.get("query") or (view or {}).get("query"), view)
     for assertion in session["manifest"]["scenario"].get("truth", {}).get("assertions", []):
         kind = assertion.get("kind")
         index = substitute(assertion.get("index", f"lab-{session['run_id']}"), session)
+        if kind == "es_count" and "maximum" in assertion:
+            # At most this many such records on screen (usually none): judged only inside the view.
+            assertion_query = substitute(assertion.get("query", {"match_all": {}}), session)
+            held = None
+            if on_screen is not None:
+                status, result = http_json(f"{ELASTICSEARCH_URL}/{index}/_search?allow_no_indices=true", "POST",
+                                           {"size": 0, "track_total_hits": True, "query": {"bool": {"filter": [assertion_query, on_screen]}}})
+                if status < 400:
+                    held = hit_total(result)
+            evidence["assertions"][assertion["id"]] = held is not None and held <= assertion["maximum"]
+            continue
         if kind in {"es_count", "es_cardinality"}:
             assertion_query = substitute(assertion.get("query", {"match_all": {}}), session)
             query = {"size": 0, "query": assertion_query}

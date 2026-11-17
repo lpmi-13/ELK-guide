@@ -6,7 +6,7 @@
   "type": "investigation",
   "classification": "core",
   "difficulty": 1,
-  "estimated_minutes": 12,
+  "estimated_minutes": 15,
   "brief": "Sign-in failures have risen, but normal rejection types are mixed into the data. Isolate the abnormal reason and affected client.",
   "skills": ["boolean-kql", "include-exclude", "top-values"],
   "required_capabilities": ["discover", "spaces", "saved_objects"],

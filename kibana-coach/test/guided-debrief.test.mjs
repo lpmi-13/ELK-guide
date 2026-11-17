@@ -116,3 +116,69 @@ test('a challenge debrief lists its detours, one line each, with any explanation
   assert.deepEqual(items[1].children.map(line => line.textContent),
     ['Dead end: window missed the incident', 'Your window, the last 15 minutes, started at 04:12 when you chose it, after the report at 04:10.']);
 });
+
+test('a finished debrief offers keep exploring or close and return to the main menu', () => {
+  const Debrief = loadClass('../src/ui/debrief.js', 'IncidentDebrief');
+  const created = [];
+  const originalDocument = globalThis.document;
+  globalThis.document = {createElement: () => { const element = fakeElement(); created.push(element); return element; }};
+  let returned = 0;
+  try {
+    const debrief = new Debrief({append() {}});
+    debrief.show({total: 70, summary: '', assistance});
+    // Before the panel offers a way back, the guided debrief just closes.
+    assert.match(created[0].innerHTML, /<button class="debrief-keep" autofocus>Done<\/button>/);
+    assert.doesNotMatch(created[0].innerHTML, /debrief-return/);
+    debrief.onReturnToMenu = () => { returned += 1; };
+    debrief.show({total: 70, summary: '', assistance});
+    debrief.showDemonstration({title: 'Demo', answer: {conclusion: 'Orders fails.'}, checks: []});
+  } finally {
+    globalThis.document = originalDocument;
+  }
+  const [guided, demonstration] = created.filter(element => /debrief-return/.test(element.innerHTML));
+  assert.match(guided.innerHTML, /<button class="debrief-keep" autofocus>Keep exploring<\/button>/);
+  // A plain dialog scrolls, so its footer doesn't take focus (the dialog opens at the top).
+  assert.match(demonstration.innerHTML, /<button class="debrief-keep">Keep exploring<\/button>.*Close investigation &amp; return to main menu/s);
+  demonstration.parts['.debrief-return'].onclick();
+  assert.equal(returned, 1);
+});
+
+test('the time-up notice says the data is gone and leads to the main menu', () => {
+  const Debrief = loadClass('../src/ui/debrief.js', 'IncidentDebrief');
+  const created = [];
+  const originalDocument = globalThis.document;
+  globalThis.document = {createElement: () => { const element = fakeElement(); created.push(element); return element; }};
+  try {
+    const debrief = new Debrief({append() {}});
+    debrief.onReturnToMenu = () => {};
+    debrief.showTimeUp('14:32');
+  } finally {
+    globalThis.document = originalDocument;
+  }
+  const [notice] = created;
+  assert.match(notice.className, /incident-time-up/);
+  assert.match(notice.parts.p.textContent, /closed at 14:32, and its data has been removed/);
+  // Staying is offered but not focused: the way on is the main menu.
+  assert.match(notice.innerHTML, /<button class="debrief-keep">Stay on this page<\/button>.*data-choice="return-to-menu" autofocus>Return to main menu<\/button>/s);
+});
+
+test('Keep exploring tells the panel; the time-up notice\'s Stay on this page does not', () => {
+  const Debrief = loadClass('../src/ui/debrief.js', 'IncidentDebrief');
+  const created = [];
+  const originalDocument = globalThis.document;
+  globalThis.document = {createElement: () => { const element = fakeElement(); created.push(element); return element; }};
+  let exploring = 0;
+  try {
+    const debrief = new Debrief({append() {}});
+    debrief.onReturnToMenu = () => {};
+    debrief.onKeepExploring = () => { exploring += 1; };
+    debrief.showDemonstration({title: 'Demo', answer: {conclusion: 'Orders fails.'}, checks: []});
+    debrief.showTimeUp('14:32');
+  } finally {
+    globalThis.document = originalDocument;
+  }
+  const [summary, notice] = created.filter(element => /debrief-keep/.test(element.innerHTML));
+  summary.parts['.debrief-keep'].onclick();
+  assert.equal(exploring, 1);
+  assert.equal(notice.parts['.debrief-keep'].onclick, undefined);
+});

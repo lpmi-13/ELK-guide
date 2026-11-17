@@ -6,4 +6,5 @@ declare const KibanaActionObserver: any;
 declare const QueryExplainer: any;
 interface Window {
   __coachBootOverlay?: {hold(): void; release(): void};
+  __coachAllowLeave?: () => void;
 }

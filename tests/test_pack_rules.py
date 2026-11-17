@@ -33,7 +33,7 @@ VALUE_FREE_ACTIONS = {
     "correlated_logs_opened", "metrics_logs_opened", "metric_period_compared", "alert_reason_inspected",
     "alert_history_inspected", "alert_source_opened", "answer_submitted", "auto_refresh_changed",
 }
-VALUE_CHECKS = {"query_contains", "filter_contains", "filter_excludes", "selected_value", "detail_equals", "result_contains",
+VALUE_CHECKS = {"query_contains", "filter_contains", "filter_excludes", "filter_exists", "filter_values", "filter_field", "selected_value", "detail_equals", "result_contains",
                 "time_range_contains", "query_language", "state_equals"}
 
 

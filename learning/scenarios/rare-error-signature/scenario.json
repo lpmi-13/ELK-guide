@@ -6,52 +6,137 @@
   "type": "investigation",
   "classification": "core",
   "difficulty": 2,
-  "estimated_minutes": 15,
+  "estimated_minutes": 18,
   "brief": "A high-volume service contains one rare exception associated with failed requests. Isolate it and a representative correlated request.",
-  "skills": ["field-statistics", "cardinality", "surrounding-documents"],
-  "required_capabilities": ["discover", "spaces", "saved_objects"],
+  "skills": [
+    "field-statistics",
+    "cardinality",
+    "surrounding-documents"
+  ],
+  "required_capabilities": [
+    "discover",
+    "spaces",
+    "saved_objects"
+  ],
   "parameters": {
     "incident": {
       "choose": [
-        {"service": "catalog", "error_type": "InventoryReservationRace", "route_path": "/items/reserve", "message": "inventory reservation raced with stock update", "noise_message": "catalog cache refresh delayed"},
-        {"service": "orders", "error_type": "OrderIdempotencyConflict", "route_path": "/api/orders", "message": "duplicate order submission detected", "noise_message": "orders retry budget replenished"},
-        {"service": "payments", "error_type": "LedgerRoundingError", "route_path": "/api/payments/settle", "message": "settlement rounding mismatch detected", "noise_message": "payments settlement batch queued"},
-        {"service": "auth", "error_type": "SessionReplayDetected", "route_path": "/api/auth/refresh", "message": "refused a replayed session token", "noise_message": "auth key rotation completed"}
+        {
+          "service": "catalog",
+          "error_type": "InventoryReservationRace",
+          "route_path": "/items/reserve",
+          "message": "inventory reservation raced with stock update",
+          "noise_message": "catalog cache refresh delayed",
+          "precursor": "stock update committed while a reservation was still open"
+        },
+        {
+          "service": "orders",
+          "error_type": "OrderIdempotencyConflict",
+          "route_path": "/api/orders",
+          "message": "duplicate order submission detected",
+          "noise_message": "orders retry budget replenished",
+          "precursor": "client resubmitted the order after a gateway timeout"
+        },
+        {
+          "service": "payments",
+          "error_type": "LedgerRoundingError",
+          "route_path": "/api/payments/settle",
+          "message": "settlement rounding mismatch detected",
+          "noise_message": "payments settlement batch queued",
+          "precursor": "settlement converted currency at 3 decimal places"
+        },
+        {
+          "service": "auth",
+          "error_type": "SessionReplayDetected",
+          "route_path": "/api/auth/refresh",
+          "message": "refused a replayed session token",
+          "noise_message": "auth key rotation completed",
+          "precursor": "refresh token presented again from a second device"
+        }
       ]
     }
   },
   "provisioning": {
-    "strategies": ["seeded-events", "saved-objects"],
+    "strategies": [
+      "seeded-events",
+      "saved-objects"
+    ],
     "seeded_events": {
       "signal_count": 12,
       "noise_count": 180,
       "signal": {
-        "service": {"name": "${param.incident.service}"},
-        "event": {"outcome": "failure"},
-        "error": {"type": "${param.incident.error_type}"},
+        "service": {
+          "name": "${param.incident.service}"
+        },
+        "event": {
+          "outcome": "failure"
+        },
+        "error": {
+          "type": "${param.incident.error_type}"
+        },
         "message": "${param.incident.message}"
       },
       "distractors": [
-        {"log": {"level": "WARN"}, "message": "${param.incident.noise_message}"}
+        {
+          "log": {
+            "level": "WARN"
+          },
+          "message": "${param.incident.noise_message}"
+        }
       ],
       "companions": [
         {
           "count": 3,
           "event": {
-            "service": {"name": "${param.incident.service}"},
-            "event": {"outcome": "failure"},
-            "error": {"type": "${param.incident.error_type}"},
-            "url": {"path": "${param.incident.route_path}"},
+            "service": {
+              "name": "${param.incident.service}"
+            },
+            "event": {
+              "outcome": "failure"
+            },
+            "error": {
+              "type": "${param.incident.error_type}"
+            },
+            "url": {
+              "path": "${param.incident.route_path}"
+            },
             "message": "request failed after ${param.incident.error_type}"
+          },
+          "offset_seconds": 250
+        },
+        {
+          "trace": "each",
+          "offset_ms": -180,
+          "event": {
+            "service": {
+              "name": "${param.incident.service}"
+            },
+            "log": {
+              "level": "INFO"
+            },
+            "message": "${param.incident.precursor}"
           }
         }
       ]
     },
     "readiness_validators": [
-      {"id": "seeded-signal", "kind": "es_count", "minimum": 10, "query": {"term": {"message.keyword": "${param.incident.message}"}}}
+      {
+        "id": "seeded-signal",
+        "kind": "es_count",
+        "minimum": 10,
+        "query": {
+          "term": {
+            "message.keyword": "${param.incident.message}"
+          }
+        }
+      }
     ]
   },
-  "starting_view": {"app": "discover", "saved_object": "incident-investigation", "path": "/app/discover#/view/incident-investigation"},
+  "starting_view": {
+    "app": "discover",
+    "saved_object": "incident-investigation",
+    "path": "/app/discover#/view/incident-investigation"
+  },
   "truth": {
     "answers": {
       "finding": "${param.incident.error_type}",
@@ -59,20 +144,76 @@
       "conclusion": "The rare ${param.incident.error_type} exception correlates with failed ${param.incident.service} requests."
     },
     "assertions": [
-      {"id": "signal", "kind": "es_count", "minimum": 10, "query": {"term": {"message.keyword": "${param.incident.message}"}}},
-      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "request failed after ${param.incident.error_type}"}}}
+      {
+        "id": "signal",
+        "kind": "es_count",
+        "minimum": 10,
+        "query": {
+          "term": {
+            "message.keyword": "${param.incident.message}"
+          }
+        }
+      },
+      {
+        "id": "corroboration",
+        "kind": "es_count",
+        "minimum": 1,
+        "query": {
+          "term": {
+            "message.keyword": "request failed after ${param.incident.error_type}"
+          }
+        }
+      },
+      {
+        "id": "precursor",
+        "kind": "es_count",
+        "minimum": 1,
+        "query": {
+          "term": {
+            "message.keyword": "${param.incident.precursor}"
+          }
+        }
+      }
     ]
   },
   "answer_schema": {
     "type": "diagnosis",
     "fields": [
-      {"id": "finding", "label": "Rare error type", "kind": "string", "weight": 2},
-      {"id": "scope", "label": "Service", "kind": "string", "weight": 1},
-      {"id": "conclusion", "label": "Correlation conclusion", "kind": "statement", "mentions": ["finding", "scope"], "weight": 1},
-      {"id": "evidence", "label": "Representative request", "kind": "text", "scored": false}
+      {
+        "id": "finding",
+        "label": "Rare error type",
+        "kind": "string",
+        "weight": 2
+      },
+      {
+        "id": "scope",
+        "label": "Service",
+        "kind": "string",
+        "weight": 1
+      },
+      {
+        "id": "conclusion",
+        "label": "Correlation conclusion",
+        "kind": "statement",
+        "mentions": [
+          "finding",
+          "scope"
+        ],
+        "weight": 1
+      },
+      {
+        "id": "evidence",
+        "label": "Representative request",
+        "kind": "text",
+        "scored": false
+      }
     ]
   },
   "playbook": "playbook.json",
   "rubric": "rubric.json",
-  "cleanup": {"delete_space": true, "delete_run_data": true, "managed_resources": []}
+  "cleanup": {
+    "delete_space": true,
+    "delete_run_data": true,
+    "managed_resources": []
+  }
 }

@@ -4,7 +4,7 @@ class IncidentCoachPanel {
     this.root = host.attachShadow({mode: 'open'});
     this.root.innerHTML = `<style>${IncidentCoachPanel.styles}</style>
       <aside class="panel" aria-label="Incident coach" hidden>
-        <header title="Drag to move the coach"><span class="live-dot"></span><strong>Incident coach</strong><button id="stop" title="Stop automation">Stop</button></header>
+        <header title="Drag to move the coach"><span class="live-dot"></span><strong>Incident coach</strong><button id="stop" title="Stop automation">Stop</button><button id="fold" type="button" hidden aria-label="Collapse coach" title="Collapse coach">${IncidentCoachPanel.foldIcons.collapse}</button></header>
         <div class="progress" aria-hidden="true"><span></span></div>
         <div class="step-line"><h2 id="objective"></h2><p id="mode"></p></div>
         <section id="stage" aria-live="polite">
@@ -41,6 +41,10 @@ class IncidentCoachPanel {
     this.briefing = new IncidentBriefing(this.root);
     this.currentBriefing = null;
     this.paused = false;
+    // The finished investigation ({mode, until, ended, exploring}), null before it is finished; while
+    // exploring, the card can be folded down to its header.
+    this.completion = null;
+    this.collapsed = false;
     this.activeTarget = null;
     this.activeCommandId = null;
     this.evidenceFields = [];
@@ -118,6 +122,10 @@ class IncidentCoachPanel {
       if (this.currentBriefing) this.briefing.show(this.currentBriefing, {review: true});
     };
     this.root.querySelector('#stop').onclick = () => this.onStop?.();
+    this.root.querySelector('#fold').onclick = () => this.setCollapsed(!this.collapsed);
+    // The placement observers can be off by the time the investigation is finished, so a docked card
+    // keeps its corner on its own when the window is resized.
+    window.addEventListener('resize', () => { if (this.docked && !this.dragging) this.dock(true); });
     this.root.querySelector('#diagnosis').addEventListener('submit', event => {
       event.preventDefault();
       this.onDiagnosis?.(Object.fromEntries(new FormData(event.target)));
@@ -368,12 +376,147 @@ class IncidentCoachPanel {
     this.root.querySelector('#diagnosis').hidden = true;
     this.root.querySelector('#stage').classList.remove('success', 'celebrate-in', 'recovery', 'checkin');
     this.root.querySelector('#stage').hidden = false;
-    this.renderPhase({eyebrow: 'Finished', headline: {
-      guided: 'Your guided investigation is complete.',
-      challenge: 'Your answer is in. Review feedback opens the debrief again.',
-      demonstration: 'The demonstration is complete. Review feedback opens its summary again.',
-    }[mode] || 'Complete.'});
+    // Two ways on: stay and explore the investigation's data, or close it and go back to the launcher
+    // for another scenario or mode. The debrief offers the same pair.
+    const canReturn = Boolean(this.onReturnToMenu);
+    this.returning = false;
+    this.completion = {mode, until: '', ended: false, exploring: false};
+    this.setCollapsed(false);
+    this.debrief.onReturnToMenu = canReturn ? () => this.returnToMenu() : null;
+    this.debrief.onKeepExploring = canReturn ? () => this.startExploring() : null;
+    this.renderPhase({
+      eyebrow: 'Finished',
+      headline: {
+        guided: 'Your guided investigation is complete.',
+        challenge: 'Your answer is in.',
+        demonstration: 'The demonstration is complete.',
+      }[mode] || 'Complete.',
+      detail: this.completionDetail(),
+      choices: canReturn ? [this.returnChoice()] : [],
+    });
     requestAnimationFrame(() => this.placeAwayFrom(null));
+  }
+
+  completionDetail() {
+    const {mode, until, exploring} = this.completion;
+    const recap = mode === 'demonstration' ? 'summary' : 'debrief';
+    if (!this.onReturnToMenu) return `Review feedback reopens the ${recap}.`;
+    if (exploring) return `${until ? `It stays open until ${until}. ` : ''}Review feedback reopens the ${recap}. When you’re done, close the exploration to choose another scenario or mode.`;
+    return `Keep exploring the data here${until ? ` until ${until}` : ''}; Review feedback reopens the ${recap}. When you’re done, close the investigation to choose another scenario or mode.`;
+  }
+
+  returnChoice(label = IncidentCoachPanel.returnLabel) {
+    return {id: 'return-to-menu', label, primary: true, onSelect: () => this.returnToMenu()};
+  }
+
+  // The learner chose Keep exploring: the coach folds down to its header and docks in the lower-left
+  // corner, out of the way. Unfolded (the header's +, as in the Argo CD lab's coach) it is the card that
+  // closes the exploration, the same close as the debrief's "Close investigation & return to main menu".
+  startExploring() {
+    if (!this.completion || this.completion.ended) return;
+    this.completion.exploring = true;
+    this.root.querySelector('#objective').textContent = 'Incident exploration';
+    // Nothing is automated any more: the way out is the close button.
+    this.root.querySelector('#stop').hidden = true;
+    this.renderPhase({
+      eyebrow: 'Exploring',
+      headline: 'Explore the incident data on your own.',
+      detail: this.completionDetail(),
+      choices: this.onReturnToMenu ? [this.returnChoice('Close this incident exploration')] : [],
+    });
+    this.setCollapsed(true);
+  }
+
+  // Fold the card down to its header, or unfold it. Folding docks it in the lower-left corner; it stays
+  // docked — unfolded, the card rises from the bar, its bottom kept off the viewport's — until the
+  // learner drags it somewhere else or the finished investigation is left behind.
+  setCollapsed(collapsed) {
+    this.collapsed = collapsed;
+    this.panel.classList.toggle('collapsed', collapsed);
+    const fold = this.root.querySelector('#fold');
+    fold.hidden = !(this.completion?.exploring && !this.completion.ended);
+    fold.innerHTML = collapsed ? IncidentCoachPanel.foldIcons.expand : IncidentCoachPanel.foldIcons.collapse;
+    fold.setAttribute('aria-label', collapsed ? 'Expand coach' : 'Collapse coach');
+    fold.title = collapsed ? 'Expand coach' : 'Collapse coach';
+    // Kibana moving underneath doesn't move the card while the learner explores.
+    if (this.completion?.exploring) this.keepPlace = true;
+    if (collapsed) this.docked = true;
+    else if (!this.completion?.exploring && !this.completion?.ended) this.docked = false;
+    this.refit();
+  }
+
+  // Put the docked card in the lower-left corner, the same margin off the left and bottom edges as the
+  // card keeps elsewhere, gliding there (IncidentCoachPanel.dockMotion) unless `instant`.
+  dock(instant = false) {
+    if (!this.panel || this.panel.hidden) return;
+    const margin = 18;
+    const capped = this.panel.style.maxHeight;
+    this.panel.style.maxHeight = 'none';
+    const natural = this.panel.offsetHeight; // full content height, ignoring the cap and transforms
+    this.panel.style.maxHeight = capped;
+    const target = {left: margin, top: Math.round(Math.max(72, innerHeight - natural - margin))};
+    if (this.appliedPos?.left === target.left && this.appliedPos?.top === target.top) return;
+    this.pos = target;
+    this.applyPosition(instant, IncidentCoachPanel.dockMotion);
+  }
+
+  // A finished investigation can be explored until its run is reclaimed, at `until` (a clock time).
+  showExplorationDeadline(until) {
+    if (!this.completion || this.completion.ended) return;
+    this.completion.until = until;
+    this.root.querySelector('#phase-detail').textContent = this.completionDetail();
+    this.refit();
+  }
+
+  // The time for exploring ran out at `endedAt` and the run's data is gone. Any debrief closes; the card
+  // says what happened and leads back to the main menu, and a short notice makes sure it isn't missed.
+  // Review feedback still works: the debrief is kept by the learning service, not the run.
+  showExplorationEnded(endedAt) {
+    const recap = this.completion?.mode === 'demonstration' ? 'summary' : 'debrief';
+    this.completion = {...(this.completion || {mode: 'guided'}), until: endedAt, ended: true, exploring: false};
+    this.setCollapsed(false);
+    for (const dialog of this.root.querySelectorAll('dialog.incident-debrief')) dialog.close();
+    this.briefing.close();
+    this.spotlight.hide();
+    this.cursor.hide();
+    this.host.hidden = false;
+    this.panel.hidden = false;
+    this.phase = 'ended';
+    this.activeTarget = null;
+    this.returning = false;
+    const canReturn = Boolean(this.onReturnToMenu);
+    this.debrief.onReturnToMenu = canReturn ? () => this.returnToMenu() : null;
+    this.root.querySelector('#objective').textContent = 'Investigation closed';
+    this.root.querySelector('#mode').textContent = 'time is up';
+    this.renderPhase({
+      eyebrow: 'Time’s up',
+      headline: 'This investigation has closed.',
+      detail: `It could be explored until ${endedAt}, and its data has now been removed. Review feedback still opens the ${recap}.`,
+      choices: canReturn ? [this.returnChoice('Return to main menu')] : [],
+    });
+    this.debrief.showTimeUp(endedAt);
+    requestAnimationFrame(() => this.placeAwayFrom(null));
+  }
+
+  // Close the finished investigation and leave for the launcher. Every return control (the card's and
+  // the debrief's) says it's closing, and a second press doesn't start another close.
+  returnToMenu() {
+    if (this.returning) return;
+    this.returning = true;
+    const buttons = [...this.root.querySelectorAll('[data-choice="return-to-menu"]')];
+    const labels = buttons.map(button => button.textContent);
+    for (const button of buttons) {
+      button.disabled = true;
+      button.textContent = 'Closing investigation…';
+    }
+    Promise.resolve(this.onReturnToMenu?.()).catch(error => {
+      this.returning = false;
+      buttons.forEach((button, index) => {
+        button.disabled = false;
+        button.textContent = labels[index];
+      });
+      this.toast(error.message, true);
+    });
   }
 
   // The session can't go on: its run ended, was replaced or never became ready, or the service no longer
@@ -388,6 +531,8 @@ class IncidentCoachPanel {
     this.spotlight.hide();
     this.cursor.hide();
     this.briefing.close();
+    this.completion = null;
+    this.setCollapsed(false);
     this.host.hidden = false;
     this.panel.hidden = false;
     this.phase = 'ended';
@@ -788,11 +933,38 @@ class IncidentCoachPanel {
         highlight.style.cssText = `left:${left}px;top:${top}px;width:${right - left}px;height:${innerHeight - top - 48}px`;
       }
     }
-    for (const [index, rect] of this.evidenceTargetRects().entries()) {
+    for (const [index, box] of IncidentCoachPanel.ringBoxes(this.evidenceTargetRects()).entries()) {
       const highlight = this.evidenceHighlights[this.evidenceFields.length + index];
-      highlight.hidden = !rect;
-      if (rect) highlight.style.cssText = `left:${rect.left - 5}px;top:${rect.top - 5}px;width:${rect.width + 10}px;height:${rect.height + 10}px`;
+      highlight.hidden = !box;
+      if (box) highlight.style.cssText = `left:${box.left}px;top:${box.top}px;width:${box.right - box.left}px;height:${box.bottom - box.top}px`;
     }
+  }
+
+  // Rings around page elements, `pad` px outside each. Elements that sit close together (the inspect
+  // step pins its fields into adjacent doc-viewer rows) would get overlapping rings, so where two
+  // would overlap, their facing sides are pulled back to meet halfway between the elements, `gap` px
+  // apart. Elements that overlap each other keep their rings as they are. Null rects stay null.
+  static ringBoxes(rects, pad = 5, gap = 4) {
+    const boxes = rects.map(rect => rect && {left: rect.left - pad, top: rect.top - pad, right: rect.right + pad, bottom: rect.bottom + pad});
+    for (let i = 0; i < rects.length; i += 1) {
+      for (let j = i + 1; j < rects.length; j += 1) {
+        const [a, b] = [boxes[i], boxes[j]];
+        if (!a || !b || Math.min(a.right, b.right) <= Math.max(a.left, b.left) || Math.min(a.bottom, b.bottom) <= Math.max(a.top, b.top)) continue;
+        const [upper, lower] = rects[i].top <= rects[j].top ? [i, j] : [j, i];
+        const [first, second] = rects[i].left <= rects[j].left ? [i, j] : [j, i];
+        // A shared border (Kibana's rows overlap by a pixel) still counts as one above the other.
+        if (rects[upper].bottom <= rects[lower].top + 2) {
+          const middle = (rects[upper].bottom + rects[lower].top) / 2;
+          boxes[upper].bottom = Math.min(boxes[upper].bottom, middle - gap / 2);
+          boxes[lower].top = Math.max(boxes[lower].top, middle + gap / 2);
+        } else if (rects[first].right <= rects[second].left + 2) {
+          const middle = (rects[first].right + rects[second].left) / 2;
+          boxes[first].right = Math.min(boxes[first].right, middle - gap / 2);
+          boxes[second].left = Math.max(boxes[second].left, middle + gap / 2);
+        }
+      }
+    }
+    return boxes;
   }
 
   clampPosition(left, top, width, height) {
@@ -809,7 +981,7 @@ class IncidentCoachPanel {
     handle.setPointerCapture(event.pointerId);
     const rect = this.panel.getBoundingClientRect();
     this.dragging = {pointerId: event.pointerId, x: event.clientX - rect.left, y: event.clientY - rect.top,
-      width: rect.width, height: rect.height, pending: null};
+      width: rect.width, height: rect.height, pending: null, from: this.pos && {...this.pos}};
     this.panel.style.transition = 'none';
     handle.classList.add('dragging');
   }
@@ -840,6 +1012,9 @@ class IncidentCoachPanel {
     cancelAnimationFrame(this.dragFrame);
     this.dragFrame = 0;
     this.flushDrag();
+    // Dragged somewhere else (not just a press on the header), the card stays where the learner put it.
+    const from = this.dragging.from;
+    if (this.docked && (!from || from.left !== this.pos?.left || from.top !== this.pos?.top)) this.docked = false;
     this.dragging = null;
     const handle = this.root.querySelector('header');
     if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
@@ -962,8 +1137,9 @@ class IncidentCoachPanel {
   }
 
   // `instant` suppresses the panel's left/top transition for one commit so a freshly revealed panel
-  // appears at its resting spot rather than sliding in from the CSS default corner.
-  applyPosition(instant = false) {
+  // appears at its resting spot rather than sliding in from the CSS default corner. `motion` can give the
+  // glide its own timing function (a cubic-bezier) and shortest/longest durations in ms.
+  applyPosition(instant = false, {ease = '', shortest = 380, longest = 900} = {}) {
     // Move with a GPU-composited transform rather than left/top: animating layout properties forces
     // the heavy Kibana grid underneath to reflow on every frame, which drops frames and reads as a
     // jerky slide. The glide time also scales with the distance travelled so a small nudge stays
@@ -973,7 +1149,9 @@ class IncidentCoachPanel {
     } else {
       const from = this.appliedPos || this.pos;
       const distance = Math.hypot(this.pos.left - from.left, this.pos.top - from.top);
-      this.panel.style.setProperty('--panel-move', `${Math.round(Math.min(900, Math.max(380, distance * 0.8)))}ms`);
+      this.panel.style.setProperty('--panel-move', `${Math.round(Math.min(longest, Math.max(shortest, distance * 0.8)))}ms`);
+      if (ease) this.panel.style.setProperty('--panel-ease', ease);
+      else this.panel.style.removeProperty('--panel-ease');
     }
     this.panel.style.transform = `translate(${this.pos.left}px, ${this.pos.top}px)`;
     // Bound the card to the viewport from wherever its top now sits, so a phase that grows
@@ -995,6 +1173,11 @@ class IncidentCoachPanel {
   // jarring corner hop), and the move is instant so it reads as part of the card's own transition.
   refit() {
     if (!this.panel || this.panel.hidden || !this.pos) return;
+    // Docked, the card's bottom is what stays put: it grows or shrinks upward, gliding.
+    if (this.docked) {
+      this.dock();
+      return;
+    }
     const margin = 18;
     const topMargin = 72;
     const capped = this.panel.style.maxHeight;
@@ -1112,11 +1295,24 @@ class IncidentCoachPanel {
     this.advanceRequested = false;
     this.pendingCommand = null;
     this.root.querySelector('#stage').classList.remove('success', 'celebrate-in', 'recovery', 'checkin');
+    this.completion = null;
+    this.setCollapsed(false);
   }
+
+  static returnLabel = 'Close investigation & return to main menu';
+
+  // Drawn rather than typed, so the fold toggle is a true minus and plus in every font.
+  static foldIcons = {
+    collapse: '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.5 8h9"/></svg>',
+    expand: '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.5 8h9M8 3.5v9"/></svg>',
+  };
+
+  // Docking glides with a long, soft deceleration (ease-out quart) so the card settles into its corner.
+  static dockMotion = {ease: 'cubic-bezier(.25, 1, .5, 1)', shortest: 560, longest: 820};
 
   static styles = `
     :host { all: initial; position: fixed; z-index: 2147483647; inset: 0; pointer-events: none; font: 14px system-ui,sans-serif; color: #17212b; }
-    .panel { pointer-events: auto; position: fixed; z-index:3; top: 0; left: 0; width: min(468px, calc(100vw - 36px)); max-height: calc(100vh - 90px); overflow: auto; box-sizing: border-box; padding: 18px; border: 1px solid #b6c6d6; border-radius: 12px; background: #fff; box-shadow: 0 16px 46px #17212b40; transform: translate(18px, 72px); transition: transform var(--panel-move, .6s) cubic-bezier(.4, 0, .2, 1); will-change: transform; }
+    .panel { pointer-events: auto; position: fixed; z-index:3; top: 0; left: 0; width: min(468px, calc(100vw - 36px)); max-height: calc(100vh - 90px); overflow: auto; box-sizing: border-box; padding: 18px; border: 1px solid #b6c6d6; border-radius: 12px; background: #fff; box-shadow: 0 16px 46px #17212b40; transform: translate(18px, 72px); transition: transform var(--panel-move, .6s) var(--panel-ease, cubic-bezier(.4, 0, .2, 1)); will-change: transform; }
     [hidden] { display:none!important; }
     header { display:flex; align-items:center; gap:8px; cursor:grab; touch-action:none; user-select:none; } header.dragging { cursor:grabbing; } header strong { flex:1; } .live-dot { width:9px;height:9px;border-radius:50%;background:#1aa87a;box-shadow:0 0 0 4px #1aa87a22; }
     h2 { margin: 14px 0 8px; font-size: 17px; text-transform: capitalize; } h3 { margin:0 0 4px;font-size:12px;text-transform:uppercase;letter-spacing:.045em;color:#3f5060; } p { line-height:1.45; } .step-line { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:10px; } .progress[hidden] + .step-line { margin-top:12px; } .step-line h2 { margin:0; } #mode { flex:none; margin:0; color:#536170; font-size:12px; } #mode::first-letter { text-transform:uppercase; }
@@ -1128,6 +1324,8 @@ class IncidentCoachPanel {
     .countdown.working span { width:34%!important;animation:cd-sweep 1.25s cubic-bezier(.55,0,.45,1) infinite; } @keyframes cd-sweep { 0%{transform:translateX(-115%)} 100%{transform:translateX(310%)} }
     @media (prefers-reduced-motion: reduce) { .countdown.working span { transform:none!important;width:100%!important;opacity:.55; } .countdown span { width:100%!important; } }
     button { border:1px solid #8293a3;border-radius:5px;background:#f5f7f9;padding:6px 9px;cursor:pointer; } button:hover,button:focus-visible { outline:2px solid #006bb4;outline-offset:1px; }
+    .panel.collapsed { width:auto;padding:10px 12px 10px 16px; } .panel.collapsed > :not(header) { display:none!important; }
+    #fold { display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;color:#536170; } #fold:hover { color:#17212b;background:#eef3f7; } #fold svg { width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round; }
     #stop { color:#a32b1c;border-color:#d77d72; } #advance { margin-left:auto; } #advance.primary { background:#006bb4;border-color:#006bb4;color:#fff;font-weight:600;padding:6px 14px; } #advance:disabled { opacity:.7;cursor:wait; } .actions { display:flex; gap:7px; margin-top:12px; }
     #hint-card { margin-top:14px;padding:13px 16px 14px;border:1px solid #b8dcea;border-left:4px solid #0874a8;border-radius:9px;background:#f0f8fc;box-shadow:0 4px 14px #0874a812; }
     #hint-label { display:block;color:#08638d;font:700 11px/1.3 system-ui,sans-serif;letter-spacing:.09em;text-transform:uppercase; }
