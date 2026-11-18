@@ -2,12 +2,12 @@
   "schema_version": 2,
   "id": "http-error-regression",
   "version": 3,
-  "title": "HTTP error regression",
+  "title": "Server errors after a release",
   "type": "investigation",
   "classification": "core",
   "difficulty": 1,
   "estimated_minutes": 14,
-  "brief": "HTTP server errors increased after a release. Identify the failing endpoint or service and a representative error.",
+  "brief": "HTTP server errors went up after a release. Find the failing endpoint or service, and a typical error.",
   "skills": [
     "kql",
     "filters",
@@ -168,7 +168,7 @@
     "answers": {
       "finding": "${param.incident.finding}",
       "scope": "${param.incident.status_family}",
-      "conclusion": "${param.incident.error_type} on ${param.incident.finding} is the post-release regression."
+      "conclusion": "${param.incident.error_type} errors on ${param.incident.finding} started with the new release."
     },
     "accept": {
       "scope": [
@@ -225,13 +225,13 @@
       },
       {
         "id": "scope",
-        "label": "Status family",
+        "label": "Status code",
         "kind": "string",
         "weight": 1
       },
       {
         "id": "conclusion",
-        "label": "Error conclusion",
+        "label": "Conclusion",
         "kind": "statement",
         "mentions": [
           "finding",
@@ -241,7 +241,7 @@
       },
       {
         "id": "evidence",
-        "label": "Representative document",
+        "label": "Example event",
         "kind": "text",
         "scored": false
       }

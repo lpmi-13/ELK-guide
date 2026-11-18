@@ -525,7 +525,8 @@ def import_saved_objects(manifest):
     status, result = kibana_json(
         f"/s/{manifest['space_id']}/api/data_views/data_view/{quote(data_view_id)}",
         "POST",
-        {"data_view": {"title": index_title, "timeFieldName": "@timestamp", "name": f"{manifest['scenario']['title']} data"}, "refresh_fields": True},
+        # A plain name, like the Discover tab's "Incident": titles are phrases that don't take a suffix.
+        {"data_view": {"title": index_title, "timeFieldName": "@timestamp", "name": "Incident data"}, "refresh_fields": True},
     )
     if status >= 400:
         raise RuntimeError(f"run data-view update failed ({status}): {result}")

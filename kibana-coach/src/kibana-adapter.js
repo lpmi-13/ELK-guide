@@ -516,7 +516,7 @@ class KibanaAdapter {
       if (number && unit && apply) break;
     }
     if (!number || !unit || !apply) throw new Error('Kibana time picker controls did not remain available. Try this step again.');
-    await this.pointAt(number, coach, timingScale, signal, `Click the number box under Start date and type ${range.amount}.`, {activate: true, hold: false, targetName: 'kibana.time_value'});
+    await this.pointAt(number, coach, timingScale, signal, `Type ${range.amount} under Start date.`, {activate: true, hold: false, targetName: 'kibana.time_value'});
     number = await this.waitFor('kibana.time_value', 3000, signal);
     await this.typeValue(number, range.amount, signal, coach, {clearFirst: false});
     const unitPattern = new RegExp(`^${range.unitName}s?(?: ago)?$`, 'i');
@@ -533,7 +533,7 @@ class KibanaAdapter {
     return {type: 'time_range_changed', details: command.value, state_after: {time_from: command.value.from, time_to: command.value.to}};
   }
 
-  async enterQuery(query, coach, timingScale, signal, existingInput = null, activity = 'Click the query bar, clear the old search, and type the new query.') {
+  async enterQuery(query, coach, timingScale, signal, existingInput = null, activity = 'Replace the search with the new query.') {
     const input = existingInput || await this.waitFor('kibana.query_bar', 20000, signal);
     await this.pointAt(input, coach, timingScale, signal, activity, {activate: true, hold: false});
     await this.typeValue(input, query, signal, coach);
@@ -587,7 +587,7 @@ class KibanaAdapter {
     const valueInput = await this.waitFor('kibana.filter_params', 8000, signal);
     if (/one of/.test(operatorLabel)) {
       const listed = values.length > 1 ? `${values.slice(0, -1).join(', ')} and ${values[values.length - 1]}` : values[0];
-      await this.pointAt(valueInput, coach, timingScale, signal, `Enter ${listed}, pressing Enter after each value.`, {activate: true, hold: false});
+      await this.pointAt(valueInput, coach, timingScale, signal, `Enter ${listed}.`, {activate: true, hold: false});
       for (const value of values) {
         const input = this.resolve('kibana.filter_params') || valueInput;
         await this.typeValue(input, value, signal, coach);
@@ -618,7 +618,7 @@ class KibanaAdapter {
   async openTrace(command, toggle, coach, timingScale, signal) {
     const visibleTraceElement = this.resolve('kibana.first_trace_value');
     const visibleTrace = visibleTraceElement?.textContent?.trim() || '';
-    await this.pointAt(toggle, coach, timingScale, signal, 'Expand the first slow result so we can inspect its fields.', {activate: true});
+    await this.pointAt(toggle, coach, timingScale, signal, 'Expand the first slow result to read its fields.', {activate: true});
     await this.settle(350, timingScale, signal);
     const traceElement = this.resolve('kibana.trace_field');
     const expandedTrace = traceElement?.matches?.("[data-test-subj='tableDocViewRow-trace.id-value']") ? traceElement.textContent.trim() : '';
@@ -636,7 +636,7 @@ class KibanaAdapter {
       timingScale,
       signal,
       queryInput,
-      'Pivot to the trace: replace the service filter with this trace ID so all services in the same request appear.',
+      'Search for this trace ID instead of the service, to see every service in the same request.',
     );
     await this.wait(Math.min(6000, 500 * timingScale), signal);
     return {type: 'trace_opened', details: {trace_id: traceId}, state_after: {trace_id: traceId, query: traceQuery}};
@@ -1005,19 +1005,14 @@ class KibanaAdapter {
       if (/unpin/i.test(pin.getAttribute('aria-label') || '')) continue;
       const shows = pin.closest('.kbnDocViewer__fieldsGrid__pinAction');
       shows?.style.setProperty('opacity', '1');
+      // The cursor and spotlight show how it's done, so the card keeps its caption rather than
+      // describing the pin.
       try {
-        if (shown === 0 && !this.pinTaught) {
-          // The first pin is shown in two beats: where the icon comes from, then the click.
-          await this.pointAt(row(field) || pin, coach, timingScale, signal, `To pin ${field}, point at its row: a pin icon appears at the row’s left edge.`, {showClick: false});
-          await this.pointAt(pin, coach, timingScale, signal, 'Click the pin. A pinned field moves to the top of the document’s table.', {activate: true});
-        } else {
-          await this.pointAt(pin, coach, timingScale, signal, `Pin ${field} the same way, with the pin icon at the left of its row.`, {activate: true});
-        }
+        await this.pointAt(pin, coach, timingScale, signal, '', {activate: true});
       } finally {
         shows?.style.removeProperty('opacity');
       }
       shown += 1;
-      this.pinTaught = true;
       await this.wait(250, signal);
     }
     if (scroller) scroller.scrollTop = 0;

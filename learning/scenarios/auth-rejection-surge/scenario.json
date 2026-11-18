@@ -2,12 +2,12 @@
   "schema_version": 2,
   "id": "auth-rejection-surge",
   "version": 3,
-  "title": "Authentication rejection surge",
+  "title": "A jump in rejected sign-ins",
   "type": "investigation",
   "classification": "core",
   "difficulty": 1,
   "estimated_minutes": 15,
-  "brief": "Sign-in failures have risen, but normal rejection types are mixed into the data. Isolate the abnormal reason and affected client.",
+  "brief": "More sign-ins are being rejected than usual, but everyday rejections are mixed in. Find the unusual reason and the client it affects.",
   "skills": ["boolean-kql", "include-exclude", "top-values"],
   "required_capabilities": ["discover", "spaces", "saved_objects"],
   "parameters": {
@@ -59,7 +59,7 @@
     "answers": {
       "finding": "${param.incident.reason}",
       "scope": "${param.incident.client}",
-      "conclusion": "${param.incident.reason} rejections are abnormally concentrated in the ${param.incident.client} client."
+      "conclusion": "The unusual ${param.incident.reason} rejections come mainly from the ${param.incident.client} client."
     },
     "assertions": [
       {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.message}"}}},

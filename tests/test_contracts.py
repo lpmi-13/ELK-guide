@@ -127,7 +127,7 @@ class ContractTests(unittest.TestCase):
         adapter = (ROOT / "kibana-coach/src/kibana-adapter.js").read_text(encoding="utf-8")
         # A short goal card, not a long countdown, before the action.
         self.assertIn("Math.min(8000, Math.max(5000, wordCount(text) * 300))", content)
-        self.assertIn("const pause = goalPause(command.narration);", content)
+        self.assertIn("const pause = command.goal_focus ? chartPause(command.narration) : goalPause(command.narration);", content)
         # The result beat rings the evidence and waits for Continue; only then is the step reported,
         # so neither the next step nor the debrief can cover a result the learner is still reading.
         self.assertIn("if (command.mode === 'demonstration' && action && !leaving) await showResult(command, controller.signal);", content)
@@ -144,7 +144,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('"goal_focus": substitute(explanation.get("goal_focus"), session)', learning_service)
         self.assertIn("coach.showCommand(command, command.goal_focus ? null : target);", content)
         self.assertIn("coach.showGoalFocus(await adapter.findEvidence({...command, evidence_focus: command.goal_focus}, controller.signal));", content)
-        self.assertLess(content.index("coach.showGoalFocus("), content.index("const pause = goalPause(command.narration);"))
+        self.assertLess(content.index("coach.showGoalFocus("), content.index("const pause = command.goal_focus ? chartPause(command.narration) : goalPause(command.narration);"))
         self.assertIn("if (phase !== 'learning') this.clearEvidenceHighlights();", coach)
 
     def test_challenge_mode_shows_no_route_and_no_live_feedback(self):
@@ -277,7 +277,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("To “pivot” means", trace_step["concept"])
         self.assertIn("trace.id", trace_step["narration"])
         self.assertIn('const traceQuery = `scenario.id:', adapter)
-        self.assertIn("replace the service filter with this trace ID", adapter)
+        self.assertIn("Search for this trace ID instead of the service", adapter)
         # The demonstration explains its motive before acting; guided Show me uses the same result card
         # when the learner starts its action immediately.
         for beat in ("beginActionPhase", "showResult", "Doing it now", "What this shows"):

@@ -8,7 +8,7 @@
     },
     "pager": {
       "label": "On-call engineer paged",
-      "detail": "${owner} on-call · please acknowledge",
+      "detail": "${owner} on-call · please respond",
       "icon": "page"
     },
     "support": {
@@ -22,13 +22,13 @@
       "icon": "channel"
     },
     "synthetics": {
-      "label": "Synthetic journey failed",
-      "detail": "Critical user journey · three consecutive regions",
+      "label": "Synthetic test failed",
+      "detail": "Key user journey · failed in three regions",
       "icon": "probe"
     },
     "release": {
-      "label": "Release health gate failed",
-      "detail": "Deployment monitor · production canary analysis",
+      "label": "Release health check failed",
+      "detail": "Deployment monitor · canary check in production",
       "icon": "deploy"
     }
   },
@@ -44,8 +44,8 @@
       "impact": "The problem may have been short. You can see normal traffic both before and after it, so the first job is to work out exactly when it happened.",
       "signals": [
         {"label": "Customer signal", "value": "Short-lived ${param.incident.journey} failures reported"},
-        {"label": "Telemetry", "value": "Normal and anomalous events share the current view"},
-        {"label": "Triage request", "value": "Confirm the affected time window"}
+        {"label": "Telemetry", "value": "Normal and failing events are mixed in the current view"},
+        {"label": "Triage request", "value": "Find when the problem started and stopped"}
       ]
     },
     "http-error-regression": {
@@ -54,13 +54,13 @@
       "environment": "Production · global",
       "observed_minutes_ago": [6, 9, 12],
       "channels": ["monitoring", "pager", "release"],
-      "headline": "Server-error rate breached the post-release guardrail",
-      "summary": "HTTP 5xx responses increased shortly after a production rollout. Aggregate service health is red, but the failing request path is not yet isolated.",
-      "impact": "A subset of customer API calls is failing. Release Engineering has paused further promotion while the on-call identifies the affected endpoint and a representative error.",
+      "headline": "More server errors since the latest release",
+      "summary": "HTTP 5xx errors went up soon after a new release reached production. The service's overall health is red, but we don't know yet which requests are failing.",
+      "impact": "Some customer API calls are failing. Releases are paused until the on-call engineer finds the failing endpoint and a typical error.",
       "signals": [
-        {"label": "Rule", "value": "5xx ratio above 5% for 3 evaluation windows"},
-        {"label": "Change context", "value": "Production rollout completed recently"},
-        {"label": "Triage request", "value": "Find the failing endpoint and error signature"}
+        {"label": "Rule", "value": "More than 5% of responses were 5xx errors in 3 checks in a row"},
+        {"label": "Change context", "value": "A production rollout finished recently"},
+        {"label": "Triage request", "value": "Find the failing endpoint and the error it returns"}
       ]
     },
     "auth-rejection-surge": {
@@ -69,13 +69,13 @@
       "environment": "Production · global",
       "observed_minutes_ago": [7, 11, 14],
       "channels": ["monitoring", "pager", "support"],
-      "headline": "Sign-in rejection rate is well above baseline",
-      "summary": "Authentication failures are elevated across the sign-in path. Expected rejections are mixed with the anomalous responses, obscuring the actionable reason.",
-      "impact": "Some customers cannot establish new sessions. Existing sessions remain healthy, so the incident is currently scoped to fresh authentication attempts.",
+      "headline": "Many more sign-ins are being rejected than usual",
+      "summary": "Sign-in failures are much higher than normal. Everyday rejections are mixed in with the unusual ones, which hides the real cause.",
+      "impact": "Some customers cannot sign in. People who are already signed in are fine, so only new sign-ins are affected.",
       "signals": [
-        {"label": "Anomaly", "value": "Rejections running at more than 3× baseline"},
-        {"label": "Noise", "value": "Normal policy denials are included in the total"},
-        {"label": "Triage request", "value": "Isolate the abnormal rejection reason"}
+        {"label": "Anomaly", "value": "Rejections are more than 3× the usual rate"},
+        {"label": "Noise", "value": "The total also includes normal rejections"},
+        {"label": "Triage request", "value": "Find the unusual rejection reason"}
       ]
     },
     "deployment-version-regression": {
@@ -85,13 +85,13 @@
       "observed_minutes_ago": [8, 9, 10],
       "timed_facts": [{"at": "rollout", "text": "The rollout of the new release began at {time} ({ago})."}],
       "channels": ["release", "monitoring", "pager"],
-      "headline": "One fleet cohort became unhealthy during rollout",
-      "summary": "Errors rose on only part of the service fleet after a rolling deployment. Aggregate health masks which cohort is behaving differently.",
-      "impact": "Requests are intermittently failing depending on the serving instance. The rollout is paused pending evidence that the new version is—or is not—the differentiator.",
+      "headline": "Some instances started failing during a rollout",
+      "summary": "Errors went up on only some of the service's instances during a rolling deployment. The overall health numbers hide which group of instances is different.",
+      "impact": "Some requests fail and others succeed, depending on which instance handles them. The rollout is paused until the evidence shows whether the new version is the cause.",
       "signals": [
-        {"label": "Fleet health", "value": "Mixed outcomes across otherwise identical instances"},
-        {"label": "Change context", "value": "Rolling deployment still within the incident window"},
-        {"label": "Triage request", "value": "Compare outcomes by service version"}
+        {"label": "Fleet health", "value": "Instances that should be the same give different results"},
+        {"label": "Change context", "value": "The rolling deployment happened during the incident"},
+        {"label": "Triage request", "value": "Compare results for each service version"}
       ]
     },
     "rare-error-signature": {
@@ -100,13 +100,13 @@
       "environment": "Production · eu-west",
       "observed_minutes_ago": [10, 14, 18],
       "channels": ["monitoring", "support", "incident"],
-      "headline": "Low-volume exception is driving failed requests",
-      "summary": "A busy service is mostly healthy, but one uncommon exception appears to correlate with customer-facing failures.",
-      "impact": "The overall error percentage remains small enough to hide in aggregate dashboards. Incident response needs the rare signature and one correlated request before escalating to the owning team.",
+      "headline": "A rare exception may be causing failed requests",
+      "summary": "A busy service is mostly healthy, but one rare exception seems to be linked to failed customer requests.",
+      "impact": "The error rate is still low, so the problem is easy to miss on dashboards. The team that owns the service needs two things: the exception's name and one failed request that shows it.",
       "signals": [
-        {"label": "Error budget", "value": "Fast burn detected despite high successful volume"},
-        {"label": "Cardinality", "value": "Many routine messages, very few decisive exceptions"},
-        {"label": "Triage request", "value": "Capture a signature and correlated request"}
+        {"label": "Error budget", "value": "The error budget is being used up fast, even though most requests succeed"},
+        {"label": "Cardinality", "value": "Many routine messages, and only a few important exceptions"},
+        {"label": "Triage request", "value": "Find the rare exception and one request where it happened"}
       ]
     },
     "schema-drift-data-quality": {
@@ -115,13 +115,13 @@
       "environment": "Production · analytics pipeline",
       "observed_minutes_ago": [12, 17, 21],
       "channels": ["monitoring", "support", "release"],
-      "headline": "Business-event dashboard count dropped unexpectedly",
-      "summary": "The affected dashboard counts requests only when http.route is populated. That count fell while ingress traffic, which counts all requests, stayed flat.",
-      "impact": "Operational reporting and downstream analytics may be incomplete. Teams need to know which producer stopped populating the expected field before trusting the dashboard again.",
+      "headline": "A dashboard's request count dropped suddenly",
+      "summary": "The dashboard only counts requests that have a value in the http.route field. That count fell, but the total number of incoming requests stayed the same.",
+      "impact": "Reports that use this data may be missing requests. Before teams trust the dashboard again, they need to know which telemetry producer stopped filling in http.route.",
       "signals": [
-        {"label": "Dashboard", "value": "Requests with http.route materially below baseline"},
-        {"label": "Ingress", "value": "All-request volume remains within normal range"},
-        {"label": "Triage request", "value": "Identify the producer and version missing http.route"}
+        {"label": "Dashboard", "value": "Far fewer requests with http.route than usual"},
+        {"label": "Ingress", "value": "The total number of requests is normal"},
+        {"label": "Triage request", "value": "Find the producer and version that stopped sending http.route"}
       ]
     },
     "log-pattern-noise-reduction": {
@@ -130,13 +130,13 @@
       "environment": "Production · shared services",
       "observed_minutes_ago": [8, 13, 17],
       "channels": ["monitoring", "pager", "incident"],
-      "headline": "Warning volume spiked alongside request failures",
-      "summary": "Thousands of repetitive warnings are flooding the service logs. Most are benign, and only one pattern appears connected to failed requests.",
-      "impact": "The on-call cannot use raw warning volume as a reliable incident signal. The actionable pattern must be separated from background noise before remediation begins.",
+      "headline": "Warning logs jumped while requests were failing",
+      "summary": "The service logs are full of thousands of repeated warnings. Most of them are not a problem, and only one pattern seems to be linked to failed requests.",
+      "impact": "The number of warnings alone does not show what is wrong. The pattern that matters must be separated from the background noise before anyone can fix the problem.",
       "signals": [
-        {"label": "Log volume", "value": "Warning throughput more than 10× normal"},
-        {"label": "Customer signal", "value": "Failed requests increased in the same interval"},
-        {"label": "Triage request", "value": "Find the pattern correlated with failure"}
+        {"label": "Log volume", "value": "More than 10× the usual number of warnings"},
+        {"label": "Customer signal", "value": "Failed requests went up at the same time"},
+        {"label": "Triage request", "value": "Find the log pattern linked to the failures"}
       ]
     },
     "esql-top-failing-routes": {
@@ -145,13 +145,13 @@
       "environment": "Production · public API",
       "observed_minutes_ago": [6, 9, 15],
       "channels": ["monitoring", "pager", "incident"],
-      "headline": "Public API error budget is burning across several routes",
-      "summary": "Failed requests are elevated, but absolute error counts alone may overstate high-traffic endpoints and understate a smaller route with a worse failure rate.",
-      "impact": "Multiple customer journeys may be affected. Incident command needs a ranked route summary using both failure count and failure rate before assigning responders.",
+      "headline": "The public API is failing on several routes",
+      "summary": "More requests are failing than usual. Counting errors alone can make busy routes look worst, and hide a smaller route that fails more often.",
+      "impact": "Several customer journeys may be affected. The incident lead needs the routes ranked by failure count and failure rate before deciding who works on what.",
       "signals": [
-        {"label": "SLO", "value": "API availability burn rate above paging threshold"},
-        {"label": "Scope", "value": "Several routes contributing to the alert"},
-        {"label": "Triage request", "value": "Rank routes by volume and failure rate"}
+        {"label": "SLO", "value": "The API is using up its error budget fast enough to page someone"},
+        {"label": "Scope", "value": "Several routes are adding to the alert"},
+        {"label": "Triage request", "value": "Rank the routes by failures and failure rate"}
       ]
     },
     "esql-before-after-deploy": {
@@ -160,13 +160,13 @@
       "environment": "Production · canary rollout",
       "observed_minutes_ago": [9, 13, 19],
       "channels": ["release", "monitoring", "pager"],
-      "headline": "Release health changed after production deployment",
-      "summary": "Latency and errors appear elevated after a recent release, but the deploy timeline and natural traffic variation make the visual trend inconclusive.",
-      "impact": "The rollout is paused at the current cohort. Release Engineering needs a quantified before/after comparison to decide whether to roll back or continue.",
+      "headline": "Service health changed after a release",
+      "summary": "Latency and errors seem higher since a recent release. Normal changes in traffic make the trend on the chart hard to judge.",
+      "impact": "The rollout is paused halfway. Release Engineering needs before-and-after numbers to decide whether to roll back or continue.",
       "signals": [
-        {"label": "Guardrail", "value": "Latency and error checks outside normal tolerance"},
-        {"label": "Decision", "value": "Rollback held pending quantitative evidence"},
-        {"label": "Triage request", "value": "Compare pre- and post-deploy periods"}
+        {"label": "Guardrail", "value": "Latency and error checks are outside their normal limits"},
+        {"label": "Decision", "value": "No rollback until the numbers are in"},
+        {"label": "Triage request", "value": "Compare the periods before and after the deployment"}
       ]
     },
     "esql-cross-service-summary": {
@@ -175,13 +175,13 @@
       "environment": "Production · checkout stack",
       "observed_minutes_ago": [7, 10, 14],
       "channels": ["incident", "pager", "monitoring"],
-      "headline": "Checkout incident spans multiple service boundaries",
-      "summary": "The active incident touches several services, and individual dashboards do not provide a comparable view of request volume, failures, and tail latency.",
-      "impact": "Response ownership is unclear. Incident command needs a compact cross-service health table to focus engineering attention on the strongest signal.",
+      "headline": "A checkout incident affects several services",
+      "summary": "The incident touches several services. Each has its own dashboard, so request volume, failures and tail latency are hard to compare.",
+      "impact": "It isn't clear which team should respond. The incident lead needs one table of each service's health to decide where engineers should look first.",
       "signals": [
-        {"label": "Topology", "value": "Multiple services present in affected requests"},
-        {"label": "Tail latency", "value": "High-percentile duration above normal operating range"},
-        {"label": "Triage request", "value": "Summarise volume, failures, and p95 by service"}
+        {"label": "Topology", "value": "Several services appear in the affected requests"},
+        {"label": "Tail latency", "value": "The slowest requests take much longer than normal"},
+        {"label": "Triage request", "value": "Show volume, failures and p95 for each service"}
       ]
     },
     "dashboard-incident-triage": {
@@ -190,13 +190,13 @@
       "environment": "Production · multi-region",
       "observed_minutes_ago": [5, 8, 11],
       "channels": ["pager", "monitoring", "incident"],
-      "headline": "Regional service health alarm needs rapid triage",
-      "summary": "The service overview shows a concentrated production anomaly, but the alert payload does not identify the affected region, service, or exact interval.",
-      "impact": "Customer requests are degraded in at least one operating region. The incident commander needs a fast scope assessment before paging additional teams.",
+      "headline": "A regional health alarm needs quick triage",
+      "summary": "The service overview shows one unusual problem in production. The alert doesn't say which region, service or time period is affected.",
+      "impact": "Customer requests are failing or slow in at least one region. The incident lead needs to know the scope quickly, before paging more teams.",
       "signals": [
-        {"label": "Overview", "value": "One concentrated anomaly in the current dashboard range"},
-        {"label": "Scope", "value": "Region and service not yet confirmed"},
-        {"label": "Triage request", "value": "Identify where and when impact occurred"}
+        {"label": "Overview", "value": "One unusual problem in the current dashboard time range"},
+        {"label": "Scope", "value": "Region and service not confirmed yet"},
+        {"label": "Triage request", "value": "Find where and when the impact happened"}
       ]
     },
     "dashboard-drilldown-to-evidence": {
@@ -205,13 +205,13 @@
       "environment": "Production · service overview",
       "observed_minutes_ago": [8, 12, 16],
       "channels": ["monitoring", "incident", "support"],
-      "headline": "Dashboard spike requires document-level confirmation",
-      "summary": "A sharp failure spike is visible in the service overview. Responders need to preserve its time and filter context while moving from the chart to raw evidence.",
-      "impact": "The aggregate signal is credible but not yet actionable. A source event is required before the issue can be assigned to an engineering owner.",
+      "headline": "A dashboard spike needs checking in the documents behind it",
+      "summary": "The service overview shows a sharp spike in failures. Keep its time range and filters while you move from the chart to the raw events.",
+      "impact": "The chart looks real, but nobody can act on it yet. One source document is needed before an engineering team can own the issue.",
       "signals": [
-        {"label": "Dashboard", "value": "Short, high-amplitude failure spike"},
-        {"label": "Evidence gap", "value": "No representative source document attached"},
-        {"label": "Triage request", "value": "Drill down without losing incident context"}
+        {"label": "Dashboard", "value": "A short, sharp spike in failures"},
+        {"label": "Evidence gap", "value": "No example source document attached yet"},
+        {"label": "Triage request", "value": "Drill down without losing the time range and filters"}
       ]
     },
     "dashboard-panel-inspection": {
@@ -220,13 +220,13 @@
       "environment": "Production · executive service view",
       "observed_minutes_ago": [11, 15, 20],
       "channels": ["support", "incident", "monitoring"],
-      "headline": "Conflicting dashboard panels are blocking triage",
-      "summary": "Two panels describing service health appear to disagree. Their calculation and filter scopes must be inspected before either metric is used for an incident decision.",
-      "impact": "Stakeholders are receiving contradictory status updates. The on-call must establish which panel answers the operational question and explain why.",
+      "headline": "Two dashboard panels disagree",
+      "summary": "Two panels about service health seem to disagree. Check how each one is calculated and filtered before using either for an incident decision.",
+      "impact": "People are getting status updates that don't agree. The on-call engineer must show which panel answers the question, and why.",
       "signals": [
-        {"label": "Dashboard", "value": "Adjacent panels report different health states"},
-        {"label": "Risk", "value": "Metric definitions may use different scopes"},
-        {"label": "Triage request", "value": "Inspect calculations and filter context"}
+        {"label": "Dashboard", "value": "Panels side by side show different health states"},
+        {"label": "Risk", "value": "The metrics may be based on different data"},
+        {"label": "Triage request", "value": "Inspect how each panel is calculated and filtered"}
       ]
     },
     "slow-dependency-trace": {
@@ -235,12 +235,12 @@
       "environment": "Production · checkout",
       "observed_minutes_ago": [6, 10, 13],
       "channels": ["synthetics", "pager", "support"],
-      "headline": "Checkout p95 latency breached the customer SLO",
-      "summary": "Checkout requests are completing slowly across the production path. The entry service is healthy enough to respond, suggesting time is being spent deeper in the dependency chain.",
-      "impact": "Customers are waiting several seconds at order confirmation and some are abandoning the flow. The on-call needs the downstream operation consuming the trace critical path.",
+      "headline": "Checkout p95 latency is over the customer SLO",
+      "summary": "Checkout requests are completing slowly in production. The first service still responds, so the time is probably spent deeper in its dependencies.",
+      "impact": "Customers wait several seconds to confirm an order, and some give up. The on-call engineer needs the downstream operation that takes up the trace's critical path.",
       "signals": [
         {"label": "SLO", "value": "Checkout p95 above 2.5 s for 3 windows"},
-        {"label": "Probe", "value": "Order confirmation step consistently delayed"},
+        {"label": "Probe", "value": "The order confirmation step is always slow"},
         {"label": "Triage request", "value": "Find the slow dependency and operation"}
       ]
     },
@@ -250,13 +250,13 @@
       "environment": "Production · request path",
       "observed_minutes_ago": [7, 9, 14],
       "channels": ["monitoring", "pager", "support"],
-      "headline": "Edge service is returning generic upstream failures",
-      "summary": "The public edge reports a generic error, but its own logs do not contain the originating exception. The failure must be followed through the distributed trace.",
-      "impact": "Customers see unsuccessful requests with no useful client-side explanation. Ownership cannot be assigned until the originating span and propagation path are established.",
+      "headline": "The edge service returns upstream errors without details",
+      "summary": "The public edge reports a general error, but its own logs don't contain the exception that caused it. Follow the failure through the distributed trace.",
+      "impact": "Customers see failed requests with no useful explanation. No team can own the issue until we know which span failed first and how the error spread.",
       "signals": [
-        {"label": "Edge response", "value": "Generic upstream failure returned to callers"},
-        {"label": "Trace state", "value": "Error status propagates across service boundaries"},
-        {"label": "Triage request", "value": "Locate the first exception in the trace"}
+        {"label": "Edge response", "value": "A general upstream error is returned to clients"},
+        {"label": "Trace state", "value": "The error status spreads across service boundaries"},
+        {"label": "Triage request", "value": "Find the first exception in the trace"}
       ]
     },
     "retry-amplification": {
@@ -265,13 +265,13 @@
       "environment": "Production · checkout dependencies",
       "observed_minutes_ago": [8, 12, 15],
       "channels": ["monitoring", "pager", "incident"],
-      "headline": "Dependency traffic rose without matching user demand",
-      "summary": "Downstream call volume and latency increased while incoming customer traffic remained comparatively steady, raising suspicion of retry amplification.",
-      "impact": "The dependency may be receiving several calls for one user request, increasing load and extending the critical path. Responders need trace-level proof before changing retry policy.",
+      "headline": "Dependency traffic rose without more users",
+      "summary": "Calls to a downstream dependency got more frequent and slower, while customer traffic stayed fairly steady. Retries may be multiplying the calls.",
+      "impact": "The dependency may get several calls for each user request. That adds load and makes the critical path longer. The team needs proof from traces before changing the retry policy.",
       "signals": [
-        {"label": "Traffic ratio", "value": "Dependency calls growing faster than entry requests"},
-        {"label": "Latency", "value": "Repeated downstream time is accumulating"},
-        {"label": "Triage request", "value": "Compare traces and prove repeated calls"}
+        {"label": "Traffic ratio", "value": "Dependency calls are growing faster than incoming requests"},
+        {"label": "Latency", "value": "Time spent on repeated downstream calls is adding up"},
+        {"label": "Triage request", "value": "Compare traces and prove the calls repeat"}
       ]
     },
     "trace-log-correlation": {
@@ -280,13 +280,13 @@
       "environment": "Production · payment path",
       "observed_minutes_ago": [6, 9, 13],
       "channels": ["support", "pager", "monitoring"],
-      "headline": "Payment trace failed without exception context",
-      "summary": "A customer payment trace ends in failure, but the span metadata does not include the application error needed to diagnose it.",
-      "impact": "The payment attempt could not complete and first-line support lacks a useful error reason. The exact application log must be recovered using the trace and time context.",
+      "headline": "A payment trace failed without the exception details",
+      "summary": "A customer payment trace ends in failure, but its span metadata doesn't include the application error needed to explain it.",
+      "impact": "The payment could not complete, and first-line support has no useful error reason. Use the trace and its time to find the exact application log.",
       "signals": [
-        {"label": "Trace", "value": "Failed payment request captured end to end"},
-        {"label": "Evidence gap", "value": "Exception details absent from span metadata"},
-        {"label": "Triage request", "value": "Find the correlated application log"}
+        {"label": "Trace", "value": "The failed payment request is captured from start to end"},
+        {"label": "Evidence gap", "value": "The span metadata has no exception details"},
+        {"label": "Triage request", "value": "Find the application log linked to the trace"}
       ]
     },
     "cpu-saturation": {
@@ -295,13 +295,13 @@
       "environment": "Production · Kubernetes",
       "observed_minutes_ago": [7, 10, 14],
       "channels": ["monitoring", "pager", "incident"],
-      "headline": "Service latency climbed during a traffic peak",
-      "summary": "One production service slowed as request volume increased. CPU saturation is suspected, but temporal alignment with the latency event has not been confirmed.",
-      "impact": "Customers are seeing slower responses under load. Capacity changes should wait until responders prove that compute pressure coincides with the incident.",
+      "headline": "Service latency went up during a traffic peak",
+      "summary": "One production service got slower as traffic rose. High CPU use is suspected, but nobody has checked that it happened at the same time as the slowdown.",
+      "impact": "Customers see slower responses under load. Capacity changes should wait until someone proves that CPU pressure matches the incident in time.",
       "signals": [
-        {"label": "APM", "value": "Service response time above normal range"},
-        {"label": "Load", "value": "Traffic peak overlaps the suspected interval"},
-        {"label": "Triage request", "value": "Correlate service latency with CPU usage"}
+        {"label": "APM", "value": "Service response time is above its normal range"},
+        {"label": "Load", "value": "The traffic peak overlaps the suspected time"},
+        {"label": "Triage request", "value": "Compare service latency with CPU use over time"}
       ]
     },
     "memory-leak-and-restarts": {
@@ -310,12 +310,12 @@
       "environment": "Production · Kubernetes",
       "observed_minutes_ago": [9, 13, 18],
       "channels": ["monitoring", "pager", "incident"],
-      "headline": "Workload instability and restarts are increasing",
-      "summary": "A long-running workload has become unstable over several hours. Recent restarts may be related to sustained memory growth rather than a single traffic spike.",
-      "impact": "Requests can fail or be retried while instances recycle. The platform team needs the resource trend and first restart evidence before changing limits or rolling back.",
+      "headline": "A workload is restarting more and more often",
+      "summary": "A long-running workload has become unstable over several hours. The restarts may come from memory growing steadily, not from one traffic spike.",
+      "impact": "Requests can fail or be retried while instances restart. The platform team needs the resource trend and the first restart before changing limits or rolling back.",
       "signals": [
-        {"label": "Workload", "value": "Restart count above normal operating baseline"},
-        {"label": "Time horizon", "value": "Degradation developed over several hours"},
+        {"label": "Workload", "value": "Restarts are above their normal baseline"},
+        {"label": "Time horizon", "value": "The problem built up over several hours"},
         {"label": "Triage request", "value": "Connect the memory trend to the first restart"}
       ]
     },
@@ -325,13 +325,13 @@
       "environment": "Production · service fleet",
       "observed_minutes_ago": [8, 12, 17],
       "channels": ["monitoring", "pager", "incident"],
-      "headline": "Fleet averages are hiding a hot instance",
-      "summary": "Aggregate service health looks acceptable, but one instance appears to be consuming disproportionate resources and responding more slowly than its peers.",
-      "impact": "Only requests routed to the outlier are degraded, making the issue intermittent. The instance must be identified and compared with healthy peers before replacement.",
+      "headline": "Fleet averages hide one overloaded instance",
+      "summary": "Overall service health looks fine, but one instance uses far more resources than the others. It also responds more slowly.",
+      "impact": "Only requests sent to that instance are slow, so the problem comes and goes. Find the instance, and compare it with healthy ones before replacing it.",
       "signals": [
-        {"label": "Fleet average", "value": "Within broad limits despite intermittent latency"},
-        {"label": "Distribution", "value": "Instance-level resource use appears imbalanced"},
-        {"label": "Triage request", "value": "Find the outlier and verify peer health"}
+        {"label": "Fleet average", "value": "Within normal limits, although latency comes and goes"},
+        {"label": "Distribution", "value": "Resource use seems uneven between instances"},
+        {"label": "Triage request", "value": "Find the outlier and check that the other instances are healthy"}
       ]
     },
     "capacity-throughput-saturation": {
@@ -340,12 +340,12 @@
       "environment": "Production · peak traffic",
       "observed_minutes_ago": [6, 10, 15],
       "channels": ["monitoring", "pager", "incident"],
-      "headline": "Latency rises sharply above an unknown traffic threshold",
-      "summary": "The service remains healthy at ordinary load but degrades during high-throughput periods. Responders need an evidence-based saturation point rather than a single peak reading.",
-      "impact": "Peak demand is pushing customer latency outside the SLO. Capacity Engineering needs the approximate throughput knee to guide safe scaling and admission-control changes.",
+      "headline": "Latency rises sharply above a certain throughput",
+      "summary": "The service is healthy at normal load but slows down when traffic is high. Use the evidence to find where it starts to saturate, not one peak reading.",
+      "impact": "Peak demand is pushing customer latency past the SLO. Capacity Engineering needs the rough throughput where latency starts to climb, to plan safe scaling and admission-control changes.",
       "signals": [
-        {"label": "SLO", "value": "Tail latency breached only during high load"},
-        {"label": "Pattern", "value": "Healthy and saturated periods both available"},
+        {"label": "SLO", "value": "Tail latency goes over the SLO only under high load"},
+        {"label": "Pattern", "value": "The data has both healthy and saturated periods"},
         {"label": "Triage request", "value": "Estimate the throughput saturation point"}
       ]
     },
@@ -355,13 +355,13 @@
       "environment": "Production · shipping",
       "observed_minutes_ago": [4, 7, 10],
       "channels": ["monitoring", "pager", "incident"],
-      "headline": "Fulfilment customer-failure alert is active",
-      "summary": "A new alert fired for an unfamiliar fulfilment service. Its reason suggests customer impact, but the alert state must be checked against current source events.",
-      "impact": "Shipment requests may be unavailable. The incident should be escalated only if the condition is still active and production evidence supports the alert reason.",
+      "headline": "A fulfilment customer-failure alert is firing",
+      "summary": "A new alert fired for a fulfilment service you don't know well. Its reason suggests customers are affected, but check it against the current source events.",
+      "impact": "Shipment requests may be failing. Treat it as urgent only if the condition still holds and production events back up the alert's reason.",
       "signals": [
         {"label": "Rule", "value": "Fulfilment customer failures"},
-        {"label": "Evaluation", "value": "Alert condition met in the latest window"},
-        {"label": "Triage request", "value": "Classify priority and cite source evidence"}
+        {"label": "Evaluation", "value": "The alert condition was met in the latest check"},
+        {"label": "Triage request", "value": "Set the priority and point to the source events"}
       ]
     },
     "slow-payments": {
@@ -370,13 +370,13 @@
       "environment": "Production · checkout",
       "observed_minutes_ago": [4, 6, 8],
       "channels": ["support", "pager", "synthetics", "monitoring"],
-      "headline": "Checkout completion time breached the latency SLO",
-      "summary": "Customers report that checkout has become slow in the last few minutes. The delay is visible at the edge, but the responsible service has not been identified.",
-      "impact": "Some shoppers are waiting more than three seconds to place an order, increasing abandonment risk. The on-call needs correlated request evidence before paging a downstream owner.",
+      "headline": "Checkout is slower than the latency SLO allows",
+      "summary": "Customers report that checkout has become slow in the last few minutes. The delay is visible at the edge, but the service causing it has not been found.",
+      "impact": "Some customers wait more than three seconds to place an order, and may give up. The on-call engineer needs evidence from the requests involved before paging a downstream owner.",
       "signals": [
         {"label": "SLO", "value": "Checkout p95 above 3 s for 3 windows"},
         {"label": "Route", "value": "POST /checkout · production"},
-        {"label": "Triage request", "value": "Identify the bottleneck with trace evidence"}
+        {"label": "Triage request", "value": "Find the bottleneck with trace evidence"}
       ]
     }
   }

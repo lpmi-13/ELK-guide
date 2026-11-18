@@ -85,7 +85,7 @@
         <h2>Choose a Kibana scenario</h2>
         <button id="show-instructions" class="secondary-button" type="button">How it works</button>
       </div>
-      <p>Choose a production question, then investigate it in Kibana using demonstration, guided practice, or challenge mode. All learner workflows are read-only.</p>
+      <p>Pick a production problem and investigate it in Kibana. Watch a demonstration, get guided practice, or try a challenge. You only read data here, so nothing you do can change it.</p>
       <form id="start-form">
         <div id="scenario-catalog" class="scenario-catalog" role="listbox" aria-label="Available scenarios" aria-live="polite"><p class="catalog-msg">Loading scenarios…</p></div>
         <label id="mode-label" for="mode">Assistance mode</label>
@@ -97,11 +97,11 @@
           <input id="scenario-key" type="text" value="quiet-river-signal" minlength="10" maxlength="40" title="Use 10 to 40 characters." autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="scenario-key-help" required>
           <button id="new-key" type="button">New key</button>
         </div>
-        <p class="field-help" id="scenario-key-help">Use any 10–40 characters. Reuse the same key to replay this incident variation.</p>
+        <p class="field-help" id="scenario-key-help">Use any 10–40 characters. Use the same key again to get the same incident.</p>
         <button id="start" type="submit" disabled>Start selected scenario</button>
         <p id="launch-status" role="status" aria-live="polite" hidden></p>
       </form>
-      <p class="muted">Capability-gated extensions are disabled with a reason when the local Kibana installation cannot support them.</p>
+      <p class="muted">Some scenarios need Kibana features that this installation may not have. Those scenarios are turned off, and the reason is shown.</p>
     </section>
   </main>
   <dialog id="instructions" aria-labelledby="instructions-title" aria-describedby="instructions-list">
@@ -111,10 +111,10 @@
         <button id="close-instructions" class="dialog-close" type="button" aria-label="Close how it works dialog">&times;</button>
       </div>
       <ol id="instructions-list">
-        <li>Start a run and wait for the evidence checkpoint.</li>
-        <li>The coach is built into this local Kibana endpoint; there is nothing to install in your browser.</li>
-        <li>A new tab opens and shows preparation progress; it turns into your Kibana investigation automatically when the evidence is ready.</li>
-        <li>The chosen demonstration, guided, or challenge experience begins immediately.</li>
+        <li>Choose a scenario and start it.</li>
+        <li>The coach is built into this Kibana, so there is nothing to install in your browser.</li>
+        <li>A new tab opens while the data is prepared. When the data is ready, the tab opens Kibana for you.</li>
+        <li>Your demonstration, guided practice or challenge then starts straight away.</li>
       </ol>
       <div class="dialog-actions"><button id="dismiss-instructions" type="button">Got it</button></div>
     </div>
@@ -190,7 +190,7 @@
     async function loadCatalog() {
       const response = await fetch(`${learningUrl}/api/catalog`, {cache: 'no-store'});
       const catalog = await response.json();
-      if (!response.ok) throw new Error(catalog.error || 'Scenario catalog unavailable');
+      if (!response.ok) throw new Error(catalog.error || 'Could not load the scenarios');
       catalogEntries = catalog.scenarios;
       // Keep a still-valid selection (e.g. one restored from cache on reload)
       // instead of snapping back to the first card and flickering the highlight.
@@ -351,7 +351,7 @@
         coachRuntime.textContent = `built-in Kibana coach ${runtime.version} ready`;
         coachRuntime.className = 'connection-status online';
       } catch (error) {
-        coachRuntime.textContent = 'built-in Kibana coach unavailable';
+        coachRuntime.textContent = 'built-in Kibana coach not available';
         coachRuntime.className = 'connection-status error';
         coachRuntime.title = error.message;
       } finally {
@@ -459,12 +459,12 @@
         else revealManualOpen('Investigation ready.');
       } else if (coachRuntimeResolved) {
         launched = true;
-        const coachMsg = 'The built-in Kibana coach is unavailable. Check the Kibana gateway service, then open Kibana.';
+        const coachMsg = 'The built-in Kibana coach is not available. Check the Kibana gateway service, then open Kibana.';
         if (prepTabDoc()) {
           signalTab({__halt: true});
           tabMessage('Evidence is ready', coachMsg, investigationUrl);
         } else {
-          revealManualOpen('Evidence is ready, but the built-in Kibana coach is unavailable. Check the Kibana gateway service, then open manually.');
+          revealManualOpen('The data is ready, but the built-in Kibana coach is not available. Check the Kibana gateway service, then open Kibana yourself.');
         }
       }
     }
@@ -493,7 +493,7 @@
           if (run.error) console.warn(`Run ${runId} ${run.state}: ${run.error}`);
           const message = run.state === 'ABORTED'
             ? 'This run was stopped before it was ready. Start it again from the launcher.'
-            : 'The evidence for this scenario did not become ready. Start it again, or choose another scenario.';
+            : 'The data for this scenario could not be prepared. Start it again, or choose another scenario.';
           signalTab({__halt: true});
           if (!tabMessage('Preparation did not complete', message)) setLaunchStatus(message);
           break;

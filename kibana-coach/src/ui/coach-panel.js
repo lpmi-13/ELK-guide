@@ -300,7 +300,7 @@ class IncidentCoachPanel {
   // gone, a window that misses the incident). Explain what went wrong. With `choices` (a diagnosed
   // query: Fix my query / Reset search) the learner picks; without, the coach is about to put the
   // search back and Advance ("Restore now") skips the reading countdown.
-  showRecovery({eyebrow = 'No results — back on track', headline, detail, choices}) {
+  showRecovery({eyebrow = 'No results', headline, detail, choices}) {
     clearTimeout(this.celebrateTimer);
     this.celebrating = false;
     this.advanceRequested = false;
@@ -310,7 +310,7 @@ class IncidentCoachPanel {
     this.host.hidden = false;
     this.panel.hidden = false;
     this.phase = 'recovery';
-    // A status left from an earlier recovery ("Search restored — carry on") would contradict this card.
+    // A status left from an earlier recovery ("The search is back. Continue…") would contradict this card.
     const status = this.root.querySelector('#status');
     if (!status.classList.contains('error')) this.toast('');
     for (const id of ['#hint', '#demonstrate', '#incident-info', '#pause', '#review-feedback']) this.root.querySelector(id).hidden = true;
@@ -327,9 +327,9 @@ class IncidentCoachPanel {
     requestAnimationFrame(() => this.placeAwayFrom(this.activeTarget?.isConnected ? this.activeTarget : null));
   }
 
-  showRecoveryWorking(headline = 'Clearing the dead end and re-applying what the investigation has established so far…') {
+  showRecoveryWorking(headline = 'Removing the search that found nothing, and putting back what you had found so far…') {
     this.root.querySelector('#advance').hidden = true;
-    this.renderPhase({eyebrow: 'Restoring the search', headline});
+    this.renderPhase({eyebrow: 'Putting the search back', headline});
     this.startWorking();
   }
 
@@ -400,9 +400,9 @@ class IncidentCoachPanel {
   completionDetail() {
     const {mode, until, exploring} = this.completion;
     const recap = mode === 'demonstration' ? 'summary' : 'debrief';
-    if (!this.onReturnToMenu) return `Review feedback reopens the ${recap}.`;
-    if (exploring) return `${until ? `It stays open until ${until}. ` : ''}Review feedback reopens the ${recap}. When you’re done, close the exploration to choose another scenario or mode.`;
-    return `Keep exploring the data here${until ? ` until ${until}` : ''}; Review feedback reopens the ${recap}. When you’re done, close the investigation to choose another scenario or mode.`;
+    if (!this.onReturnToMenu) return `Review feedback opens the ${recap} again.`;
+    if (exploring) return `${until ? `It stays open until ${until}. ` : ''}Review feedback opens the ${recap} again. When you’re done, close it to choose another scenario or mode.`;
+    return `You can keep exploring the data here${until ? ` until ${until}` : ''}. Review feedback opens the ${recap} again. When you’re done, close the investigation to choose another scenario or mode.`;
   }
 
   returnChoice(label = IncidentCoachPanel.returnLabel) {

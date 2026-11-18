@@ -527,7 +527,7 @@ def window_feedback(session, reason):
     if end is not None and end < moment:
         feedback["headline"] = f"Your window ends at {clock_text(end, session)}, before {name}{dated}."
         feedback["detail"] = ("End it at now, or later." if code == "window_misses_incident"
-                              else f"{put_back} Or change it yourself — I'll step aside.")
+                              else f"{put_back} Or change it yourself, and I'll stop.")
         feedback["note"] = f"Your window ended at {clock_text(end, session)}, before {name} at {clock}."
         return feedback
     started = clock_text(start, session) if start is not None else None
@@ -537,8 +537,8 @@ def window_feedback(session, reason):
         # Kibana re-reads "now" when the search runs, so the screen still shows the last search's window.
         feedback["detail"] = (f"A window counted back from now moves with the clock, so your next search leaves {name} out. "
                               + (f"I'll set a fixed start of {fixed} so it stays put." if fixed else "I'll put the window back.")
-                              + " Or change it yourself — I'll step aside.")
-        feedback["note"] = (f"{window} moved with the clock and slid past {name} at {clock} while you investigated."
+                              + " Or change it yourself, and I'll stop.")
+        feedback["note"] = (f"{window} moved with the clock while you investigated, and moved past {name} at {clock}."
                             + (f" A fixed start, such as {fixed}, would have kept it in view." if fixed else ""))
         return feedback
     feedback["headline"] = f"{window} starts at {started}, after {name}{dated}."
@@ -564,7 +564,7 @@ def window_feedback(session, reason):
         else:
             feedback["note"] = f"Your window started at {started}, after {name} at {clock}. A start before {clock} would have reached it."
         return feedback
-    feedback["detail"] = f"{put_back} Or widen it yourself — I'll step aside."
+    feedback["detail"] = f"{put_back} Or make it wider yourself, and I'll stop."
     feedback["note"] = f"You changed the window to start at {started}, after {name} at {clock}, so the evidence was out of view."
     return feedback
 
@@ -634,7 +634,7 @@ def build_incident_briefing(session):
         "channels": ["monitoring", "pager", "support"],
         "headline": scenario["title"],
         "summary": scenario["brief"],
-        "impact": "Production behavior is outside its expected range. Establish the scope and collect decisive evidence before choosing a remediation.",
+        "impact": "Something in production is not working as expected. Find out what is affected and collect clear evidence before choosing a fix.",
         "signals": [{"label": "Triage request", "value": scenario["brief"]}],
     }
     profile = {**fallback, **raw_profile}

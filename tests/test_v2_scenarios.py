@@ -119,7 +119,7 @@ class ScenarioV2Tests(unittest.TestCase):
         isolate = next(goal for goal in playbook["goals"] if goal["id"] == "isolate")
         inspect = next(goal for goal in playbook["goals"] if goal["id"] == "inspect")
         self.assertIn("http.route", scenario["brief"])
-        self.assertIn("only when http.route is populated", briefing["summary"])
+        self.assertIn("only counts requests that have a value in the http.route field", briefing["summary"])
         self.assertEqual(isolate["reference_action"]["arguments"], "schema.route_present: false")
         self.assertIn("only counts requests with http.route", isolate["demonstration"]["narration"])
         self.assertIn("their producer and version", isolate["demonstration"]["narration"])

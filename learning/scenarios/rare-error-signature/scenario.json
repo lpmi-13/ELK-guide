@@ -2,12 +2,12 @@
   "schema_version": 2,
   "id": "rare-error-signature",
   "version": 3,
-  "title": "Rare error signature",
+  "title": "A rare error in a busy service",
   "type": "investigation",
   "classification": "core",
   "difficulty": 2,
   "estimated_minutes": 18,
-  "brief": "A high-volume service contains one rare exception associated with failed requests. Isolate it and a representative correlated request.",
+  "brief": "A busy service logs one rare exception that seems linked to failed requests. Find the exception and one request where it happened.",
   "skills": [
     "field-statistics",
     "cardinality",
@@ -141,7 +141,7 @@
     "answers": {
       "finding": "${param.incident.error_type}",
       "scope": "${param.incident.service}",
-      "conclusion": "The rare ${param.incident.error_type} exception correlates with failed ${param.incident.service} requests."
+      "conclusion": "The rare ${param.incident.error_type} exception is linked to failed ${param.incident.service} requests."
     },
     "assertions": [
       {
@@ -193,7 +193,7 @@
       },
       {
         "id": "conclusion",
-        "label": "Correlation conclusion",
+        "label": "Conclusion",
         "kind": "statement",
         "mentions": [
           "finding",
@@ -203,7 +203,7 @@
       },
       {
         "id": "evidence",
-        "label": "Representative request",
+        "label": "Example request",
         "kind": "text",
         "scored": false
       }

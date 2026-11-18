@@ -57,7 +57,7 @@ globalThis.KibanaApplicationAdapters.push({
 
   async perform(command, host, coach, {timingScale = 1, signal} = {}) {
     const value = command.value || {};
-    const narration = command.narration || 'Interact with the supplied dashboard in view mode.';
+    const narration = command.narration || 'Use the dashboard in view mode.';
     if (command.type === 'interact_with_panel_value') {
       await this.filterForValue(value, host, coach, timingScale, signal, narration);
       return {type: 'panel_value_selected', details: {value: String(value.value), panel: value.panel}, state_after: {app: 'dashboard'}};

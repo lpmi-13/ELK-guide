@@ -507,14 +507,14 @@ def dead_end(session, action, earned_state=None):
     The last three judge the learner's own changes only; the coach's performed actions are trusted.
     """
     if returned_no_results(action):
-        return {"reason_code": "empty_result", "reason": "That search returned no results, so it cannot establish a goal."}
+        return {"reason_code": "empty_result", "reason": "That search returned no results, so it can't complete a step."}
     if action.get("actor") == "tutorial":
         return None
     lost = lost_earned_filters(action, earned_state)
     if lost:
         names = ", ".join(f"{item['field']}: {item['value']}" for item in lost)
         return {"reason_code": "lost_earned_state", "lost": lost,
-                "reason": f"The search no longer holds {names}, which an earlier step established."}
+                "reason": f"The search no longer holds {names}, which an earlier step found."}
     if action.get("type") == "time_range_changed" and window_reaches_incident(_details(action)) is False:
         # On the scope step the learner chooses again; after it, the window that step earned comes back.
         if scope_complete(session):
@@ -609,10 +609,10 @@ def evaluate_action(session, action, evidence=None, earned_state=None):
         drift = drift_note(session, action)
         if drift:
             return {"outcome": "drift", "goals_progressed": [], "meaningful": False, "step_id": drift[0], "note": drift[1],
-                    "reason": "The observation was recorded; it moves away from what this step needs."}
+                    "reason": "The action was recorded, but it moves away from what this step needs."}
     completed.update(progressed)
     meaningful = bool(progressed)
-    reason = "Completed: " + ", ".join(matching_titles) if meaningful else "The observation was recorded but did not yet establish an unfinished goal."
+    reason = "Completed: " + ", ".join(matching_titles) if meaningful else "The action was recorded, but it doesn't complete a step yet."
     return {"outcome": "accepted" if meaningful else "observed", "goals_progressed": progressed, "meaningful": meaningful, "reason": reason}
 
 
@@ -1008,12 +1008,12 @@ def score_session(session, trace_is_valid=False, evidence=None):
     scenario_type = scenario.get("type", "investigation")
     answer_name = {"analysis": "comparison", "triage": "triage decision"}.get(scenario_type, "diagnosis")
     if not correct:
-        summary = f"The submitted {answer_name} does not yet match every decisive fact in the scenario evidence."
+        summary = f"The submitted {answer_name} does not yet match every key fact in the evidence."
     elif reference_credit:
-        summary = f"Your {answer_name} matches the scenario truth and is supported by the recorded Kibana evidence."
+        summary = f"Your {answer_name} is correct, and the evidence you found in Kibana supports it."
     else:
         # Right facts, but the recorded investigation never reached the evidence behind them.
-        summary = f"Your {answer_name} matches the scenario truth, but the investigation recorded here doesn't reach the evidence behind it."
+        summary = f"Your {answer_name} is correct, but your investigation didn't reach the evidence behind it."
     route = [item["action"].get("type") for item in semantic if item.get("evaluation", {}).get("meaningful")]
     detours = [item["action"].get("type") for item in semantic if not item.get("evaluation", {}).get("meaningful")]
     feedback = {
@@ -1049,7 +1049,7 @@ DEAD_END_LABELS = {
     "lost_earned_state": "removed an earned filter",
     "window_excludes_incident": "window missed the incident",
     "window_misses_incident": "window missed the incident",
-    "window_slid_past_incident": "window slid past the incident",
+    "window_slid_past_incident": "window moved past the incident",
 }
 
 

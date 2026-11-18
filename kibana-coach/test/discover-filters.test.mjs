@@ -43,7 +43,7 @@ function topValuesPopover(field, values) {
   };
 }
 
-test('filter_top_value clicks the − beside the value in its open Top values and reports the excluding filter', async () => {
+test('filter_top_value clicks the − next to the value in its open Top values and reports the excluding filter', async () => {
   const field = 'authentication.rejection_reason';
   const popover = topValuesPopover(field, ['token_reuse', 'bad_password']);
   const discover = loadDiscover({querySelectorAll: () => [popover], querySelector: () => null});
@@ -51,7 +51,7 @@ test('filter_top_value clicks the − beside the value in its open Top values an
   const result = await discover.perform({type: 'filter_top_value', value: {field, value: 'token_reuse', negate: true}}, host, {}, {});
   assert.equal(host.pointed.length, 1, 'the popover was already open, so the only move is the −');
   assert.equal(host.pointed[0].target, popover.buckets[0].minus);
-  assert.equal(host.pointed[0].activity, 'Click the − beside token_reuse to filter it out.');
+  assert.equal(host.pointed[0].activity, 'Click the − next to token_reuse to filter it out.');
   assert.equal(host.pointed[0].options.activate, true);
   assert.deepEqual(result, {type: 'filter_added', details: {field, value: 'token_reuse', negate: true}, state_after: {}});
 });

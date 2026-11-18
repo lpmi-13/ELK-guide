@@ -2,12 +2,12 @@
   "schema_version": 2,
   "id": "deployment-version-regression",
   "version": 4,
-  "title": "Unhealthy instances after a rollout",
+  "title": "Failing instances after a rollout",
   "type": "investigation",
   "classification": "core",
   "difficulty": 2,
   "estimated_minutes": 18,
-  "brief": "Only part of the fleet appears unhealthy after a rolling deployment. Determine whether version is the differentiator and identify its first appearance.",
+  "brief": "After a rolling deployment, only some instances are failing. Find out whether the service version explains the difference, and when the first failure happened.",
   "skills": [
     "multi-value-filtering",
     "field-comparison",
@@ -240,7 +240,7 @@
     "answers": {
       "finding": "${param.incident.bad_version}",
       "scope": "${param.incident.service}",
-      "conclusion": "${param.incident.service} version ${param.incident.bad_version} returned HTTP ${param.incident.status} while ${param.incident.good_version} returned 200, identifying the new version as the regression.",
+      "conclusion": "In ${param.incident.service}, version ${param.incident.bad_version} returned HTTP ${param.incident.status} while version ${param.incident.good_version} returned 200. The new version is causing the failures.",
       "first_seen": "${incident.first_clock}"
     },
     "accept": {
@@ -345,7 +345,7 @@
       },
       {
         "id": "conclusion",
-        "label": "Comparison conclusion",
+        "label": "Conclusion",
         "kind": "statement",
         "mentions": [
           "finding",
@@ -355,7 +355,7 @@
       },
       {
         "id": "evidence",
-        "label": "Version and HTTP status evidence",
+        "label": "Evidence",
         "kind": "text",
         "scored": false
       }

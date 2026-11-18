@@ -554,7 +554,7 @@ test('a guided relative window is checked when it is due to slide; a confirmed s
     restore_time: {from: '2026-11-08T04:00:00.000Z', to: 'now'}}});
   await settle();
   const card = demo.calls.recoveries.at(-1);
-  assert.equal(card.eyebrow, 'Window moved on — back on track');
+  assert.equal(card.eyebrow, 'The window moved past the incident');
   assert.equal(card.headline, 'Your window, the last 15 minutes, now starts at 04:04, after the rollout at 04:03.');
   demo.clock.advance(16_000);
   await settle();

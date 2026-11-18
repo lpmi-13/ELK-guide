@@ -53,9 +53,9 @@ async function expectRecovery(tab, {name, eyebrow, mentions, act, resolve}) {
   await record.screenshot(tab.page, `recovery-${name}`);
   if (card.stage?.includes('success')) record.fail('recovery_claimed_success', `${name}: the coach announced new evidence for a dead end`);
   if (mentions && !mentions.test(`${card.headline} ${card.detail}`)) record.fail('recovery_text_inaccurate', `${name}: the card does not say what happened: "${card.headline}"`);
-  // Nothing else on the panel may contradict the card (a "restored, carry on" left from an earlier recovery).
+  // Nothing else on the panel may contradict the card (an "is back. Continue" left from an earlier recovery).
   const settledCard = await tab.poll();
-  if (/restored|carry on/i.test(settledCard.status?.text || '')) record.fail('stale_status', `${name}: the status line still says "${settledCard.status.text}" under a new dead end`);
+  if (/is back|continue with this step/i.test(settledCard.status?.text || '')) record.fail('stale_status', `${name}: the status line still says "${settledCard.status.text}" under a new dead end`);
   const progressed = tab.messages.slice(before).filter(message => message.message_type === 'action_result').flatMap(message => message.evaluation?.goals_progressed || []);
   if (progressed.includes(step.message.step_id)) record.fail('recovery_claimed_success', `${name}: the dead end completed ${step.message.step_id}`);
   if (tab.current !== step) record.fail('recovery_moved_on', `${name}: the step changed during a dead end`);

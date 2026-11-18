@@ -160,6 +160,12 @@ function startIncidentCoach() {
     return Math.min(8000, Math.max(5000, wordCount(text) * 300));
   }
 
+  // An opening that points at a chart (goal_focus) asks the learner to read the card and then look at
+  // the chart it describes, so it gets time for both.
+  function chartPause(text) {
+    return Math.min(15000, readingPause(text) + 3000);
+  }
+
   // The reading pause currently on screen. "Advance" completes it early — the same effect as its
   // countdown bar filling — after which the demonstration carries on at its normal pace. Only one
   // reading beat runs at a time, so a single resolver is enough.
@@ -252,7 +258,7 @@ function startIncidentCoach() {
         if (!command.goal_focus) coach.revealTarget?.(target);
         if (command.goal_focus) coach.showGoalFocus(await adapter.findEvidence({...command, evidence_focus: command.goal_focus}, controller.signal));
         // A chart-reading goal needs time to explain the visible pattern before the controls take over.
-        const pause = command.goal_focus ? readingPause(command.narration) : goalPause(command.narration);
+        const pause = command.goal_focus ? chartPause(command.narration) : goalPause(command.narration);
         coach.startCountdown(pause);
         await readingBeatWait(pause, controller.signal);
         // Hand the card over to the live step's action narration.
@@ -397,7 +403,7 @@ function startIncidentCoach() {
     const cause = causes.length ? listText(causes) : 'The current search';
     return {
       headline: `${cause} left no matching results, so there’s nothing here to investigate.`,
-      detail: 'I’ll clear it and put the search back to where this step starts. Or fix it yourself — I’ll step aside as soon as results come back.',
+      detail: 'I’ll clear it and put the search back to how this step started. Or fix it yourself, and I’ll stop as soon as results come back.',
     };
   }
 
@@ -422,9 +428,9 @@ function startIncidentCoach() {
       const lost = reason.lost || [];
       const names = lost.map(filter => `${filter.negate ? 'NOT ' : ''}${filter.field}: ${filter.value}`);
       return {
-        eyebrow: 'Earned filter removed — back on track',
-        headline: `Without ${listText(names) || 'that filter'}, the view no longer holds what an earlier step established, so this step can’t be answered from here.`,
-        detail: 'I’ll put it back and keep the rest of your search. Or add it again yourself — I’ll step aside.',
+        eyebrow: 'A filter you need was removed',
+        headline: `Without ${listText(names) || 'that filter'}, the view no longer shows what an earlier step found. This step can’t be answered from here.`,
+        detail: 'I’ll put it back and keep the rest of your search. Or add it again yourself, and I’ll stop.',
         stillBroken: () => lost.some(filter => !holdsFilter(filter)),
         restore: async () => adapter.restoreDiscoverState(state, {merge: true}),
       };
@@ -438,13 +444,13 @@ function startIncidentCoach() {
       const known = !Number.isNaN(moment.getTime()) && !Number.isNaN(start.getTime());
       const time = reason.restore_time || state?.time;
       return {
-        eyebrow: code === 'window_slid_past_incident' ? 'Window moved on — back on track' : 'Incident outside the window — back on track',
+        eyebrow: code === 'window_slid_past_incident' ? 'The window moved past the incident' : 'The incident is outside the window',
         headline: reason.headline || (known
           ? `The window now starts at ${clockText(start)}, after the incident at ${clockText(moment)}, so part of it is outside the view.`
           : `The window now starts ${minutesText(reason.from_minutes)} ago, after the incident ${minutesText(reason.incident_offset_minutes)} ago, so part of it is outside the view.`),
-        detail: reason.detail || 'I’ll put the window back. Or widen it yourself — I’ll step aside.',
+        detail: reason.detail || 'I’ll put the window back. Or make it wider yourself, and I’ll stop.',
         working: 'Typing a fixed start into the date box, so the window stays put…',
-        restoredToast: 'Window restored — carry on with this step.',
+        restoredToast: 'The window is back. Continue with this step.',
         stillBroken: () => {
           const range = observer.readTimeRange();
           const minutes = observer.timeRangeMinutes(range.from, range.to);
@@ -461,15 +467,15 @@ function startIncidentCoach() {
     }
     const problem = {
       ...describeEmptySearch(state),
-      eyebrow: 'No results — back on track',
+      eyebrow: 'No results',
       diagnosis: null,
       stillBroken: () => KibanaActionObserver.noResultsShown(),
       restore: async () => {
-        if (!adapter.restoreDiscoverState(state)) throw new Error('The search could not be restored automatically. Clear the query and filters to continue.');
+        if (!adapter.restoreDiscoverState(state)) throw new Error('The search could not be put back automatically. Clear the query and filters to continue.');
         // Query and filters first; reset the window too only if that alone doesn't bring results back.
         if (await searchIsEmpty()) {
           adapter.restoreDiscoverState(state, {includeTime: true});
-          if (await searchIsEmpty()) throw new Error('The search is still empty after restoring it. Try widening the time range.');
+          if (await searchIsEmpty()) throw new Error('The search is still empty after putting it back. Try a wider time range.');
         }
         return true;
       },
@@ -571,7 +577,7 @@ function startIncidentCoach() {
       if (recoveryController === controller) recoveryController = null;
       if (currentCommand && client) {
         coach.showCommand(currentCommand, adapter.resolve(currentCommand.target));
-        if (restored) coach.toast(problem?.restoredToast || 'Search restored — carry on with this step.');
+        if (restored) coach.toast(problem?.restoredToast || 'The search is back. Continue with this step.');
       }
     }
   }
@@ -719,7 +725,7 @@ function startIncidentCoach() {
   }
 
   const SESSION_ENDED_DETAIL = {
-    aborted: 'Start a new run from the launcher. The same scenario key replays the same incident.',
+    aborted: 'Start a new run from the launcher. The same scenario key gives you the same incident.',
     failed: 'Start it again from the launcher, or choose another scenario.',
     timeout: 'Start it again from the launcher, or choose another scenario.',
     missing: 'The learning service no longer has this session (it may have restarted). Start again from the launcher.',

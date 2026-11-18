@@ -185,7 +185,7 @@ test('a picker redrawn after its first click is reopened and set through every v
   assert.equal(result.state_after.time_from, 'now-10m');
   assert.deepEqual(calls, [
     'Open the time picker.', 'Open the time picker.', 'Choose Custom range.',
-    'Click the number box under Start date and type 10.', 'Type 10',
+    'Type 10 under Start date.', 'Type 10',
     'Choose “minutes ago” as the unit.', 'hold', 'Apply the Last 10 minutes range.',
   ]);
 });

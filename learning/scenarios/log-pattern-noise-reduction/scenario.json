@@ -2,12 +2,12 @@
   "schema_version": 2,
   "id": "log-pattern-noise-reduction",
   "version": 3,
-  "title": "Reduce log-pattern noise",
+  "title": "Find the log pattern that matters",
   "type": "investigation",
   "classification": "core",
   "difficulty": 2,
   "estimated_minutes": 15,
-  "brief": "A service emits thousands of repetitive warnings. Find the message pattern that actually correlates with failures.",
+  "brief": "A service logs thousands of repeated warnings. Find the one message pattern that is linked to the failed requests.",
   "skills": ["message-filtering", "include-exclude", "patterns"],
   "required_capabilities": ["discover", "spaces", "saved_objects"],
   "parameters": {
@@ -80,7 +80,7 @@
     "answers": {
       "finding": "${param.incident.error_message}",
       "scope": "${param.incident.service}",
-      "conclusion": "The '${param.incident.error_message}' pattern correlates with failures; the repetitive ${param.incident.service} warnings are background noise."
+      "conclusion": "The '${param.incident.error_message}' pattern is linked to the failures. The many repeated ${param.incident.service} warnings are just background noise."
     },
     "assertions": [
       {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.error_message}"}}},
@@ -90,9 +90,9 @@
   "answer_schema": {
     "type": "diagnosis",
     "fields": [
-      {"id": "finding", "label": "Failure-associated pattern", "kind": "string", "weight": 2},
+      {"id": "finding", "label": "Pattern linked to failures", "kind": "string", "weight": 2},
       {"id": "scope", "label": "Service", "kind": "string", "weight": 1},
-      {"id": "conclusion", "label": "Noise comparison", "kind": "statement", "mentions": ["finding"], "weight": 1},
+      {"id": "conclusion", "label": "Conclusion", "kind": "statement", "mentions": ["finding"], "weight": 1},
       {"id": "evidence", "label": "Evidence", "kind": "text", "scored": false}
     ]
   },

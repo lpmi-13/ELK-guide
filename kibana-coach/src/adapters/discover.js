@@ -45,7 +45,7 @@ globalThis.KibanaApplicationAdapters.push({
     const result = {type: 'field_statistics_opened', details: {view: 'field_statistics'}, state_after: {}};
     if (!this.fieldStatisticsShown()) {
       const tab = await waitForSelector("[data-test-subj='dscViewModeFieldStatsButton']", 20000, signal);
-      await host.pointAt(tab, coach, timingScale, signal, 'Switch from Documents to Field statistics, above the results.', {activate: true});
+      await host.pointAt(tab, coach, timingScale, signal, 'Switch from Documents to Field statistics.', {activate: true});
     }
     await waitForSelector("[data-test-subj='dataVisualizerTable-loaded']", 15000, signal);
     return result;
@@ -76,7 +76,7 @@ globalThis.KibanaApplicationAdapters.push({
     const deadline = Date.now() + 8000;
     while (!action() && Date.now() < deadline) await host.wait(100, signal);
     if (!action()) throw new Error('This document has no “View surrounding documents” action. Try this step again.');
-    await host.pointAt(action(), coach, timingScale, signal, 'Click “View surrounding documents”, among the Actions at the top of the document.', {activate: true, hold: false});
+    await host.pointAt(action(), coach, timingScale, signal, 'Click “View surrounding documents”.', {activate: true, hold: false});
     await waitForSelector("[data-test-subj='docTableExpandToggleColumnAnchor']", 20000, signal);
     await host.resultsSettled(signal);
     // The grid can draw the anchor before its cells are placed and then redraw it, so read the anchor's
@@ -94,7 +94,7 @@ globalThis.KibanaApplicationAdapters.push({
     // anchor's time cell.
     const anchorTime = document.querySelector(`[data-gridcell-row-index='${anchorRow}'][data-gridcell-column-id='@timestamp']`);
     await host.pointAt(anchorTime || anchor, coach, timingScale, signal,
-      'The highlighted row is the error we opened. Newer events are above it and older ones below. The error.type filter came along switched off, so every event shows, not just errors.', {showClick: false});
+      'The highlighted row is the error we opened. Newer events are above it, and older ones below. The error.type filter is turned off here, so every event shows, not just errors.', {showClick: false});
     const before = await waitForSelector(`[data-gridcell-row-index='${anchorRow + 1}'] [data-test-subj='docTableExpandToggleColumn']`, 8000, signal);
     await host.pointAt(before, coach, timingScale, signal, 'Open the event logged just before it.', {activate: true});
     await host.waitFor('kibana.doc_viewer', 10000, signal);
@@ -132,8 +132,8 @@ globalThis.KibanaApplicationAdapters.push({
     const button = bucket()?.querySelector(`[data-test-subj^='${negate ? 'minus' : 'plus'}-']`);
     if (!button) throw new Error(`${value} is not among ${field}'s Top values. Try this step again.`);
     await host.pointAt(button, coach, timingScale, signal, negate
-      ? `Click the − beside ${value} to filter it out.`
-      : `Click the + beside ${value} to filter for it.`, {activate: true});
+      ? `Click the − next to ${value} to filter it out.`
+      : `Click the + next to ${value} to filter for it.`, {activate: true});
     await host.settle(400, timingScale, signal);
     return {type: 'filter_added', details: {field, value, negate}, state_after: {}};
   },
@@ -167,7 +167,7 @@ globalThis.KibanaApplicationAdapters.push({
     const field = command.value?.field;
     await this.openFieldPopover(field, host, coach, timingScale, signal, `Open ${field} in the field list.`);
     const button = await waitForSelector(`[data-popover-panel] [data-test-subj='discoverFieldListPanelAddExistFilter-${cssEscape(field)}']`, 8000, signal);
-    await host.pointAt(button, coach, timingScale, signal, `Click “Filter for field present”, the filter icon at the top of the ${field} popover.`, {activate: true});
+    await host.pointAt(button, coach, timingScale, signal, `Click “Filter for field present”.`, {activate: true});
     await host.settle(400, timingScale, signal);
     return {type: 'filter_added', details: {field, value: 'exists', type: 'exists', negate: false}, state_after: {}};
   },

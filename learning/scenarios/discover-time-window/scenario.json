@@ -81,7 +81,7 @@
       {"id": "route", "label": "Affected endpoint", "kind": "string", "weight": 1},
       {"id": "scope", "label": "Affected service", "kind": "string", "weight": 1},
       {"id": "conclusion", "label": "Conclusion", "kind": "statement", "mentions": ["scope", "finding"], "weight": 1, "placeholder": "What failed, and when"},
-      {"id": "evidence", "label": "Evidence explanation", "kind": "text", "scored": false}
+      {"id": "evidence", "label": "Evidence", "kind": "text", "scored": false}
     ]
   },
   "playbook": "playbook.json",

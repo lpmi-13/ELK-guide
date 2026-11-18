@@ -12,19 +12,19 @@
   },
   "goal_overrides": {
     "scope": {
-      "concept": "The histogram shows when activity changed, so it can date an incident more precisely than a report can.",
+      "concept": "The histogram shows when activity changed, so it can time an incident more exactly than a report can.",
       "narration": "Support noticed the failures at ${incident.noticed_clock} (${incident.noticed_ago}), but not when they began. Find where the histogram rises above its usual level, then set the window to start just before that rise.",
-      "reasoning": "A window that starts just before the rise holds the whole incident without older, unrelated traffic diluting the comparison.",
+      "reasoning": "A window that starts just before the rise holds the whole incident, without older traffic mixed into the comparison.",
       "evidence": "The histogram should show the raised stretch, with only a little normal traffic either side.",
       "demonstration": {
-        "narration": "Support noticed the failures at ${incident.noticed_clock}, not when they began. Eyeballing the histogram, I see a stretch of taller bars rising above the usual traffic, then falling back. I'll start at ${incident.window_start_clock}, a little before the rise, and leave the end at now to cover the whole shape and some normal traffic on either side.",
+        "narration": "Support noticed the failures at ${incident.noticed_clock}, not when they began. Looking at the histogram, I can see the bars rise above the usual level, then fall back. I'll start at ${incident.window_start_clock}, just before the rise, and end at now.",
         "reasoning": "",
-        "evidence": "The refreshed histogram starts at ${incident.window_start_clock}, before the taller stretch, and includes its fall back toward the usual level. That gives us a candidate incident window; next I'll check the status codes to see whether the extra activity was failures.",
+        "evidence": "The histogram now starts at ${incident.window_start_clock}, just before the taller bars. It holds the whole rise, its fall back to the usual level, and some normal traffic on either side. That is probably the incident window. Next, I'll check the status codes to see whether the extra activity was failures.",
         "goal_focus": {"kind": "histogram"}
       },
       "hints": [
         "Support noticed the failures at ${incident.noticed_clock}, but they may have started earlier. Look for where the histogram rises above its usual level.",
-        "Click the date box at the top of Discover and type a start date and time just before the rise, followed by “to now”, or drag across the histogram.",
+        "Click the date box at the top of Discover. Type a start date and time just before the rise, then “to now”. Or drag across the histogram.",
         "Start the window at ${incident.window_start_clock}: type “${incident.window_start_typed} to now”. Show me can do it for you."
       ],
       "reference_action": {"command": "set_time_range", "target": "kibana.time_picker", "arguments": {"from": "${incident.window_start}", "to": "now"}}
@@ -32,13 +32,13 @@
     "isolate": {
       "title": "Filter to the failing status code",
       "concept": "Filter on a value you actually saw in the data, not one you guessed. That leaves just the failing records.",
-      "narration": "Filter for the status code that stood out in its Top values. Click the + next to it, or use Add filter. The results should shrink down to just the failing requests.",
-      "reasoning": "You got this value from the top values you just read, so the filter is based on evidence, not a guess. Adding it as its own filter pill, rather than typing into the query bar, also means one click lifts it back off to widen the view again — without editing any query text.",
-      "evidence": "After you filter, the table and histogram shrink down to just the failing requests behind the incident.",
+      "narration": "Filter for the status code that stood out in its Top values. Click the + next to it, or use Add filter. Only the failing requests should remain.",
+      "reasoning": "This value comes from the Top values you just read, so the filter rests on evidence, not a guess. As its own filter pill, it is also easy to remove with one click, without editing any query text.",
+      "evidence": "After you filter, the table and histogram show only the failing requests behind the incident.",
       "demonstration": {
         "narration": "I'll filter to ${param.incident.status} so the remaining requests show where the failures happened.",
-        "reasoning": "The window still contains healthy 200s and other traffic.\n\nFiltering for the ${param.incident.status} we saw in Top values leaves the failing requests to investigate. Keeping it in a separate filter pill also makes it easy to widen the view again.",
-        "evidence": "The new filter pill keeps only ${param.incident.status} responses, and the hit count dropped to just those failing requests. The pill's × lifts the filter whenever you need the wider view again."
+        "reasoning": "The window still contains healthy 200s and other traffic.\n\nFiltering for the ${param.incident.status} we saw in Top values leaves only the failing requests. As a separate filter pill, it is also easy to remove later.",
+        "evidence": "The new filter pill keeps only ${param.incident.status} responses, and the hit count dropped to just those failing requests. The pill's × removes the filter when you need the wider view again."
       },
       "requires": ["survey"],
       "reference_action": {"command": "add_filter", "target": "kibana.filter_bar", "arguments": {"field": "${var.status_field}", "operator": "is", "value": "${param.incident.status}"}},
@@ -47,7 +47,7 @@
         {"action": ["query_submitted"], "validators": [{"kind": "query_contains", "fields": ["${var.status_field}"], "value": "${param.incident.status}"}, {"kind": "result_assertion", "assertion": "signal"}]}
       ],
       "hints": [
-        "Filter for the status code you just saw spike, not one you assumed.",
+        "Filter for the status code you just saw stand out, not one you assumed.",
         "Click the + next to that value in the field's top values, or use Add filter (field, operator ‘is’, value).",
         "Filter http.response.status_code for ${param.incident.status}; Show me can add the reference filter."
       ],
@@ -60,8 +60,8 @@
     "inspect": {
       "demonstration": {
         "narration": "I'll open one filtered request to check whether the unusual status and endpoint occur together.",
-        "reasoning": "A total can look convincing even when it includes an unrelated record. Opening a typical event checks the key values together, rather than relying on a count alone.",
-        "evidence": "This one request carries both ${param.incident.status} and ${param.incident.route}, so the status and endpoint really occur together, not just in separate totals. ${truth.conclusion}",
+        "reasoning": "A total can look convincing even when it includes other records. Opening one typical event shows the key values together, which a count alone can't do.",
+        "evidence": "This one request has both ${param.incident.status} and ${param.incident.route}. So the status and the endpoint really go together, not just in separate totals. ${truth.conclusion}",
         "evidence_focus": {"kind": "document", "fields": ["${var.status_field}", "${var.route_field}"]}
       },
       "requires": ["endpoints"],
@@ -74,7 +74,7 @@
       ],
       "hints": [
         "Check one typical record instead of relying only on the count.",
-        "Expand a row to read all of its fields, or add ${var.status_field} and ${var.route_field} as columns to read them on the same rows.",
+        "Expand a row to read all of its fields. Or add ${var.status_field} and ${var.route_field} as columns to read them on the same rows.",
         "Open the first result; Show me can do it for you."
       ]
     }
@@ -85,14 +85,14 @@
       "goal": {
         "id": "survey",
         "title": "Look at the status codes in the window",
-        "concept": "A field's Top values count every record in the window, so they show which value is unusual where a few rows can't.",
-        "narration": "The table only shows a few requests at a time. Open the http.response.status_code field in the sidebar and read its Top values, which count the whole window, to see which status code is unusual.",
+        "concept": "A field's Top values count every record in the window. So they show which value is unusual, which a few rows can't.",
+        "narration": "The table only shows a few requests at a time. Open the http.response.status_code field in the sidebar and read its Top values. They count the whole window, so they show which status code is unusual.",
         "reasoning": "The report never named a status code, and the newest rows are only a sample. Reading the Top values keeps us honest instead of guessing.",
         "evidence": "The field's top values show the unusual status code standing out from the healthy 200s.",
         "demonstration": {
           "narration": "The table lists single requests, newest first. I'll check status-code Top values to see which code stands out across the whole window.",
-          "reasoning": "A few rows can't show which code dominates the window, and filtering on a guessed one would assume the answer. Top values count every request in the window.",
-          "evidence": "The highlighted row is ${param.incident.status}, a server error taking a large share of the window beside the healthy 200s. Top values counted every request, not just the rows on screen, so it's the value to filter on.",
+          "reasoning": "A few rows can't show which code is most common, and filtering on a guess would assume the answer. Top values count every request in the window.",
+          "evidence": "The highlighted row is ${param.incident.status}, a server error with a large share of the window next to the healthy 200s. Top values counted every request, not just the rows on screen, so it's the value to filter on.",
           "evidence_focus": {"kind": "top_values", "field": "${var.status_field}", "value": "${param.incident.status}"}
         },
         "requires": ["scope"],
@@ -118,13 +118,13 @@
         "id": "endpoints",
         "title": "Find the affected endpoint",
         "concept": "Inside the failing requests, a second field's top values show where the failures are happening.",
-        "narration": "Now that the failing status code is filtered, open the url.path field and read its top values to see which endpoint the errors hit.",
+        "narration": "The failing status code is now filtered. Open the url.path field and read its Top values to see which endpoint the errors hit.",
         "reasoning": "Knowing the status code isn't the same as knowing where it happens. The url.path top values show whether one route is behind most of them.",
         "evidence": "The url.path top values show the endpoint behind almost all of the failures.",
         "demonstration": {
           "narration": "I'll check url.path Top values within the ${param.incident.status} responses to see which endpoint the failures hit.",
-          "reasoning": "A status-code spike could be spread across many routes or concentrated on one. Reading url.path in the filtered set tells us which pattern is present.",
-          "evidence": "The ${param.incident.status} responses concentrate on ${param.incident.route}, which serves the ${param.incident.journey} requests support reported failing. The failures are tied to that one endpoint rather than spread across the API.",
+          "reasoning": "The failures could be spread across many routes, or all on one. Reading url.path in the filtered results tells us which.",
+          "evidence": "Almost all of the ${param.incident.status} responses are on ${param.incident.route}, which serves the ${param.incident.journey} requests that support said were failing. The failures are tied to that one endpoint, not spread across the API.",
           "evidence_focus": {"kind": "top_values", "field": "${var.route_field}", "value": "${param.incident.route}"}
         },
         "requires": ["isolate"],
@@ -153,7 +153,7 @@
         {"title": "Time range", "detail": "Found where the histogram rises and started the window just before it."},
         {"title": "Status codes", "detail": "Found the top status-code values — ${param.incident.status} stood out."},
         {"title": "Filtering", "detail": "Filtered for ${param.incident.status}, the failing status code."},
-        {"title": "Affected endpoint", "detail": "Isolated the affected endpoint ${param.incident.route}."},
+        {"title": "Affected endpoint", "detail": "Found the affected endpoint, ${param.incident.route}."},
         {"title": "Confirming", "detail": "Confirmed ${param.incident.status} and ${param.incident.route} together in the same event."}
       ],
       "answer": {"finding": "${truth.finding}", "scope": "${truth.scope}", "conclusion": "${truth.conclusion}", "evidence": "The status-code and url.path top values, plus the event we opened, connect ${var.finding_phrase} to ${truth.scope}."}

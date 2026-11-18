@@ -23,7 +23,7 @@ globalThis.KibanaApplicationAdapters.push({
 
   async perform(command, host, coach, {timingScale = 1, signal} = {}) {
     const value = command.value || {};
-    const narration = command.narration || 'Inspect the controller-provisioned alert.';
+    const narration = command.narration || 'Open the alert.';
     if (command.type === 'open_alert') {
       const button = await this.expandButton(value.value, host, signal);
       await host.pointAt(button, coach, timingScale, signal, narration, {activate: true});

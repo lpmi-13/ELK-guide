@@ -345,7 +345,7 @@ class WindowFeedbackTests(unittest.TestCase):
         self.assertTrue(result["headline"].endswith(f"after the report at {clock}."))
         self.assertIn(f"I'll set a fixed start of {server.clock_text(fixed, s)} so it stays put.", result["detail"])
         self.assertEqual(result["restore_time"], {"from": server.iso_instant(fixed), "to": "now"})
-        self.assertEqual(evaluator.dead_end_labels(s["step_log"]["isolate"]), ["window slid past the incident"])
+        self.assertEqual(evaluator.dead_end_labels(s["step_log"]["isolate"]), ["window moved past the incident"])
         # Once per window: the next action isn't flagged again; a new window starts afresh.
         self.assertEqual(record(s, "column_added", {"field": "z"}, actor="learner")["outcome"], "observed")
         record(s, "time_range_changed", {"from": "now-20m", "to": "now"}, actor="learner")

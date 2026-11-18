@@ -321,10 +321,10 @@ class RandomizationTests(unittest.TestCase):
                             self.assertIn("histogram", rendered_hints[0])
                             if mode == "demonstration":
                                 # The demo must explain the visual estimate before it types the start.
-                                self.assertIn("Eyeballing", command["narration"])
+                                self.assertIn("Looking at the histogram", command["narration"])
                                 self.assertIn(local(start), command["narration"])
-                                self.assertIn("falling back", command["narration"])
-                                self.assertIn("candidate incident window", command["evidence"])
+                                self.assertIn("fall back", command["narration"])
+                                self.assertIn("probably the incident window", command["evidence"])
                         elif mode == "demonstration":
                             self.assertIn(local(start), command["narration"])
                             self.assertIn("five-minute mark", command["narration"])

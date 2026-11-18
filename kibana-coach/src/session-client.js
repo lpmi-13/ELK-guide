@@ -71,7 +71,7 @@ class IncidentSessionClient {
     this.token ||= saved?.token;
     this.runId ||= saved?.runId;
     this.mode ||= saved?.mode;
-    if (!this.token || !this.runId || !this.mode) throw new Error('The automatic session handoff is incomplete. Open Kibana from the lab launcher again.');
+    if (!this.token || !this.runId || !this.mode) throw new Error('The coach could not connect to this session. Open Kibana from the lab launcher again.');
     this.sequence = saved?.sequence || 0;
     this.save();
     this.openSocket();
@@ -118,7 +118,7 @@ class IncidentSessionClient {
     const delay = RECONNECT_DELAYS[Math.min(this.failures, RECONNECT_DELAYS.length - 1)];
     this.failures += 1;
     const retry = () => this.openSocket();
-    this.onStatus?.(this.failures > 1 ? 'The learning service is not answering. Retrying…' : 'Reconnecting to the learning session…', retry);
+    this.onStatus?.(this.failures > 1 ? 'The learning service is not answering. Retrying…' : 'Connecting to the learning session again…', retry);
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = setTimeout(retry, delay);
   }
