@@ -38,7 +38,7 @@
       "demonstration": {
         "narration": "I'll filter to ${param.incident.status} so the remaining requests show where the failures happened.",
         "reasoning": "The window still contains healthy 200s and other traffic.\n\nFiltering for the ${param.incident.status} we saw in Top values leaves only the failing requests. As a separate filter pill, it is also easy to remove later.",
-        "evidence": "The new filter pill keeps only ${param.incident.status} responses, and the hit count dropped to just those failing requests. The pill's × removes the filter when you need the wider view again."
+        "evidence": "The hit count dropped to just the ${param.incident.status} responses, the failing requests. The filter sits under the query bar as a filter pill: the small box that reads ${var.status_field}: ${param.incident.status}. Its × removes the filter when you need the wider view again."
       },
       "requires": ["survey"],
       "reference_action": {"command": "add_filter", "target": "kibana.filter_bar", "arguments": {"field": "${var.status_field}", "operator": "is", "value": "${param.incident.status}"}},

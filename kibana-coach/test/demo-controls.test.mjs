@@ -83,7 +83,7 @@ test('learning highlights the HTTP status and version columns in the visible tab
   ];
   const document = {
     querySelectorAll: () => headers,
-    createElement: () => ({style: {}, setAttribute() {}, remove() { this.removed = true; }}),
+    createElement: () => ({style: {setProperty(name, value) { this[name] = value; }}, addEventListener() {}, setAttribute() {}, remove() { this.removed = true; }}),
   };
   const Panel = loadClass('../src/ui/coach-panel.js', 'IncidentCoachPanel',
     ['document', 'innerWidth', 'innerHeight'], [document, 1920, 1080]);
@@ -91,8 +91,11 @@ test('learning highlights the HTTP status and version columns in the visible tab
   panel.root = {append() {}};
   panel.showEvidenceHighlights(['service.version', 'http.response.status_code']);
   assert.equal(panel.evidenceHighlights.length, 2);
-  assert.match(panel.evidenceHighlights[0].style.cssText, /left:1100px.*width:160px/);
-  assert.match(panel.evidenceHighlights[1].style.cssText, /left:1260px.*width:190px/);
+  assert.deepEqual([panel.evidenceHighlights[0].style.left, panel.evidenceHighlights[0].style.width], ['1100px', '160px']);
+  assert.deepEqual([panel.evidenceHighlights[1].style.left, panel.evidenceHighlights[1].style.width], ['1260px', '190px']);
+  // Each ring makes its entrance once, a beat after the one before; placing it keeps that delay.
+  assert.ok(panel.evidenceHighlights.every(highlight => /\bentering\b/.test(highlight.className)));
+  assert.deepEqual(panel.evidenceHighlights.map(highlight => highlight.style['--ring-delay']), ['0ms', '110ms']);
   const highlights = [...panel.evidenceHighlights];
   panel.clearEvidenceHighlights();
   assert.ok(highlights.every(highlight => highlight.removed));
@@ -177,6 +180,43 @@ test('hints stay with their step and Advance moves through a success card', () =
   assert.equal(panel.advanceCelebration(), true);
   assert.equal(nodes['#objective'].textContent, 'endpoints');
   assert.equal(panel.advanceCelebration(), false);
+});
+
+test('a demonstration\'s opening card spotlights nothing; the control lights up as the action starts', () => {
+  const Panel = loadClass('../src/ui/coach-panel.js', 'IncidentCoachPanel',
+    ['requestAnimationFrame'], [callback => callback()]);
+  const panel = Object.create(Panel.prototype);
+  const node = () => ({hidden: false, textContent: '', style: {}, classList: {add() {}, remove() {}, contains: () => false}});
+  const nodes = {};
+  panel.root = {querySelector: selector => (nodes[selector] ??= node())};
+  panel.host = {hidden: true};
+  panel.panel = {hidden: true};
+  const spotlit = [];
+  panel.spotlight = {show: target => spotlit.push(target), hide() {}};
+  panel.cursor = {hide() {}};
+  for (const name of ['clearEvidenceHighlights', 'renderPhase', 'resetCountdown', 'startWorking', 'refit']) panel[name] = () => {};
+  const placedAwayFrom = [];
+  panel.placeAwayFrom = target => placedAwayFrom.push(target);
+
+  const addFilter = {id: 'add-filter-button'};
+  panel.showCommand({command_id: 'isolate', step_id: 'isolate', step_index: 2, step_count: 6, mode: 'demonstration',
+    narration: 'I\'ll filter to 503 so the remaining requests show where the failures happened.'}, addFilter);
+  assert.deepEqual(spotlit, []); // the goal card is read with nothing lit
+  assert.equal(panel.activeTarget, addFilter);
+  assert.deepEqual(placedAwayFrom, [addFilter]); // but the card keeps clear of the control
+  assert.equal(panel.spotlightRevealed, false); // so a scroll or mutation re-placing the card doesn't light it either
+
+  panel.showTarget(addFilter, 'Open Add filter.'); // the action: the cursor sets off for the control
+  assert.deepEqual(spotlit, [addFilter]);
+
+  // Guided Show me after a Hint lit the control: the walkthrough starts dark, like a demonstration.
+  let hidden = 0;
+  panel.spotlight.hide = () => { hidden += 1; };
+  panel.spotlightRevealed = true;
+  panel.beginWalkthrough({command_id: 'isolate', step_id: 'isolate', mode: 'guided', narration: ''});
+  assert.equal(panel.spotlightRevealed, false);
+  assert.ok(hidden >= 1);
+  assert.deepEqual(spotlit, [addFilter]);
 });
 
 test('a result card folds its reasoning when no corner clears the evidence, and a learner\'s choice stands', () => {

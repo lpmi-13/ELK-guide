@@ -306,14 +306,14 @@ class KibanaAdapter {
     throw new Error(`Kibana target not found: ${name}`);
   }
 
-  // Resolve a step's anchor for the opening spotlight, tolerating a target the registry does not hold
+  // Resolve a step's anchor for the opening card, tolerating a target the registry does not hold
   // (some packs point add_filter at the filter bar) or one that never appears — returning null instead
-  // of throwing. The anchor is only the control to highlight while the "what / why" cards are read;
-  // perform() resolves and drives the controls the step actually acts on, so a missing anchor must
-  // never abort the demonstration. A stop/pause (AbortError) still propagates so the run unwinds.
-  // Given the command, the anchor is the element the card's words are about when that can be told: a
-  // named span, host or panel action rather than the first thing the registry's selector happens to
-  // match. That element may be below the fold, so the card reveals it (see coach.revealTarget).
+  // of throwing. The anchor is only the control the card keeps clear of while it is read (nothing is
+  // spotlit until the action starts); perform() resolves and drives the controls the step actually
+  // acts on, so a missing anchor must never abort the demonstration. A stop/pause (AbortError) still
+  // propagates so the run unwinds. Given the command, the anchor is the element the card's words are
+  // about when that can be told: a named span, host or panel action rather than the first thing the
+  // registry's selector happens to match.
   async resolveAnchor(name, signal, command = null) {
     if (command) {
       const application = (globalThis.KibanaApplicationAdapters || []).find(item => item.commands.has(command.type));
@@ -647,10 +647,15 @@ class KibanaAdapter {
   // after their stats load, the doc viewer's rows after scrolling them into view. Targets are
   // functions returning the live element, because a virtualized row can be re-rendered while it is
   // ringed; columns are result-table columns to ring. Either may be empty: the beat still explains.
-  async findEvidence(command, signal) {
+  // `text` is what the card on screen says (the result card's evidence; a goal card passes its line).
+  async findEvidence(command, signal, text = command.evidence) {
     const columns = command.learning_focus?.length ? command.learning_focus
       : command.type === 'add_column' && command.value?.field ? [command.value.field] : [];
-    const focus = command.evidence_focus || this.defaultEvidenceFocus(command);
+    const chosen = command.evidence_focus || this.defaultEvidenceFocus(command);
+    // A card rings what it talks about. The hit count sits beside the chart, query or pill, but it is
+    // ringed only when the card says something about it ("the hit count drops to..."); a number the
+    // card never mentions is one more box to look at, whatever it reads.
+    const focus = chosen && {...chosen, count: /\bhit count\b/i.test(text || '')};
     if (focus?.kind === 'columns') return {targets: [], columns: focus.fields || columns};
     let targets = [];
     try {
@@ -742,13 +747,14 @@ class KibanaAdapter {
       while (!document.querySelector("[data-test-subj='dataVisualizerTable-loaded']") && Date.now() < deadline) await this.wait(100, signal);
       return (focus.fields || []).map(field => () => document.querySelector(`[data-test-subj~='row-${String(field).replace(/['\\]/g, '\\$&')}']`));
     }
-    // A goal card can ask for these before Discover has first drawn them.
+    // Wait for Discover's refreshed results, ringed count or not; a goal card can ask before they are first drawn.
     await this.waitForTargets(['kibana.result_count'], signal, 8000);
     await this.resultsSettled(signal);
-    if (focus.kind === 'histogram') return [registered('kibana.histogram'), registered('kibana.result_count')];
-    if (focus.kind === 'query') return [registered('kibana.query_bar'), registered('kibana.result_count')];
+    const count = focus.count ? [registered('kibana.result_count')] : [];
+    if (focus.kind === 'histogram') return [registered('kibana.histogram'), ...count];
+    if (focus.kind === 'query') return [registered('kibana.query_bar'), ...count];
     if (focus.kind === 'filter') {
-      return [() => this.findFilterPill(focus.field, focus.value), registered('kibana.result_count'), ...(focus.histogram ? [registered('kibana.histogram')] : [])];
+      return [() => this.findFilterPill(focus.field, focus.value), ...count, ...(focus.histogram ? [registered('kibana.histogram')] : [])];
     }
     return [];
   }

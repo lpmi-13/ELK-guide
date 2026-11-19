@@ -6,6 +6,7 @@
     "cardinality": "the number of distinct values a field has",
     "correlation": "checking that two signals change at the same time, or belong to the same request",
     "drill down": "open the records behind a chart, keeping its filters and time range",
+    "filter pill": "the small box under the query bar that shows one filter, such as http.response.status_code: 503",
     "inspect": "Kibana's panel action that shows the data and the request behind a chart",
     "percentile": "p95 is the time that 95% of requests finish within",
     "pivot": "follow one piece of evidence to the related data in another view",

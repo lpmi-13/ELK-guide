@@ -174,6 +174,11 @@ function startIncidentCoach() {
   // An Advance pressed while the coach is acting waits for the action to finish. Keep its signal
   // scoped to the current action so it cannot affect a later command.
   let advanceAfterAction = null;
+  // Pause can't hold an action midway (the cursor and Kibana keep moving), so it stops it, and on
+  // resume the service sends the step again. `pausedAction` is the step a Pause stopped that way.
+  // Advance pressed on it while paused (`advancedAction`) still stands when it plays again.
+  let pausedAction = null;
+  let advancedAction = null;
 
   function readingBeatWait(milliseconds, signal) {
     if (signal?.aborted) return Promise.reject(new DOMException('Demonstration stopped', 'AbortError'));
@@ -232,6 +237,8 @@ function startIncidentCoach() {
     executionController?.abort();
     const controller = new AbortController();
     executionController = controller;
+    const advanced = advancedAction === command.command_id;
+    advancedAction = null;
     try {
       const timingScale = command.mode === 'demonstration' ? demonstrationTimingScale : 1;
       const readBeat = async text => {
@@ -252,17 +259,25 @@ function startIncidentCoach() {
         // registry does not hold, like the filter bar, so a missing anchor must never abort the run —
         // resolveAnchor falls back to no opening highlight and perform() highlights the real controls.
         const target = await adapter.resolveAnchor(command.target, controller.signal, command);
-        // A step that starts by reading the page (where the histogram rises) rings that instead of
-        // spotlighting the control, which would dim the very thing the line asks the learner to read.
+        // The opening card spotlights nothing: the control lights up when the action starts and the
+        // cursor sets off for it. The card keeps clear of the control meanwhile. A step that starts by
+        // reading the page (where the histogram rises) rings that instead.
         coach.showCommand(command, command.goal_focus ? null : target);
-        if (!command.goal_focus) coach.revealTarget?.(target);
-        if (command.goal_focus) coach.showGoalFocus(await adapter.findEvidence({...command, evidence_focus: command.goal_focus}, controller.signal));
-        // A chart-reading goal needs time to explain the visible pattern before the controls take over.
-        const pause = command.goal_focus ? chartPause(command.narration) : goalPause(command.narration);
-        coach.startCountdown(pause);
-        await readingBeatWait(pause, controller.signal);
+        if (!advanced) {
+          if (command.goal_focus) coach.showGoalFocus(await adapter.findEvidence({...command, evidence_focus: command.goal_focus}, controller.signal, command.narration));
+          // A chart-reading goal needs time to explain the visible pattern before the controls take over.
+          const pause = command.goal_focus ? chartPause(command.narration) : goalPause(command.narration);
+          coach.startCountdown(pause);
+          await readingBeatWait(pause, controller.signal);
+        }
         // Hand the card over to the live step's action narration.
         coach.beginActionPhase(command);
+        if (advanced) {
+          // The learner already pressed Advance on this action: it plays again from its start, with
+          // the Advance still pending, just as it would have finished had it never been paused.
+          advanceAfterAction = controller.signal;
+          coach.setAdvancePending(true);
+        }
       }
       // "Show me" starts the guided action immediately. Its explanation follows the action.
       const walkthrough = explicitlyRequested && command.mode === 'guided' && command.walkthrough
@@ -914,9 +929,13 @@ function startIncidentCoach() {
       deadEndPoll = setTimeout(pollDeadEnd, 500);
     }
     coach.onPause = paused => {
+      pausedAction = null;
       if (paused) {
         if (activeReadingBeat) activeReadingBeat.pause();
-        else executionController?.abort();
+        else if (executionController && !executionController.signal.aborted) {
+          pausedAction = currentCommand?.command_id ?? null;
+          executionController.abort();
+        }
         coach.stopCountdown();
       } else if (activeReadingBeat) {
         coach.resumeCountdown(activeReadingBeat.remaining);
@@ -952,9 +971,15 @@ function startIncidentCoach() {
       if (!currentCommand) return;
       if (coach.advanceCelebration()) return;
       if (currentCommand.mode === 'demonstration' && coach.paused) {
-        // Nothing is counting down while paused — resume so the demonstration plays on.
+        // Advance does the same paused or not: the demonstration plays on, past the beat on screen.
+        // A reading beat (the goal card, a note, a hold) resumes and ends now. An action the Pause
+        // stopped plays again when the service resends its step, with this Advance still standing.
+        const stopped = pausedAction;
         coach.setPaused(false);
-        return;
+        if (stopped) {
+          advancedAction = stopped;
+          return;
+        }
       }
       // A queued click owns this action until it finishes. Further clicks must not shorten each
       // internal hold and outrun the Kibana controls that are still updating.
@@ -975,6 +1000,8 @@ function startIncidentCoach() {
     coach.onStop = () => {
       executionController?.abort();
       currentCommand = null;
+      pausedAction = null;
+      advancedAction = null;
       stepClock.stop();
       checkIn = null;
       recoveryController?.abort();

@@ -49,6 +49,8 @@ PLAIN_BRIEFINGS = PLAIN_SCENARIOS = PLAIN_PLAYBOOKS = PACKS
 PLAIN_CODE = [*sorted((ROOT / "kibana-coach" / "src").rglob("*.js")), ROOT / "telemetry" / "index.html",
               ROOT / "telemetry" / "preparing.html", ROOT / "learning-service" / "server.py",
               ROOT / "learning-service" / "engine" / "evaluator.py"]
+# Code that draws on the page but shows no words. Every other file must yield copy, or the extractor missed it.
+WORDLESS_CODE = {ROOT / "kibana-coach" / "src" / "ui" / "spotlight.js"}
 # Playbook keys whose strings a learner reads; the rest are ids, validators and Kibana actions.
 COPY_KEYS = {"title", "narration", "concept", "reasoning", "evidence", "hints", "note", "detail"}
 CODE_KEYS = {"accepts", "validators", "reference_action", "starting_view", "goal_focus", "evidence_focus", "restore_state", "variables"}
@@ -205,7 +207,7 @@ class PlainLanguageTests(unittest.TestCase):
     def test_coach_launcher_and_service_copy_uses_plain_words(self):
         for path in PLAIN_CODE:
             found = list(code_copy(path))
-            self.assertTrue(found, path)
+            self.assertTrue(found or path in WORDLESS_CODE, path)
             for line, text in found:
                 self.assertEqual(hard_words(text), [], f"{path.relative_to(ROOT)}:{line}: {text[:200]!r}")
 

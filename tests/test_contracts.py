@@ -143,7 +143,8 @@ class ContractTests(unittest.TestCase):
         # is up, instead of dimming it behind the control's spotlight; the action phase clears the ring.
         self.assertIn('"goal_focus": substitute(explanation.get("goal_focus"), session)', learning_service)
         self.assertIn("coach.showCommand(command, command.goal_focus ? null : target);", content)
-        self.assertIn("coach.showGoalFocus(await adapter.findEvidence({...command, evidence_focus: command.goal_focus}, controller.signal));", content)
+        # The goal card is judged by its own line (whether it mentions the hit count), not the result card's.
+        self.assertIn("coach.showGoalFocus(await adapter.findEvidence({...command, evidence_focus: command.goal_focus}, controller.signal, command.narration));", content)
         self.assertLess(content.index("coach.showGoalFocus("), content.index("const pause = command.goal_focus ? chartPause(command.narration) : goalPause(command.narration);"))
         self.assertIn("if (phase !== 'learning') this.clearEvidenceHighlights();", coach)
 

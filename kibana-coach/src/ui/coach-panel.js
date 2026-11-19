@@ -247,21 +247,14 @@ class IncidentCoachPanel {
       this.renderPhase({eyebrow: 'What to do', headline: command.narration || ''});
       this.root.querySelector('#stage').hidden = !command.narration;
     }
-    // A demonstration is the coach acting on-screen, so it keeps the spotlight (dim + highlight)
-    // from the start. A guided step is the learner's to solve: begin with nothing dimmed or
-    // highlighted, and only reveal the spotlight when they explicitly ask for a hint. Challenge
-    // stays dark too. `activeTarget` is still stored above so a later hint knows what to point at.
-    this.spotlightRevealed = command.mode === 'demonstration';
-    if (target && this.spotlightRevealed) this.spotlight.show(target); else this.spotlight.hide();
+    // Every card starts with nothing dimmed or highlighted. A control is spotlit only when the coach
+    // is about to use it, as the cursor sets off (showTarget), so a highlight never sits waiting for
+    // a card's countdown. A guided step is the learner's to solve, so it lights its control only on
+    // a hint. `activeTarget` is still stored above: the card keeps clear of the control, and a later
+    // hint knows what to point at.
+    this.spotlightRevealed = false;
+    this.spotlight.hide();
     requestAnimationFrame(() => this.placeAwayFrom(target));
-  }
-
-  // Bring a target into view when it's below the fold, so a highlight is never drawn off-screen. The
-  // scroll listener keeps the highlight and the card with it as the page moves.
-  revealTarget(target) {
-    if (!target?.isConnected || !target.getClientRects().length || this.cursor.isVisible(target)) return;
-    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
-    target.scrollIntoView({block: 'center', inline: 'nearest', behavior: reducedMotion ? 'instant' : 'smooth'});
   }
 
   // The card is about what its rings show, so when one isn't all on screen the page scrolls. Rings that
@@ -596,9 +589,9 @@ class IncidentCoachPanel {
       this.renderPhase({eyebrow: 'What I’ll do next', headline: command?.narration || ''});
       this.resetCountdown();
     } else if (phase === 'action') {
-      // The control can still be loading (a Show me clicked as the page opens), so don't promise a
-      // highlight until there is one. showTarget replaces this line as soon as there is.
-      this.renderPhase({eyebrow: 'Doing it now', headline: this.activeTarget?.isConnected ? 'Watch the highlighted control and the cursor.' : 'Finding the control to use…'});
+      // Nothing is lit yet: the first control lights up as the cursor sets off for it, and showTarget
+      // replaces this line with what the coach does there.
+      this.renderPhase({eyebrow: 'Doing it now', headline: 'Finding the control to use…'});
       this.startWorking();
     } else if (phase === 'learning') {
       // The action is done; this beat talks about the result, not a control. Drop the spotlight and
@@ -638,10 +631,10 @@ class IncidentCoachPanel {
     this.root.querySelector('#hint').hidden = true;
     this.root.querySelector('#incident-info').hidden = true;
     this.root.querySelector('#advance').hidden = false;
-    if (this.activeTarget?.isConnected) {
-      this.spotlightRevealed = true;
-      this.spotlight.show(this.activeTarget);
-    }
+    // As in a demonstration, a control lights up only as the cursor sets off for it (showTarget), so
+    // a hint's spotlight goes out until then.
+    this.spotlightRevealed = false;
+    this.spotlight.hide();
     this.enterPhase('action', command);
     requestAnimationFrame(() => this.placeAwayFrom(this.activeTarget));
   }
@@ -902,7 +895,14 @@ class IncidentCoachPanel {
     this.evidenceTargets = targets.filter(Boolean);
     for (let index = 0; index < this.evidenceFields.length + this.evidenceTargets.length; index += 1) {
       const highlight = document.createElement('div');
-      highlight.className = 'incident-evidence-highlight';
+      // On a busy page the eye needs a cue to find the ring, so each one arrives once (`.entering`):
+      // wide, closing in on its evidence, then a single pulse. Rings follow one another in the order
+      // given. A ring whose element is off screen plays its entrance when it is scrolled into view.
+      highlight.className = 'incident-evidence-highlight entering';
+      highlight.style.setProperty('--ring-delay', `${index * 110}ms`);
+      highlight.addEventListener('animationend', event => {
+        if (event.animationName === 'ring-pulse' || event.animationName === 'ring-fade') highlight.classList.remove('entering');
+      });
       highlight.setAttribute('aria-hidden', 'true');
       this.root.append(highlight);
       this.evidenceHighlights.push(highlight);
@@ -929,15 +929,18 @@ class IncidentCoachPanel {
       const right = Math.min(innerWidth, rect?.right ?? 0);
       const top = Math.max(0, rect?.top ?? 0);
       highlight.hidden = !rect || right <= left || top >= innerHeight - 48;
-      if (!highlight.hidden) {
-        highlight.style.cssText = `left:${left}px;top:${top}px;width:${right - left}px;height:${innerHeight - top - 48}px`;
-      }
+      if (!highlight.hidden) IncidentCoachPanel.placeHighlight(highlight, left, top, right - left, innerHeight - top - 48);
     }
     for (const [index, box] of IncidentCoachPanel.ringBoxes(this.evidenceTargetRects()).entries()) {
       const highlight = this.evidenceHighlights[this.evidenceFields.length + index];
       highlight.hidden = !box;
-      if (box) highlight.style.cssText = `left:${box.left}px;top:${box.top}px;width:${box.right - box.left}px;height:${box.bottom - box.top}px`;
+      if (box) IncidentCoachPanel.placeHighlight(highlight, box.left, box.top, box.right - box.left, box.bottom - box.top);
     }
+  }
+
+  // Set a ring's box one property at a time, so its other inline styles (its entrance delay) stay.
+  static placeHighlight(highlight, left, top, width, height) {
+    Object.assign(highlight.style, {left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px`});
   }
 
   // Rings around page elements, `pad` px outside each. Elements that sit close together (the inspect
@@ -1343,8 +1346,21 @@ class IncidentCoachPanel {
     .stage-tick::after { content:"";position:absolute;left:6px;top:3px;width:4px;height:8px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(42deg); }
     @keyframes tick-pop { from{transform:scale(0)} to{transform:scale(1)} }
     #stage.celebrate-in { animation:celebrate-in .42s cubic-bezier(.22,1,.36,1); } @keyframes celebrate-in { from{opacity:0;transform:translateY(8px) scale(.99)} to{opacity:1;transform:none} }
-    .incident-spotlight { position:fixed;z-index:1;display:none;box-sizing:border-box;border:3px solid #ffb000;border-radius:7px;box-shadow:0 0 0 9999px #10182070;pointer-events:none; }
-    .incident-evidence-highlight { position:fixed;z-index:1;box-sizing:border-box;border:3px solid #ffb000;border-radius:7px;background:#ffb00018;box-shadow:0 0 0 2px #fff8;pointer-events:none; }
+    /* One ring for every highlight: the spotlight on the control the coach acts on (the page dimmed
+       around it) and the evidence rings a card talks about. Each arrives the same way (.entering). */
+    :is(.incident-spotlight,.incident-evidence-highlight) { --ring:#ffb000;--ring-edge:#b86e00;--ring-glow:#ffb00059;position:fixed;z-index:1;box-sizing:border-box;border-radius:7px;pointer-events:none; }
+    .incident-spotlight { display:none;box-shadow:0 0 0 9999px #10182070; }
+    .incident-evidence-highlight { background:#ffb0001a; }
+    :is(.incident-spotlight,.incident-evidence-highlight)::before,:is(.incident-spotlight,.incident-evidence-highlight)::after { content:"";position:absolute;inset:0;box-sizing:border-box;border-radius:inherit; }
+    :is(.incident-spotlight,.incident-evidence-highlight)::before { border:3px solid var(--ring);box-shadow:0 0 0 1px var(--ring-edge),inset 0 0 0 1px #fffc,0 0 14px 2px var(--ring-glow); }
+    :is(.incident-spotlight,.incident-evidence-highlight).entering { animation:ring-flash .6s calc(var(--ring-delay,0ms) + .34s) ease-out both; }
+    :is(.incident-spotlight,.incident-evidence-highlight).entering::before { animation:ring-close .7s var(--ring-delay,0ms) cubic-bezier(.34,1.4,.64,1) both; }
+    :is(.incident-spotlight,.incident-evidence-highlight).entering::after { border:3px solid var(--ring);box-shadow:0 0 12px var(--ring-glow);animation:ring-pulse .8s calc(var(--ring-delay,0ms) + .4s) cubic-bezier(.2,.6,.3,1) both; }
+    @keyframes ring-close { from { inset:-24px;border-radius:18px;opacity:0;box-shadow:0 0 0 1px var(--ring-edge),inset 0 0 0 1px #fffc,0 0 30px 10px var(--ring-glow); } 18% { opacity:1; } }
+    @keyframes ring-flash { from { background-color:#ffb00000; } 30% { background-color:#ffb00059; } }
+    @keyframes ring-pulse { from { inset:0;opacity:0; } 6% { opacity:1; } 45% { opacity:.6; } to { inset:-20px;border-radius:20px;opacity:0; } }
+    @keyframes ring-fade { from { opacity:0; } }
+    @media (prefers-reduced-motion: reduce) { :is(.incident-spotlight,.incident-evidence-highlight).entering { animation:ring-fade .25s var(--ring-delay,0ms) ease-out both!important; } :is(.incident-spotlight,.incident-evidence-highlight).entering::before { animation:none!important; } :is(.incident-spotlight,.incident-evidence-highlight).entering::after { animation:none!important;border:0; } }
     .incident-cursor { position:fixed;z-index:2;left:-12px;top:-12px;width:24px;height:24px;opacity:0;pointer-events:none;transition:transform var(--incident-cursor-duration, .65s) cubic-bezier(.4,.1,.6,.9),opacity .15s; }
     .incident-cursor.visible { opacity:1; }.incident-cursor:before { content:'➤';display:block;color:#ffb000;font-size:28px;filter:drop-shadow(0 2px 2px #0008);transform:rotate(-25deg); }
     .incident-cursor span { position:absolute;inset:0;border:2px solid #ffb000;border-radius:50%;opacity:0; }.incident-cursor.clicked span { animation:click-ring .5s; }

@@ -167,6 +167,71 @@ test('pause freezes a reading beat; resume continues its remaining time without 
   assert.equal(demo.calls.actions, 1);
 });
 
+test('Advance on a paused opening card ends it and starts the action, as it does unpaused', async () => {
+  const demo = await makeDemo();
+  await demo.client.onCommand({
+    command_id: 'step-paused-advance', mode: 'demonstration', type: 'enter_query', target: 'query',
+    narration: 'Read this step', reasoning: '', evidence: '',
+  });
+  await Promise.resolve();
+  demo.coach.advanceCelebration = () => false;
+  demo.coach.advanceInfo = () => false;
+  demo.adapter.advanceTyping = () => false;
+  demo.clock.advance(2000);
+  demo.coach.setPaused(true);
+  demo.clock.advance(20000);
+  assert.equal(demo.calls.actions, 0);
+
+  demo.coach.onAdvance();
+  assert.equal(demo.coach.paused, false);
+  assert.deepEqual(demo.calls.messages.map(message => message.message_type).filter(Boolean), ['pause', 'resume']);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(demo.calls.actions, 1); // not the 3000ms the opening card had left
+});
+
+test('Advance on an action Pause stopped plays it again at once, Advance pending, then shows the result', async () => {
+  const demo = await makeDemo();
+  let finishControl;
+  demo.adapter.perform = async (_command, _coach, {signal}) => {
+    demo.calls.actions++;
+    await new Promise((resolve, reject) => {
+      finishControl = resolve;
+      signal.addEventListener('abort', () => reject(new DOMException('Demonstration stopped', 'AbortError')), {once: true});
+    });
+    return {type: 'time_range_changed', state_after: {}};
+  };
+  const command = {
+    command_id: 'step-paused-action', mode: 'demonstration', type: 'set_time_range', target: 'time',
+    narration: 'Set the time picker', reasoning: '', evidence: 'The window includes the incident.',
+  };
+  await demo.client.onCommand(command);
+  demo.coach.advanceCelebration = () => false;
+  demo.coach.advanceInfo = () => false;
+  demo.adapter.advanceTyping = () => false;
+  demo.coach.onAdvance(); // Opening card.
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(demo.calls.actions, 1);
+
+  demo.coach.setPaused(true); // The cursor is moving: Pause stops the action.
+  await new Promise(resolve => setImmediate(resolve));
+  demo.coach.onAdvance();
+  assert.equal(demo.coach.paused, false);
+  assert.equal(demo.calls.messages.at(-1).message_type, 'resume');
+  await demo.client.onCommand(command); // The service re-sends its pending command on resume.
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(demo.calls.actions, 2);
+  assert.deepEqual(demo.calls.countdowns, [5000]); // No second opening card.
+  assert.equal(demo.coach.advancePending, true);
+  demo.coach.onAdvance(); // Further presses wait for the action, as they do unpaused.
+  assert.equal(demo.calls.actions, 2);
+
+  finishControl();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(demo.calls.phases, ['result']);
+  assert.equal(demo.coach.advancePending, false);
+});
+
 test('a chart-reading opening stays visible long enough to explain the time-window estimate', async () => {
   const demo = await makeDemo();
   const narration = JSON.parse(fs.readFileSync(new URL('../../learning/scenarios/discover-time-window/playbook.json', import.meta.url), 'utf8'))
