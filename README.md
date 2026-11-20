@@ -57,6 +57,8 @@ The script builds and starts the stack in the background, waits for it to be rea
 
 The [playground manifest](iximiuz/manifest.yaml) runs the same Compose stack on a Docker playground with 4 CPUs, 10 GiB RAM, and a 35 GiB root drive. The rootFS bundles this repository and prebuilt images, so startup does not download the Elastic images. The launcher and Kibana share the playground's HTTPS origin; open the **Lab launcher** tab, which opens in a browser window so it can create the investigation tab.
 
+The startup import of Kibana's baseline data view and dashboards runs in the scenario controller's Python image. It does not require a separate curl image. Most of the rootFS size comes from the bundled Elasticsearch, Kibana, and Logstash images; omitting those would make each playground download them on startup.
+
 To publish a new rootFS and create or update the remote playground:
 
 ```sh

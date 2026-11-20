@@ -100,12 +100,11 @@ services:
     networks: [observability]
 
   kibana-setup:
-    image: curlimages/curl:8.10.1
-    command: ["sh", "/setup/setup.sh"]
+    image: elk-guide-scenario-controller:local
+    pull_policy: never
+    command: ["python", "/app/kibana/setup.py"]
     environment:
       KIBANA_INTERNAL_URL: http://kibana:5601
-    volumes:
-      - ./kibana:/setup:ro
     depends_on:
       kibana:
         condition: service_healthy
@@ -163,6 +162,7 @@ services:
       PORT: "8084"
 
   scenario-controller:
+    image: elk-guide-scenario-controller:local
     build:
       context: .
       dockerfile: scenario-controller/Dockerfile

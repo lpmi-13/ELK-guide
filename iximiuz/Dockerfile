@@ -9,7 +9,7 @@ COPY images.tar /opt/elk-guide/images.tar
 
 RUN <<'EOS'
 set -eu
-for cmd in bash docker python3 curl runuser sysctl; do
+for cmd in bash docker runuser sysctl; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "missing tool: $cmd" >&2; exit 1; }
 done
 docker compose version >/dev/null

@@ -14,11 +14,18 @@ mkdir -p "${build_context}/ELK-guide"
 
 # Copy the working-tree contents of tracked files, including local edits, without
 # writing to .git. Untracked .env, logs, recordings, and caches stay out.
-tar -C "${repo_root}" --null -T <(git -C "${repo_root}" ls-files -z) -cf - \
+tar -C "${repo_root}" --null -T <(
+  while IFS= read -r -d '' path; do
+    if [[ -e "${repo_root}/${path}" || -L "${repo_root}/${path}" ]]; then
+      printf '%s\0' "${path}"
+    fi
+  done < <(git -C "${repo_root}" ls-files -z)
+) -cf - \
   | tar -C "${build_context}/ELK-guide" -xf -
-# This directory is new before the first publish, so include its exact files
-# without adding unrelated untracked files to the image.
-cp -a "${repo_root}/iximiuz" "${build_context}/ELK-guide/iximiuz"
+# Include the current iximiuz scripts without nesting a second copy of the directory.
+cp -a "${repo_root}/iximiuz/." "${build_context}/ELK-guide/iximiuz/"
+# Include the new setup entrypoint in working-tree snapshots before its first commit.
+cp "${repo_root}/kibana/setup.py" "${build_context}/ELK-guide/kibana/setup.py"
 cp "${repo_root}/iximiuz/Dockerfile" "${build_context}/Dockerfile"
 
 echo "Building the Compose images from the publication snapshot..."
