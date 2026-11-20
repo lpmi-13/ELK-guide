@@ -83,12 +83,14 @@ services:
       dockerfile: kibana-gateway/Dockerfile
     restart: unless-stopped
     ports:
-      - "127.0.0.1:5601:5601"
+      - "${KIBANA_GATEWAY_BIND:-127.0.0.1}:5601:5601"
       - "[::1]:5601:5601"
     depends_on:
       kibana:
         condition: service_healthy
       learning-service:
+        condition: service_healthy
+      browser-telemetry:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5601/incident-coach/runtime.json"]
@@ -175,7 +177,7 @@ services:
       KIBANA_EVENT_LOG_RETENTION: ${KIBANA_EVENT_LOG_RETENTION:-7d}
       ELASTICSEARCH_URL: http://elasticsearch:9200
       KIBANA_URL: http://kibana:5601
-      PUBLIC_KIBANA_URL: http://localhost:5601
+      PUBLIC_KIBANA_URL: ${PUBLIC_KIBANA_URL-http://localhost:5601}
       LEARNING_DIR: /app/learning
       KIBANA_SAVED_OBJECTS: /app/kibana/saved-objects.ndjson
       LOG_DIR: /var/log/microservices
@@ -214,6 +216,8 @@ services:
       ELASTICSEARCH_URL: http://elasticsearch:9200
       LOG_DIR: /var/log/microservices
       ALLOWED_ORIGINS: http://localhost:5601,http://127.0.0.1:5601,http://localhost:8090
+      PUBLIC_KIBANA_URL: ${PUBLIC_KIBANA_URL-http://localhost:5601}
+      LAUNCHER_URL: ${PUBLIC_LAUNCHER_URL:-http://localhost:8090/}
     volumes:
       - service-logs:/var/log/microservices
     ports:
@@ -235,16 +239,14 @@ services:
     environment:
       LOG_DIR: /var/log/microservices
       PORT: "8090"
-      KIBANA_URL: http://localhost:5601
-      LEARNING_URL: http://localhost:8091
+      KIBANA_URL: ${TELEMETRY_KIBANA_URL:-http://localhost:5601}
+      LEARNING_URL: ${TELEMETRY_LEARNING_URL:-http://localhost:8091}
     volumes:
       - service-logs:/var/log/microservices
     ports:
       - "127.0.0.1:8090:8090"
       - "[::1]:8090:8090"
     depends_on:
-      kibana-gateway:
-        condition: service_healthy
       kibana-setup:
         condition: service_completed_successfully
       learning-service:

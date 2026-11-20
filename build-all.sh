@@ -2,7 +2,11 @@
 set -euo pipefail
 
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
-docker compose up --build -d --wait
+if [[ "${LAB_PREBUILT:-0}" == "1" ]]; then
+    docker compose up --no-build -d --wait
+else
+    docker compose up --build -d --wait
+fi
 
 # Runs live only in the scenario controller's memory, so whatever a run it no longer knows left
 # behind (an earlier controller's runs, abandoned or completed) can never be reached again: its Kibana

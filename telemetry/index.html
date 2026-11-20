@@ -120,8 +120,8 @@
     </div>
   </dialog>
   <script>
-    const kibanaUrl = __KIBANA_URL__;
-    const learningUrl = __LEARNING_URL__;
+    const kibanaUrl = __KIBANA_URL__ === 'same-origin' ? location.origin : __KIBANA_URL__;
+    const learningUrl = __LEARNING_URL__ === 'same-origin' ? `${location.origin}/incident-coach/learning` : __LEARNING_URL__;
     const coachRuntime = document.querySelector('#coach-runtime');
     const telemetry = document.querySelector('#telemetry');
     const form = document.querySelector('#start-form');

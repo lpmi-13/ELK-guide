@@ -1,0 +1,62 @@
+kind: playground
+name: elk-guide-83d77dbc
+base: docker
+title: ELK Guide
+description: Investigate realistic incidents in Kibana with demonstration, guided practice, and challenge modes.
+categories:
+    - linux
+markdown: |-
+    Investigate production-style incidents in Kibana with a built-in coach.
+
+    Open **Lab launcher**, choose a scenario and mode, and start an investigation. A new browser tab shows preparation progress and opens Kibana when the evidence is ready. The **Terminal** tab is available for inspecting the Docker stack.
+playground:
+    networks:
+        - name: local
+          subnet: 172.16.0.0/24
+    machines:
+        - name: docker-01
+          users:
+            - name: root
+            - name: laborant
+              default: true
+          drives:
+            - source: oci://ghcr.io/lpmi-13/elk-guide-rootfs:v2
+              mount: /
+              size: 35GiB
+          network:
+            interfaces:
+                - network: local
+          resources:
+            cpuCount: 4
+            ramSize: 10GiB
+    tabs:
+        - id: terminal
+          kind: terminal
+          name: Terminal
+          machine: docker-01
+        - id: lab-launcher
+          kind: http-port
+          name: Lab launcher
+          machine: docker-01
+          number: 5601
+          pathRewrite: /launcher/
+          target: window
+    initTasks:
+        init_start_lab:
+            name: init_start_lab
+            machine: docker-01
+            init: true
+            user: root
+            timeout_seconds: 1800
+            run: |
+                set -eu
+                sysctl -w vm.max_map_count=262144
+                runuser -u laborant -- /home/laborant/ELK-guide/iximiuz/start-lab.sh
+    initConditions: {}
+    accessControl:
+        canList:
+            - anyone
+        canRead:
+            - anyone
+        canStart:
+            - anyone

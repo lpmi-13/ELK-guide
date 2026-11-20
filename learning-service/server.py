@@ -321,7 +321,7 @@ def run_investigation_url(manifest):
         separator = "&" if "?" in path else "?"
         path = f"{path}{separator}environment={quote(manifest['run_id'], safe='')}&rangeFrom=now-1h&rangeTo=now"
     prefix = f"/s/{space_id}" if space_id else ""
-    return f"http://localhost:5601{prefix}{path}"
+    return f"{os.getenv('PUBLIC_KIBANA_URL', 'http://localhost:5601').rstrip('/')}{prefix}{path}"
 
 
 def substitute(value, session):

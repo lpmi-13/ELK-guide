@@ -53,6 +53,18 @@ cp .env.example .env
 
 The script builds and starts the stack in the background, waits for it to be ready, removes the Kibana Spaces and data left by earlier lab runs, then prints `Lab ready. Open http://localhost:8090/ in your browser.` If you prefer attached logs, `docker compose up --build` prints the same URL when the browser service starts.
 
+### iximiuz Labs playground
+
+The [playground manifest](iximiuz/manifest.yaml) runs the same Compose stack on a Docker playground with 4 CPUs, 10 GiB RAM, and a 35 GiB root drive. The rootFS bundles this repository and prebuilt images, so startup does not download the Elastic images. The launcher and Kibana share the playground's HTTPS origin; open the **Lab launcher** tab, which opens in a browser window so it can create the investigation tab.
+
+To publish a new rootFS and create or update the remote playground:
+
+```sh
+bash iximiuz/publish-rootfs-image.sh
+```
+
+This reads the current `vN` tag from `iximiuz/versions.sh`, builds and pushes `v(N+1)` to `ghcr.io/lpmi-13/elk-guide-rootfs`, then updates the checked-in tag and manifest. If the remote playground update fails after the push, run `bash iximiuz/publish-rootfs-image.sh --sync-remote` to retry without rebuilding. An explicit tag can be passed as the first argument. The GHCR package must be public before iximiuz can pull its rootFS; after the first push, change the package visibility in GitHub Packages, then start the playground from its iximiuz page.
+
 Open <http://localhost:8090>, select a scenario, choose an assistance mode, accept or change the suggested scenario key, and start the run. A preparation tab opens immediately and moves into the connected Kibana investigation only after the run reaches `READY`; if the tab cannot be opened, the launcher reveals a manual fallback link. No manual Kibana content creation is required.
 
 Learners may change ephemeral view state—time, queries, filters, controls, sorting, selections, and drilldowns—but every curriculum workflow is read-only with respect to saved Kibana content. Cluster administration, Dev Tools, content authoring, and system repair are outside the learner scope.
