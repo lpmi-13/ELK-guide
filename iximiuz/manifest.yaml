@@ -20,7 +20,7 @@ playground:
             - name: laborant
               default: true
           drives:
-            - source: oci://ghcr.io/lpmi-13/elk-guide-rootfs:v4
+            - source: oci://ghcr.io/lpmi-13/elk-guide-rootfs:v5
               mount: /
               size: 35GiB
           network:
