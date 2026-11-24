@@ -266,6 +266,8 @@ globalThis.KibanaApplicationAdapters.push({
       await host.pointAt(row, coach, timingScale, signal, 'Read this row’s values together.', {showClick: false});
       return {type: 'field_inspected', details: {...command.value}, state_after: {...command.value}};
     }
+    // A column, and the sort, belong to the documents table: from Field statistics, switch back first.
+    if (['add_column', 'remove_column', 'sort_column'].includes(command.type)) await this.showDocuments(host, coach, timingScale, signal);
     if (command.type === 'sort_column') return this.sortColumn(command, host, coach, timingScale, signal);
     if (command.type === 'filter_top_value') return this.filterTopValue(command, host, coach, timingScale, signal);
     if (command.type === 'set_filter_inclusion') return this.setFilterInclusion(command, host, coach, timingScale, signal);

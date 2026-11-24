@@ -2,7 +2,7 @@
   "schema_version": 2,
   "id": "auth-rejection-surge",
   "version": 3,
-  "title": "A jump in rejected sign-ins",
+  "title": "An increase in rejected sign-ins",
   "type": "investigation",
   "classification": "core",
   "difficulty": 1,

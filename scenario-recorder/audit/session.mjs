@@ -247,7 +247,10 @@ export class LearnerTab {
     if (message.type === 'filter_field_present' && !state.page.pills.some(text => text.includes(`${value?.field}: exists`))) problems.push(`no ${value?.field}: exists pill`);
     if (message.type === 'expand_document' && !state.page.documentOpen) problems.push('no document is open');
     if (message.type === 'sort_column' && value?.field && !url.includes(`'${value.field}',${value.direction || 'asc'}`) && !url.includes(`${value.field},${value.direction || 'asc'}`)) problems.push(`the table is not sorted by ${value.field}`);
-    if (['enter_kql', 'add_filter', 'filter_top_value', 'set_filter_inclusion', 'filter_field_present'].includes(message.type) && state.page.noResults) problems.push('the search the step ran shows no results');
+    // A boolean check that should find nothing ("this reason, and not this client") declares its empty result
+    // as the evidence (`empty_result_expected`, in every mode); any other search that ends empty is broken.
+    if (['enter_kql', 'add_filter', 'filter_top_value', 'set_filter_inclusion', 'filter_field_present'].includes(message.type) && state.page.noResults
+      && !message.empty_result_expected) problems.push('the search the step ran shows no results');
     return problems;
   }
 

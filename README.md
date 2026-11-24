@@ -42,6 +42,8 @@ The interactive experience runs directly in the learner's Kibana tab. A local sa
 
 The scenario controller writes an immutable manifest for every run. The launcher turns a 10–40 character scenario key into the manifest's numeric seed; reusing the exact key reproduces the allowed variation, while a unique run ID prevents historical evidence from leaking into a replay. The launcher generates clean three-word examples, but user-entered keys may contain any characters. Existing automation can continue to supply numeric seeds directly.
 
+The launcher prepares the selected scenario ahead of Start, with the key on screen: a run doesn't depend on the mode, so Start only attaches the session, and Kibana opens about a second later instead of after the whole preparation. It prepares one run at a time, after a short pause on a card or key, and only while its tab is visible; choosing another card or key, or closing the tab, discards the run it was holding (`POST /api/runs/<id>/discard`, which only touches runs no session has claimed). A run's incident is timed from when it was created, so the learning service hands out a prepared run only within `PREPARED_RUN_MAX_AGE_SECONDS` (180) and deletes it after that; the launcher replaces one that is about to expire, a few times at most. At most `MAX_PREPARED_RUNS` (2) wait at once. Only scenarios that seed their own data and saved objects are prepared ahead; one with a live fault or a managed resource (an alert rule) is prepared when it is started, as before.
+
 ## Run the lab
 
 Docker Engine with Compose v2 and roughly 3 GB of available memory are required.

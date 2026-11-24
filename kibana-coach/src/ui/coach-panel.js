@@ -5,6 +5,7 @@ class IncidentCoachPanel {
     this.root.innerHTML = `<style>${IncidentCoachPanel.styles}</style>
       <aside class="panel" aria-label="Incident coach" hidden>
         <header title="Drag to move the coach"><span class="live-dot"></span><strong>Incident coach</strong><button id="stop" title="Stop automation">Stop</button><button id="fold" type="button" hidden aria-label="Collapse coach" title="Collapse coach">${IncidentCoachPanel.foldIcons.collapse}</button></header>
+        <div class="actions"><button id="pause">Pause</button><button id="advance" title="Complete this step now and continue">Advance</button><button id="incident-info" title="Review the initial incident briefing">Incident info</button><button id="hint">Hint</button><button id="demonstrate">Show me</button><button id="review-feedback" hidden>Review feedback</button></div>
         <div class="progress" aria-hidden="true"><span></span></div>
         <div class="step-line"><h2 id="objective"></h2><p id="mode"></p></div>
         <section id="stage" aria-live="polite">
@@ -15,7 +16,6 @@ class IncidentCoachPanel {
           <div id="stage-actions" class="stage-actions" hidden></div>
           <div id="countdown" class="countdown" aria-hidden="true" hidden><span></span></div>
         </section>
-        <div class="actions"><button id="pause">Pause</button><button id="advance" title="Complete this step now and continue">Advance</button><button id="incident-info" title="Review the initial incident briefing">Incident info</button><button id="hint">Hint</button><button id="demonstrate">Show me</button><button id="review-feedback" hidden>Review feedback</button></div>
         <section id="hint-card" aria-live="polite" hidden><span id="hint-label"></span><p id="hint-text"></p></section>
         <form id="diagnosis" hidden>
           <label>Faulty service<input name="service" required></label>
@@ -50,6 +50,10 @@ class IncidentCoachPanel {
     this.evidenceFields = [];
     this.evidenceTargets = [];
     this.evidenceHighlights = [];
+    // Fields the card on screen talks about, and the field its step acts on: their result-table columns
+    // are data the learner reads, so the card keeps off them (header and all) without ringing them.
+    this.namedFields = [];
+    this.stepFields = [];
     // A guided step starts undimmed; the spotlight is only revealed on demonstration or a hint.
     this.spotlightRevealed = false;
     // New evidence is confirmed inside the panel; the next step is held until it finishes.
@@ -76,9 +80,24 @@ class IncidentCoachPanel {
       const target = this.activeTarget?.isConnected ? this.activeTarget : null;
       // Nothing to dodge — no highlighted control and no open doc-viewer flyout — so leave the
       // card where it rests rather than nudging it for every stray scroll or mutation.
-      if (!target && !this.findFlyout() && !this.findPopovers().length && !this.evidenceField && !this.evidenceFields.length && !this.evidenceTargets.length && !this.coversQueryBar() && event?.type !== 'resize') return;
+      if (!target && !this.findFlyout() && !this.findPopovers().length && !this.watchingColumns() && !this.evidenceTargets.length && !this.coversQueryBar() && event?.type !== 'resize') return;
+      // Highlights follow the page at once, whatever the card does.
       if (target && this.spotlightRevealed) this.spotlight.show(target);
       this.refreshEvidenceHighlights();
+      // A popover or flyout that is opening grows over several frames (EUI animates both). Placing the
+      // card against a half-drawn one makes it hop twice, so wait until its size holds still for a
+      // moment; a few deferrals at most, so a panel that never settles is still dodged.
+      const layers = [...this.findPopovers(), this.findFlyout()].filter(Boolean)
+        .map(rect => [rect.left, rect.top, rect.width, rect.height].map(value => Math.round(value / 6)).join(',')).join(';');
+      if (layers !== this.layerSignature && (this.layerDeferrals || 0) < 4) {
+        this.layerSignature = layers;
+        this.layerDeferrals = (this.layerDeferrals || 0) + 1;
+        clearTimeout(this.layerTimer);
+        this.layerTimer = setTimeout(() => this.reposition({type: 'settled'}), 140);
+        if (layers) return;
+      } else {
+        this.layerDeferrals = 0;
+      }
       this.placeAwayFrom(target);
     };
     this.reposition = event => {
@@ -91,10 +110,10 @@ class IncidentCoachPanel {
         this.repositionFrame = 0;
         const event = this.placementEvent;
         this.placementEvent = null;
-        if (this.mutationPlacement) {
+        if (this.mutationPlacement && event?.type !== 'settled') {
           this.mutationPlacement = false;
           const open = !!this.findFlyout();
-          const watching = this.activeTarget?.isConnected || this.findPopovers().length || this.evidenceField || this.evidenceFields.length || this.evidenceTargets.length || this.coversQueryBar();
+          const watching = this.activeTarget?.isConnected || this.findPopovers().length || this.watchingColumns() || this.evidenceTargets.length || this.coversQueryBar();
           if (open === this.flyoutOpen && !watching && event?.type !== 'resize') return;
           this.flyoutOpen = open;
         }
@@ -211,6 +230,7 @@ class IncidentCoachPanel {
     this.activeTarget = target;
     this.evidenceField = null;
     this.clearEvidenceHighlights();
+    this.stepFields = IncidentCoachPanel.commandFields(command);
     this.currentCommand = command;
     // A challenge names no steps and shows no progress: the route is the learner's to find, and the
     // debrief scores it afterwards.
@@ -605,15 +625,8 @@ class IncidentCoachPanel {
       const [finding, support] = IncidentCoachPanel.splitFinding(command?.evidence || 'Step complete.');
       this.renderPhase({eyebrow: 'What this shows', headline: finding, detail: support, why: command?.mode === 'guided' ? command.reasoning : ''});
       this.resetCountdown();
-      this.showEvidenceHighlights(evidence?.columns ?? command?.learning_focus ?? [], evidence?.targets || []);
+      this.showEvidenceHighlights(evidence?.columns ?? command?.learning_focus ?? [], evidence?.targets || [], evidence?.fields || []);
       this.revealEvidence();
-      // The added column is the evidence to read next. Return the coach to the left before the
-      // browser paints the refreshed table, then keep that column clear if the user moves the coach.
-      if (this.evidenceField && !this.dragging) {
-        this.pos = {left: 18, top: 72};
-        this.applyPosition();
-        requestAnimationFrame(() => this.placeAwayFrom(null));
-      }
     }
   }
 
@@ -644,7 +657,7 @@ class IncidentCoachPanel {
   // A goal that starts by reading the page rings what to read while its one line is on screen. The
   // action phase clears the rings when the coach starts acting.
   showGoalFocus(evidence) {
-    this.showEvidenceHighlights(evidence?.columns || [], evidence?.targets || []);
+    this.showEvidenceHighlights(evidence?.columns || [], evidence?.targets || [], evidence?.fields || []);
     requestAnimationFrame(() => this.placeAwayFrom(null));
   }
 
@@ -661,6 +674,19 @@ class IncidentCoachPanel {
     advance.title = 'Continue to the next step';
     advance.classList.add('primary');
     requestAnimationFrame(() => this.placeAwayFrom(null));
+    this.seekEvidence();
+  }
+
+  // Reading a result means looking from the card to its rings and back, so once the page has settled
+  // (the rings scrolled into view) the card moves next to them when it sits far away. It moves only for
+  // a long look across the screen: a card that hops for every few pixels takes the Continue button with it.
+  seekEvidence(delay = 450) {
+    clearTimeout(this.seekTimer);
+    this.seekTimer = setTimeout(() => {
+      if (this.phase !== 'learning' || this.panel.hidden) return;
+      this.seekFocus = true;
+      try { this.placeAwayFrom(null); } finally { this.seekFocus = false; }
+    }, delay);
   }
 
   setPaused(paused, notify = true) {
@@ -869,9 +895,11 @@ class IncidentCoachPanel {
 
   // A column being read runs from its header to the bottom of the view, so the card must stay off all
   // of it: the column just added, and every result-table column a result card rings.
-  evidenceColumnRects() {
+  // A field the card or its step names (a pinned row in the document, a Top values list, the field the
+  // step filters on) is also a result-table column a learner reads down to compare rows, so that whole
+  // column stays clear too, though only the evidence itself is ringed.
+  evidenceColumnRects(fields = this.protectedFields()) {
     const headers = [...document.querySelectorAll("[role='columnheader'], th")];
-    const fields = [...new Set([this.evidenceField, ...(this.evidenceFields || [])].filter(Boolean))];
     return fields.map(field => headers.find(node => node.textContent?.trim() === field)
       || headers.find(node => node.textContent?.trim().includes(field)))
       .filter(Boolean)
@@ -880,19 +908,42 @@ class IncidentCoachPanel {
       .map(rect => ({left: rect.left - 24, right: rect.right + 24, top: rect.top - 24, bottom: innerHeight}));
   }
 
+  // The ringed columns (and the column just added), which are what a result card points at.
+  ringedFields() {
+    return [...new Set([this.evidenceField, ...(this.evidenceFields || [])].filter(Boolean))];
+  }
+
+  protectedFields() {
+    return [...new Set([...this.ringedFields(), ...(this.namedFields || []), ...(this.stepFields || [])].filter(Boolean))];
+  }
+
+  watchingColumns() {
+    return this.protectedFields().length > 0;
+  }
+
+  // The field names a command acts on: {field} or {fields: [...]} in its value.
+  static commandFields(command) {
+    const value = command?.value;
+    if (!value || typeof value !== 'object') return [];
+    return [value.field, ...(Array.isArray(value.fields) ? value.fields : [])].filter(field => typeof field === 'string' && field && field !== '@timestamp');
+  }
+
   clearEvidenceHighlights() {
     for (const highlight of this.evidenceHighlights || []) highlight.remove();
     this.evidenceHighlights = [];
     this.evidenceFields = [];
     this.evidenceTargets = [];
+    this.namedFields = [];
   }
 
   // Ring the evidence a result card talks about: result-table columns (`fields`, drawn down to the
-  // bottom of the view) and page elements (`targets`, functions returning the live element).
-  showEvidenceHighlights(fields, targets = []) {
+  // bottom of the view) and page elements (`targets`, functions returning the live element). `named`
+  // are the fields the card talks about, whose columns the card keeps clear of without ringing them.
+  showEvidenceHighlights(fields, targets = [], named = []) {
     this.clearEvidenceHighlights();
     this.evidenceFields = Array.isArray(fields) ? fields : [];
     this.evidenceTargets = targets.filter(Boolean);
+    this.namedFields = Array.isArray(named) ? named.filter(field => typeof field === 'string' && field) : [];
     for (let index = 0; index < this.evidenceFields.length + this.evidenceTargets.length; index += 1) {
       const highlight = document.createElement('div');
       // On a busy page the eye needs a cue to find the ring, so each one arrives once (`.entering`):
@@ -1037,8 +1088,9 @@ class IncidentCoachPanel {
   }
 
   // Stay put unless the current spot would actually cover the highlighted control or the open
-  // doc-viewer flyout (or fell off-screen). Only then glide to the least-disruptive clear corner.
-  // Needless hops are jarring.
+  // doc-viewer flyout (or fell off-screen). Only then glide to the least-disruptive clear spot: a screen
+  // corner, or a spot right beside what the step is about, nearest first, so the learner reads the card
+  // and the page without looking across the whole screen. Needless hops are jarring.
   placeAwayFrom(target) {
     if (this.panel.hidden || this.dragging || this.keepPlace) return;
     // A null pos means the panel was just revealed: snap to the resting spot instead of gliding
@@ -1051,6 +1103,10 @@ class IncidentCoachPanel {
     const height = Math.min(panelRect.height, innerHeight - topMargin - margin);
     const maxLeft = Math.max(margin, innerWidth - width - margin);
     const maxTop = Math.max(topMargin, innerHeight - height - margin);
+    const clamp = position => ({
+      left: Math.round(Math.max(margin, Math.min(position.left, maxLeft))),
+      top: Math.round(Math.max(topMargin, Math.min(position.top, maxTop))),
+    });
     // Kibana's query bar row holds the search, filters and time picker every investigation starts
     // from, so the card never rests over it: with nothing else to dodge (a challenge has no step
     // target) it sits just below it on the right rather than covering the time picker.
@@ -1071,10 +1127,18 @@ class IncidentCoachPanel {
     const lead = 64;
     // Everything the card must stay off: the highlighted control (with its lead ring) and, while the
     // expanded-document viewer is open, the flyout docked on the right. Overlap is summed over all of
-    // them, so an open flyout on the right pushes the card to a clear corner on the left.
+    // them, so an open flyout on the right pushes the card to a clear spot on the left.
     const guards = [];
+    // What the card is about, which it should sit beside: the control in use, the ringed evidence and
+    // the ringed columns' headers (each with the keep-out ring around it). `data` is the part of it that
+    // is data to read (a document's rows, a table column, a Top values list, a flyout), as opposed to a
+    // control such as a filter pill or the hit count: only data is worth moving the card for unasked.
+    const focus = [];
+    const data = [];
     if (targetRect && targetRect.width) {
-      guards.push({left: targetRect.left - lead, right: targetRect.right + lead, top: targetRect.top - lead, bottom: targetRect.bottom + lead});
+      const guard = {left: targetRect.left - lead, right: targetRect.right + lead, top: targetRect.top - lead, bottom: targetRect.bottom + lead};
+      guards.push(guard);
+      focus.push(guard);
     }
     // When every corner covers something, what a step is about comes first: the query bar is the one
     // keep-out the card may sit over, so it only decides between corners that cover the rest equally.
@@ -1084,13 +1148,30 @@ class IncidentCoachPanel {
       guards.push({left: flyoutRect.left, right: flyoutRect.right, top: flyoutRect.top, bottom: flyoutRect.bottom});
     }
     guards.push(...this.evidenceColumnRects());
+    for (const column of this.evidenceColumnRects(this.ringedFields())) {
+      const box = {...column, bottom: Math.min(column.bottom, column.top + 120)};
+      focus.push(box);
+      data.push(box);
+    }
     const pad = 16;
-    for (const rect of this.evidenceTargetRects().filter(Boolean)) {
-      guards.push({left: rect.left - pad, right: rect.right + pad, top: rect.top - pad, bottom: rect.bottom + pad});
+    const rings = this.evidenceTargetRects();
+    for (const [index, rect] of rings.entries()) {
+      if (!rect) continue;
+      const guard = {left: rect.left - pad, right: rect.right + pad, top: rect.top - pad, bottom: rect.bottom + pad};
+      guards.push(guard);
+      focus.push(guard);
+      if (this.isDataEvidence(index)) data.push(guard);
     }
+    // An open popover (a field's Top values, a pill's menu) is what the learner is working in: kept clear,
+    // and somewhere to sit beside.
     for (const rect of this.findPopovers()) {
-      guards.push({left: rect.left - pad, right: rect.right + pad, top: rect.top - pad, bottom: rect.bottom + pad});
+      const guard = {left: rect.left - pad, right: rect.right + pad, top: rect.top - pad, bottom: rect.bottom + pad};
+      guards.push(guard);
+      focus.push(guard);
     }
+    // An open flyout holds what the step is about (the expanded document, a span's details), so with
+    // nothing more precise to sit beside, the card sits beside the flyout rather than across the screen.
+    if (!focus.length && flyoutRect) focus.push({left: flyoutRect.left, right: flyoutRect.right, top: flyoutRect.top, bottom: flyoutRect.bottom});
     // How much of each keep-out a position hides, as a share of that keep-out: hiding all of a thin
     // row is far worse than clipping the edge of a large chart, though it covers fewer pixels.
     const covered = (position, counted) => {
@@ -1106,30 +1187,68 @@ class IncidentCoachPanel {
     };
     const coveredEvidence = position => covered(position, guard => !guard.yields);
     const coveredBar = position => covered(position, guard => guard.yields);
-    // Sticky: keep the current placement when it isn't covering a keep-out and still fits.
+    // The gap between the card and the nearest thing it is about (0 when touching); 0 with no focus.
+    const gapTo = position => focus.length ? Math.min(...focus.map(box => Math.hypot(
+      Math.max(0, box.left - (position.left + width), position.left - box.right),
+      Math.max(0, box.top - (position.top + height), position.top - box.bottom)))) : 0;
+    // Spots right beside each focus box (and beside all of them together), and beside every other
+    // keep-out, so getting out of the way can be a short sidestep rather than a trip to a far corner: to
+    // its right or left, top edges level or centred, or above or below it, left edges level or centred.
+    const beside = [];
+    const boxes = [...new Set([...focus, ...guards.filter(guard => !guard.yields)])];
+    if (focus.length > 1) boxes.push({
+      left: Math.min(...focus.map(box => box.left)), right: Math.max(...focus.map(box => box.right)),
+      top: Math.min(...focus.map(box => box.top)), bottom: Math.max(...focus.map(box => box.bottom)),
+    });
+    const gap = 10;
+    for (const box of boxes) {
+      const middleY = (box.top + box.bottom) / 2 - height / 2;
+      const middleX = (box.left + box.right) / 2 - width / 2;
+      for (const left of [box.right + gap, box.left - width - gap]) beside.push({left, top: box.top}, {left, top: middleY});
+      for (const top of [box.bottom + gap, box.top - height - gap]) beside.push({left: box.left, top}, {left: middleX, top});
+    }
+    const candidates = [...corners, ...beside.map(clamp)];
+    const rank = position => ({
+      position,
+      evidence: coveredEvidence(position),
+      bar: coveredBar(position),
+      near: gapTo(position),
+      move: this.pos ? Math.hypot(position.left - this.pos.left, position.top - this.pos.top) : 0,
+      away: targetRect ? Math.hypot(position.left + width / 2 - (targetRect.left + targetRect.width / 2), position.top + height / 2 - (targetRect.top + targetRect.height / 2)) : 0,
+    });
+    // Least of what the step is about hidden, then least of the query bar. Then, while the card explains
+    // what is on the page (a result, or an open flyout's contents), the nearest spot, a short hop breaking
+    // near-ties. While the coach is acting it only gets out of the way: the shortest hop, which keeps
+    // Advance close to where the pointer last pressed it (or, for a first placement, the spot farthest
+    // from the control).
+    const reading = this.phase === 'learning' || this.seekFocus || Boolean(flyoutRect);
+    const order = (a, b) => a.evidence - b.evidence || a.bar - b.bar
+      || (focus.length && reading ? (a.near + a.move * 0.25) - (b.near + b.move * 0.25)
+        : this.pos ? a.move - b.move : b.away - a.away);
+    // Sticky: keep the current placement when it isn't covering a keep-out and still fits — unless a
+    // result card (seekFocus) sits far from its evidence and a clear spot beside it saves a long look.
     if (this.pos) {
       const fits = this.pos.left >= margin - 1 && this.pos.top >= topMargin - 1
         && this.pos.left <= maxLeft + 1 && this.pos.top <= maxTop + 1;
-      if (fits && coveredEvidence(this.pos) === 0 && coveredBar(this.pos) === 0) return;
+      if (fits && coveredEvidence(this.pos) === 0 && coveredBar(this.pos) === 0) {
+        if (!this.seekFocus || !data.length) return;
+        const gapToData = position => Math.min(...data.map(box => Math.hypot(
+          Math.max(0, box.left - (position.left + width), position.left - box.right),
+          Math.max(0, box.top - (position.top + height), position.top - box.bottom))));
+        const nearest = candidates.map(rank).filter(item => item.evidence === 0 && item.bar === 0)
+          .map(item => ({...item, near: gapToData(item.position)})).sort(order)[0];
+        if (!nearest || gapToData(this.pos) - nearest.near < IncidentCoachPanel.seekDistance) return;
+        this.pos = nearest.position;
+        this.applyPosition();
+        return;
+      }
     } else if (!guards.length) {
       this.pos = {left: maxLeft, top: topMargin};
       this.applyPosition(firstPlacement);
       return;
     }
-    const distTo = position => targetRect
-      ? Math.hypot(position.left + width / 2 - (targetRect.left + targetRect.width / 2), position.top + height / 2 - (targetRect.top + targetRect.height / 2))
-      : 0;
-    const ranked = corners.map(position => ({
-      position,
-      evidence: coveredEvidence(position),
-      bar: coveredBar(position),
-      move: this.pos ? Math.hypot(position.left - this.pos.left, position.top - this.pos.top) : 0,
-      away: distTo(position),
-    }));
-    // Least of what the step is about hidden, then least of the query bar, then (moving) the shortest
-    // hop, else the corner farthest from the control.
-    ranked.sort((a, b) => a.evidence - b.evidence || a.bar - b.bar || (this.pos ? a.move - b.move : b.away - a.away));
-    // Even the best corner covers what the step is about. That matters more than the reasoning beneath
+    const ranked = candidates.map(rank).sort(order);
+    // Even the best spot covers what the step is about. That matters more than the reasoning beneath
     // the finding, so try again with the shorter card; the learner can still open the reasoning.
     if (ranked[0].evidence > 0 && this.foldReasoning()) {
       this.placeAwayFrom(target);
@@ -1137,6 +1256,18 @@ class IncidentCoachPanel {
     }
     this.pos = {left: Math.round(ranked[0].position.left), top: Math.round(ranked[0].position.top)};
     this.applyPosition(firstPlacement);
+  }
+
+  // How much nearer (px) a result card must get to its evidence before it leaves a clear spot for one
+  // beside the evidence.
+  static seekDistance = 240;
+
+  // Whether a ringed element is data the learner reads (a document's rows, a result row or cell, a Top
+  // values list, a Field statistics row, anything in a flyout) rather than a control (a filter pill, the
+  // query bar, the hit count, the histogram).
+  isDataEvidence(index) {
+    const element = this.evidenceTargets?.[index]?.();
+    return Boolean(element?.closest?.("[role='row'], [role='gridcell'], .euiFlyout, [data-test-subj='docViewerFlyout'], .euiPopover__panel, [data-popover-panel], [data-test-subj~='dataVisualizerTable'], [data-test-subj^='dataVisualizerRow']"));
   }
 
   // `instant` suppresses the panel's left/top transition for one commit so a freshly revealed panel
@@ -1282,6 +1413,8 @@ class IncidentCoachPanel {
   }
 
   stop() {
+    clearTimeout(this.seekTimer);
+    clearTimeout(this.layerTimer);
     this.stopObserving();
     this.clearHint();
     this.briefing.close();
@@ -1329,7 +1462,7 @@ class IncidentCoachPanel {
     button { border:1px solid #8293a3;border-radius:5px;background:#f5f7f9;padding:6px 9px;cursor:pointer; } button:hover,button:focus-visible { outline:2px solid #006bb4;outline-offset:1px; }
     .panel.collapsed { width:auto;padding:10px 12px 10px 16px; } .panel.collapsed > :not(header) { display:none!important; }
     #fold { display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;color:#536170; } #fold:hover { color:#17212b;background:#eef3f7; } #fold svg { width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round; }
-    #stop { color:#a32b1c;border-color:#d77d72; } #advance { margin-left:auto; } #advance.primary { background:#006bb4;border-color:#006bb4;color:#fff;font-weight:600;padding:6px 14px; } #advance:disabled { opacity:.7;cursor:wait; } .actions { display:flex; gap:7px; margin-top:12px; }
+    #stop { color:#a32b1c;border-color:#d77d72; } #advance { margin-left:auto;min-width:7.5em; } #advance.primary { background:#006bb4;border-color:#006bb4;color:#fff;font-weight:600;padding:6px 14px; } #advance:disabled { opacity:.7;cursor:wait; } .actions { display:flex; gap:7px; margin-top:12px; } .actions:not(:has(> :not([hidden]))) { display:none; }
     #hint-card { margin-top:14px;padding:13px 16px 14px;border:1px solid #b8dcea;border-left:4px solid #0874a8;border-radius:9px;background:#f0f8fc;box-shadow:0 4px 14px #0874a812; }
     #hint-label { display:block;color:#08638d;font:700 11px/1.3 system-ui,sans-serif;letter-spacing:.09em;text-transform:uppercase; }
     #hint-text { margin:6px 0 0;color:#173d53;font:500 15px/1.5 'Segoe UI',system-ui,sans-serif;letter-spacing:-.005em;white-space:pre-line; }

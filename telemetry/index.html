@@ -8,16 +8,16 @@
   <link rel="alternate icon" type="image/png" href="/favicon.png">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <style>
-    :root { color-scheme: dark; font: 15px system-ui, sans-serif; background: #0d1721; color: #eef5fb; }
+    :root { color-scheme: dark; font: 17px/1.5 system-ui, sans-serif; background: #0d1721; color: #eef5fb; }
     body { max-width: 1040px; margin: 0 auto; padding: 42px 24px 80px; }
-    header { display:flex;align-items:center;gap:18px;margin-bottom:34px; } header h1 { font-size:22px;margin:0;flex:1; }
+    header { display:flex;align-items:center;gap:18px;margin-bottom:34px; } header h1 { font-size:24px;margin:0;flex:1; }
     .connection-statuses { display:flex;align-items:center;gap:12px; }
-    .connection-status { font-size:13px; }
+    .connection-status { font-size:15px; }
     #coach-runtime { color:#f5b342; } #coach-runtime.online { color:#43d7a0; } #coach-runtime.error { color:#ff8878; }
     #telemetry { color:#f5b342; } #telemetry.online { color:#43d7a0; }
-    main { display:grid;grid-template-columns:minmax(0,580px);justify-content:center;gap:24px; }
+    main { display:grid;grid-template-columns:minmax(0,700px);justify-content:center;gap:24px; }
     main > section { background:#142331;border:1px solid #2e4559;border-radius:12px;padding:24px;box-shadow:0 14px 40px #0003; }
-    h2 { margin-top:0;font-size:20px; } p { line-height:1.55;color:#c6d4df; } label { display:block;font-weight:650;margin-top:14px; }
+    h2 { margin-top:0;font-size:22px; } p { line-height:1.55;color:#c6d4df; } label { display:block;font-weight:650;margin-top:14px; }
     input,select { width:100%;box-sizing:border-box;margin-top:5px;padding:9px;border:1px solid #668096;border-radius:5px;background:#0c1822;color:#fff;font:inherit; }
     .select-control { display:block;position:relative;margin-top:5px; }
     .select-control select { appearance:none;-webkit-appearance:none;margin-top:0;padding-right:42px; }
@@ -30,12 +30,12 @@
     .select-option { width:100%;box-sizing:border-box;padding:8px 9px;color:#eef5fb;font-weight:400;line-height:1.2;cursor:pointer; }
     .select-option[aria-selected="true"] { color:#fff;font-weight:650; }
     .select-option.active { background:#1b78b5;color:#fff; }
-    button,a.button { display:inline-block;margin-top:18px;padding:10px 14px;border:0;border-radius:6px;background:#1b78b5;color:white;font-weight:750;text-decoration:none;cursor:pointer; }
+    button,a.button { display:inline-block;margin-top:18px;padding:10px 14px;border:0;border-radius:6px;background:#1b78b5;color:white;font:inherit;font-size:16px;font-weight:700;text-decoration:none;cursor:pointer; }
     button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible { outline:3px solid #ffb000;outline-offset:2px; }
-    button[disabled] { opacity:.55;cursor:wait; } .muted { font-size:13px;color:#90a5b6; }
+    button[disabled] { opacity:.55;cursor:not-allowed; } .muted { font-size:15px;color:#9fb2c1; }
     .field-row { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end; }
     .field-row button { margin-top:5px;padding:9px 12px;border:1px solid #668096;background:#203447;white-space:nowrap; }
-    .field-help { margin:6px 0 0;font-size:13px;color:#90a5b6; }
+    .field-help { margin:6px 0 0;font-size:15px;color:#9fb2c1; }
     #launch-status { margin:14px 0 0;color:#c6d4df; }
     #launch-status[hidden] { display:none; }
     #launch-status a { color:#78c7ff; }
@@ -51,13 +51,20 @@
     button.dialog-close { margin:0;padding:2px 8px;background:transparent;color:#c6d4df;font-size:26px;font-weight:400;line-height:1; }
     button.dialog-close:hover { color:#fff;background:#203447; }
     .dialog-actions { display:flex;justify-content:flex-end; }
-    .scenario-catalog { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:16px 0;min-height:390px;max-height:390px;overflow:auto;padding-right:4px; }
-    .scenario-catalog .catalog-msg { grid-column:1/-1;align-self:center;margin:0;text-align:center;color:#90a5b6; }
-    .scenario-card { display:block;width:100%;margin:0;padding:14px;text-align:left;border:1px solid #3d566b;border-radius:8px;background:#10202e;color:#eef5fb; }
-    .scenario-card:hover:not(:disabled),.scenario-card.selected { border-color:#43d7a0;box-shadow:inset 0 0 0 1px #43d7a0; }
-    .scenario-card:disabled { opacity:.55;cursor:not-allowed; }
-    .scenario-card strong,.scenario-card span { display:block; }.scenario-card span { margin-top:5px;color:#b8c8d4;font-size:12px;line-height:1.4; }
-    .scenario-card .meta { color:#76cdb0; }.scenario-card .unavailable { color:#ffad9f; }
+    .visually-hidden { position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0; }
+    /* Fixed height (not min/max) so the form below never jumps while the catalog loads. */
+    .scenario-catalog { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;height:clamp(380px,56vh,560px);margin:16px 0;overflow:auto;padding:3px 6px 3px 3px; }
+    .scenario-catalog .catalog-msg { grid-column:1/-1;align-self:center;margin:0;text-align:center;color:#9fb2c1; }
+    /* A card is a column: the title sits at the top, the green details line at the bottom, and only the
+       brief between them varies in height (cards in a row stretch to the tallest). */
+    .scenario-card { position:relative;display:flex;flex-direction:column;gap:6px;box-sizing:border-box;margin:0;padding:15px 16px;border:1px solid #3d566b;border-radius:8px;background:#10202e;color:#eef5fb;font-weight:400;cursor:pointer; }
+    .scenario-card:hover:not(.disabled),.scenario-card:has(input:checked) { border-color:#43d7a0;box-shadow:inset 0 0 0 1px #43d7a0; }
+    .scenario-card:has(input:focus-visible) { outline:3px solid #ffb000;outline-offset:2px; }
+    .scenario-card.disabled { cursor:not-allowed; } .scenario-card.disabled > :not(.unavailable) { opacity:.6; }
+    .scenario-card strong { font-size:18px;line-height:1.3;font-weight:700; }
+    .scenario-card .brief { color:#c6d4df;font-size:16px;line-height:1.45; }
+    .scenario-card .meta { margin-top:auto;padding-top:6px;color:#76cdb0;font-size:15px;line-height:1.4; }
+    .scenario-card .unavailable { color:#ffad9f;font-size:15px;line-height:1.4; }
     @media(max-width:760px){
       body{padding:22px 14px}
       header{display:block;margin-bottom:24px}
@@ -87,7 +94,7 @@
       </div>
       <p>Pick a production problem and investigate it in Kibana. Watch a demonstration, get guided practice, or try a challenge. You only read data here, so nothing you do can change it.</p>
       <form id="start-form">
-        <div id="scenario-catalog" class="scenario-catalog" role="listbox" aria-label="Available scenarios" aria-live="polite"><p class="catalog-msg">Loading scenarios…</p></div>
+        <div id="scenario-catalog" class="scenario-catalog" role="radiogroup" aria-label="Available scenarios"><p class="catalog-msg" role="status">Loading scenarios…</p></div>
         <label id="mode-label" for="mode">Assistance mode</label>
         <span class="select-control">
           <select id="mode"><option value="demonstration" selected>Demonstration</option><option value="guided">Guided practice</option><option value="challenge">Challenge</option></select>
@@ -146,6 +153,7 @@
     function catalogMessage(text) {
       const message = document.createElement('p');
       message.className = 'catalog-msg';
+      message.setAttribute('role', 'status');
       message.textContent = text;
       scenarioCatalog.replaceChildren(message);
     }
@@ -158,34 +166,126 @@
       } catch (_error) { /* storage may be unavailable */ }
     }
 
+    // Each card is a native radio button (hidden) inside its label, so the group gets one tab stop, arrow
+    // keys move the choice, and a screen reader hears the title as the name and the rest as its description.
+    // Choosing a card only changes which radio is checked: nothing is re-rendered, so focus stays put.
     function renderCatalog() {
+      const focused = document.activeElement?.name === 'scenario' ? document.activeElement.value : null;
       scenarioCatalog.replaceChildren();
-      for (const item of catalogEntries) {
-        const card = document.createElement('button');
-        card.type = 'button';
-        card.className = `scenario-card${selectedScenario === item.id ? ' selected' : ''}`;
-        card.disabled = !item.available;
-        card.setAttribute('role', 'option');
-        card.setAttribute('aria-selected', String(selectedScenario === item.id));
+      for (const [index, item] of catalogEntries.entries()) {
+        const card = document.createElement('label');
+        card.className = `scenario-card${item.available ? '' : ' disabled'}`;
+        const input = document.createElement('input');
+        input.type = 'radio';
+        input.name = 'scenario';
+        input.value = item.id;
+        input.className = 'visually-hidden';
+        input.checked = selectedScenario === item.id;
+        input.disabled = !item.available;
+        const id = `scenario-${index}`;
         const title = document.createElement('strong');
+        title.id = `${id}-title`;
         title.textContent = item.title;
         const brief = document.createElement('span');
+        brief.className = 'brief';
+        brief.id = `${id}-brief`;
         brief.textContent = item.brief;
         const meta = document.createElement('span');
         meta.className = 'meta';
+        meta.id = `${id}-meta`;
         meta.textContent = `${item.surface} · level ${item.difficulty} · ${item.estimated_minutes} min · ${item.skills.join(', ')}`;
-        card.append(title, brief, meta);
+        const described = [brief.id];
+        card.append(input, title, brief);
         if (!item.available) {
           const reason = document.createElement('span');
           reason.className = 'unavailable';
+          reason.id = `${id}-reason`;
           reason.textContent = item.reason;
           card.append(reason);
+          described.push(reason.id);
         }
-        card.onclick = () => { selectedScenario = item.id; cacheCatalog(); renderCatalog(); document.querySelector('#start').disabled = false; };
+        card.append(meta);
+        described.push(meta.id);
+        input.setAttribute('aria-labelledby', title.id);
+        input.setAttribute('aria-describedby', described.join(' '));
+        input.addEventListener('change', () => {
+          if (!input.checked) return;
+          selectedScenario = item.id;
+          cacheCatalog();
+          document.querySelector('#start').disabled = false;
+          schedulePrepare();
+        });
         scenarioCatalog.append(card);
+        if (focused === item.id) input.focus();
       }
       if (!catalogEntries.length) catalogMessage('No scenarios are available.');
     }
+
+    // Preparing ahead. While the learner picks a mode, the selected card is prepared with the key on screen
+    // (the run doesn't depend on the mode), so Start only has to attach the session. One run at a time, only
+    // while this tab is visible, after a short pause so arrowing through the cards doesn't prepare each one.
+    // A run's incident is timed from when it was made, so one left waiting is replaced before the learning
+    // service stops handing it out (PREPARED_RUN_MAX_AGE_SECONDS), a few times at most for a tab left open.
+    const PREPARE_REFRESH_MS = 150000;
+    const PREPARE_REFRESH_LIMIT = 3;
+    let prepared = null; // {runId, scenario, key, at}
+    let preparing = null; // {scenario, key}
+    let prepareTimer = 0;
+    let prepareSequence = 0;
+    let prepareRefreshes = 0;
+    let starting = false;
+
+    function keyIsValid() {
+      return scenarioKey.value.length >= 10 && scenarioKey.value.length <= 40;
+    }
+    function discardPrepared(held = prepared, {beacon = false} = {}) {
+      if (!held) return;
+      if (held === prepared) prepared = null;
+      const url = `${learningUrl}/api/runs/${encodeURIComponent(held.runId)}/discard`;
+      if (beacon && navigator.sendBeacon?.(url, '{}')) return;
+      fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}', keepalive: true}).catch(() => {});
+    }
+    function schedulePrepare(delay = 700, {refresh = false} = {}) {
+      clearTimeout(prepareTimer);
+      if (!refresh) prepareRefreshes = 0;
+      prepareTimer = setTimeout(prepareSelection, delay);
+    }
+    async function prepareSelection() {
+      const scenario = selectedScenario;
+      const key = scenarioKey.value;
+      const entry = catalogEntries.find(item => item.id === scenario);
+      if (starting || document.visibilityState !== 'visible' || !entry?.available || !keyIsValid()) return;
+      if (preparing?.scenario === scenario && preparing?.key === key) return;
+      const current = prepared?.scenario === scenario && prepared?.key === key;
+      if (current && Date.now() - prepared.at < PREPARE_REFRESH_MS) return;
+      if (current && prepareRefreshes >= PREPARE_REFRESH_LIMIT) return;
+      if (current) prepareRefreshes += 1;
+      discardPrepared();
+      const sequence = ++prepareSequence;
+      preparing = {scenario, key};
+      try {
+        const response = await fetch(`${learningUrl}/api/runs`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({scenario, scenario_key: key, prepare: true})});
+        const result = await response.json();
+        if (!response.ok) return;
+        const held = {runId: result.run.run_id, scenario, key, at: Date.now()};
+        // The choice moved on (or Start was pressed) while this one was being made: let it go.
+        if (sequence !== prepareSequence || starting || scenario !== selectedScenario || key !== scenarioKey.value) {
+          discardPrepared(held);
+          return;
+        }
+        prepared = held;
+        if (prepareRefreshes < PREPARE_REFRESH_LIMIT) schedulePrepare(PREPARE_REFRESH_MS, {refresh: true});
+      } catch (_error) {
+        /* Preparing early is only a head start: Start prepares the run itself. */
+      } finally {
+        if (sequence === prepareSequence) preparing = null;
+      }
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') schedulePrepare(400, {refresh: true});
+      else clearTimeout(prepareTimer);
+    });
+    window.addEventListener('pagehide', () => discardPrepared(prepared, {beacon: true}));
 
     async function loadCatalog() {
       const response = await fetch(`${learningUrl}/api/catalog`, {cache: 'no-store'});
@@ -202,6 +302,7 @@
       document.querySelector('#start').disabled = !selectedScenario;
       renderCatalog();
       cacheCatalog();
+      schedulePrepare(1200);
     }
 
     const modeTrigger = document.createElement('button');
@@ -477,8 +578,9 @@
       socket.onclose = () => { telemetry.textContent = 'telemetry reconnecting…';telemetry.className='connection-status';setTimeout(connectTelemetry,1500); };
     }
     async function poll(runId) {
-      while (true) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
+      // Check at once (a run prepared ahead is often ready already), then every second.
+      for (let attempt = 0; ; attempt += 1) {
+        if (attempt) await new Promise(resolve => setTimeout(resolve, 1000));
         const response = await fetch(`${learningUrl}/api/runs/${runId}`);
         const run = await response.json();
         if (run.state === 'READY') {
@@ -509,6 +611,14 @@
       newKey.disabled = true;
       scenarioKey.readOnly = true;
       start.textContent = 'Activating…';
+      // Hand the run prepared for this card and key to Start; one prepared for another choice is let go.
+      starting = true;
+      clearTimeout(prepareTimer);
+      prepareSequence += 1;
+      preparing = null;
+      const claim = prepared?.scenario === selectedScenario && prepared?.key === scenarioKey.value ? prepared.runId : null;
+      if (claim) prepared = null;
+      else discardPrepared();
       clearLaunchStatus();
       investigationUrl = '';
       sessionConnection = null;
@@ -520,12 +630,12 @@
       if (!investigationTab) setLaunchStatus('The preparation tab was blocked. A link will appear here when the investigation is ready.');
       try {
         if (!selectedScenario) throw new Error('Select an available scenario first.');
-        const response = await fetch(`${learningUrl}/api/runs`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario:selectedScenario,mode:modeSelect.value,scenario_key:scenarioKey.value})});
+        const response = await fetch(`${learningUrl}/api/runs`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario:selectedScenario,mode:modeSelect.value,scenario_key:scenarioKey.value,...(claim ? {prepared_run_id: claim} : {})})});
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || `Start failed (${response.status})`);
         sessionConnection = result.session;
         sessionStorage.launcherSession = result.session.session_id;
-        send('scenario_started', {run_id: result.run.run_id, tutorial_mode: result.session.mode});
+        send('scenario_started', {run_id: result.run.run_id, tutorial_mode: result.session.mode, prepared_ahead: result.prepared === true});
         await poll(result.run.run_id);
       } catch (error) {
         signalTab({__halt: true});
@@ -535,12 +645,15 @@
         start.textContent = 'Start selected scenario';
         newKey.disabled = false;
         scenarioKey.readOnly = false;
+        starting = false;
       }
     });
     document.querySelector('#new-key').addEventListener('click', () => {
       scenarioKey.value = generateScenarioKey();
       scenarioKey.focus();
+      schedulePrepare(400);
     });
+    scenarioKey.addEventListener('input', () => schedulePrepare(900));
     scenarioKey.value = generateScenarioKey();
     detectCoachRuntime();
     // Paint the last-known catalog synchronously so a reload shows the cards at

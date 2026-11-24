@@ -1,16 +1,17 @@
 {
   "schema_version": 2,
   "id": "http-error-regression",
-  "version": 3,
+  "version": 4,
   "title": "Server errors after a release",
   "type": "investigation",
   "classification": "core",
   "difficulty": 1,
-  "estimated_minutes": 14,
+  "estimated_minutes": 18,
   "brief": "HTTP server errors went up after a release. Find the failing endpoint or service, and a typical error.",
   "skills": [
+    "top-values",
+    "include-exclude",
     "kql",
-    "filters",
     "documents"
   ],
   "required_capabilities": [
@@ -30,7 +31,10 @@
           "status_family": "HTTP 5xx",
           "error_type": "OrderValidationError",
           "message": "order validation failed after release",
-          "version": "2.4.1"
+          "version": "2.4.1",
+          "decoy": "/checkout",
+          "decoy_service": "checkout",
+          "decoy_path": "/checkout"
         },
         {
           "service": "orders",
@@ -41,7 +45,10 @@
           "status_family": "HTTP 5xx",
           "error_type": "RefundLedgerError",
           "message": "refund ledger write failed after release",
-          "version": "2.6.0"
+          "version": "2.6.0",
+          "decoy": "/api/catalog/search",
+          "decoy_service": "catalog",
+          "decoy_path": "/api/catalog/search"
         },
         {
           "service": "payments",
@@ -52,7 +59,10 @@
           "status_family": "HTTP 502",
           "error_type": "PaymentGatewayTimeout",
           "message": "payment authorization timed out after release",
-          "version": "3.1.0"
+          "version": "3.1.0",
+          "decoy": "checkout",
+          "decoy_service": "checkout",
+          "decoy_path": "/checkout"
         },
         {
           "service": "payments",
@@ -63,7 +73,10 @@
           "status_family": "HTTP 502",
           "error_type": "CaptureGatewayError",
           "message": "capture gateway rejected the request after release",
-          "version": "3.2.1"
+          "version": "3.2.1",
+          "decoy": "/api/orders",
+          "decoy_service": "orders",
+          "decoy_path": "/api/orders"
         },
         {
           "service": "catalog",
@@ -74,7 +87,10 @@
           "status_family": "HTTP 503",
           "error_type": "CatalogBackendUnavailable",
           "message": "catalog backend unavailable after release",
-          "version": "1.9.2"
+          "version": "1.9.2",
+          "decoy": "/checkout",
+          "decoy_service": "checkout",
+          "decoy_path": "/checkout"
         },
         {
           "service": "auth",
@@ -85,7 +101,10 @@
           "status_family": "HTTP 5xx",
           "error_type": "TokenSigningError",
           "message": "token signing failed after release",
-          "version": "4.0.3"
+          "version": "4.0.3",
+          "decoy": "catalog",
+          "decoy_service": "catalog",
+          "decoy_path": "/api/catalog/search"
         }
       ]
     }
@@ -142,6 +161,32 @@
               "type": "${param.incident.error_type}"
             },
             "message": "representative ${param.incident.error_type} request failed"
+          }
+        },
+        {
+          "count": 75,
+          "offset_seconds": 14,
+          "interval_seconds": 7,
+          "trace": "own",
+          "event": {
+            "service": {
+              "name": "${param.incident.decoy_service}"
+            },
+            "event": {
+              "outcome": "success"
+            },
+            "http": {
+              "request": {
+                "method": "GET"
+              },
+              "response": {
+                "status_code": 200
+              }
+            },
+            "url": {
+              "path": "${param.incident.decoy_path}"
+            },
+            "message": "request completed"
           }
         }
       ]
@@ -208,6 +253,18 @@
           "range": {
             "http.response.status_code": {
               "lt": 500
+            }
+          }
+        }
+      },
+      {
+        "id": "no_errors_in_view",
+        "kind": "es_count",
+        "maximum": 0,
+        "query": {
+          "range": {
+            "http.response.status_code": {
+              "gte": 500
             }
           }
         }

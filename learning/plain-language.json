@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "purpose": "Learner-facing copy is read by many people whose first language is not English. The words in \"avoid\" are formal or uncommon and have plainer alternatives; use the alternative instead. The words in \"terms\" are Kibana and observability vocabulary that learners should learn: keep them, and explain each one in plain words (its entry here) the first time a pack's visible copy uses it. Kibana UI labels and field names are always fine. tests/test_plain_language.py checks every pack.",
+  "purpose": "Learner-facing copy is read by many people whose first language is not English. The words in \"avoid\" are formal, uncommon or ambiguous and have plainer alternatives; use the alternative instead. The words in \"terms\" are Kibana and observability vocabulary that learners should learn: keep them, and explain each one in plain words (its entry here) the first time a pack's visible copy uses it. Kibana UI labels and field names are always fine. tests/test_plain_language.py checks every pack.",
   "terms": {
     "aggregation": "a summary of many records, such as a count or an average for each group",
     "cardinality": "the number of distinct values a field has",
@@ -72,6 +72,7 @@
     "intermittent": "on and off",
     "intermittently": "on and off",
     "isolate": "find, separate",
+    "jump": "increase, rise (it can also mean skipping ahead)",
     "leverage": "use",
     "materially": "clearly, a lot",
     "merely": "only, just",
@@ -102,7 +103,7 @@
     "subset": "some, part",
     "substantial": "large",
     "sufficient": "enough",
-    "surge": "jump, sharp rise",
+    "surge": "increase, sharp rise",
     "sustained": "steady, ongoing",
     "symptom": "sign, effect",
     "temporal": "in time",

@@ -8,7 +8,7 @@ categories:
 markdown: |-
     Investigate production-style incidents in Kibana with a built-in coach.
 
-    Open **Lab launcher**, choose a scenario and mode, and start an investigation. A new browser tab shows preparation progress and opens Kibana when the evidence is ready. The **Terminal** tab is available for inspecting the Docker stack.
+    Open **Lab launcher**, choose a scenario and mode, and start an investigation. A new browser tab shows preparation progress and opens Kibana when the evidence is ready.
 playground:
     networks:
         - name: local
@@ -30,10 +30,6 @@ playground:
             cpuCount: 4
             ramSize: 10GiB
     tabs:
-        - id: terminal
-          kind: terminal
-          name: Terminal
-          machine: docker-01
         - id: lab-launcher
           kind: http-port
           name: Lab launcher

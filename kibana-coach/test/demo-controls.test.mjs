@@ -72,7 +72,10 @@ test('the coach can be dragged and stays clear of a newly added column', () => {
   assert.deepEqual(panel.pos, {left: 1420, top: 472});
   panel.evidenceField = 'service.version';
   panel.endDrag({pointerId: 1});
-  assert.equal(panel.pos.left, 18);
+  // Off the column (its keep-out runs 24px either side of the header, down to the bottom), and right
+  // beside it rather than across the screen.
+  assert.ok(panel.pos.left + 468 <= 1420 - 24, `card at ${panel.pos.left} covers the column`);
+  assert.ok(panel.pos.left + 468 >= 1420 - 24 - 40, `card at ${panel.pos.left} is far from the column`);
   assert.ok(panel.pos.top >= 72 && panel.pos.top <= 672);
 });
 
@@ -115,14 +118,80 @@ test('the coach keeps off every ringed result column, and off any flyout, not ju
   panel.evidenceTargets = [];
   panel.evidenceFields = ['http.response.status_code'];
   panel.placeAwayFrom(null);
-  assert.equal(panel.pos.left, 18);
+  // Clear of the ringed column (header to bottom, 24px either side) and beside it.
+  assert.ok(panel.pos.left + 468 <= 1176 && panel.pos.left + 468 >= 1136, `card at ${panel.pos.left}`);
 
   panel.evidenceFields = [];
   flyouts = [flyout];
   assert.equal(panel.findFlyout().left, 720);
   panel.pos = {left: 954, top: 400};
   panel.placeAwayFrom(null);
-  assert.equal(panel.pos.left, 18);
+  // Off the flyout, and right beside it: what the step is about is in there.
+  assert.ok(panel.pos.left + 468 <= 720 && panel.pos.left + 468 >= 690, `card at ${panel.pos.left}`);
+});
+
+test('a field the card or its step names keeps its result column clear, though only the evidence is ringed', () => {
+  const header = field => ({textContent: field, getBoundingClientRect: () => ({left: 300, right: 460, top: 330, bottom: 360, width: 160})});
+  const document = {querySelectorAll: selector => selector.includes('columnheader') ? [header('service.name')] : []};
+  const Panel = loadClass('../src/ui/coach-panel.js', 'IncidentCoachPanel', ['innerWidth', 'innerHeight', 'document'], [1440, 900, document]);
+  const panel = Object.create(Panel.prototype);
+  panel.panel = {hidden: false, style: {}, getBoundingClientRect: () => ({width: 468, height: 300})};
+  panel.applyPosition = () => {};
+  panel.evidenceTargets = [];
+  panel.evidenceFields = [];
+  // The card talks about a document row for service.name; it sits over the top of that field's column.
+  panel.namedFields = ['service.name'];
+  panel.pos = {left: 120, top: 150};
+  panel.placeAwayFrom(null);
+  const covers = pos => pos.left < 460 + 24 && pos.left + 468 > 300 - 24 && pos.top + 300 > 330 - 24;
+  assert.ok(!covers(panel.pos), `card at ${JSON.stringify(panel.pos)} covers the service.name column`);
+  // The field a step acts on is protected the same way, from the moment its card appears.
+  assert.deepEqual(Panel.commandFields({value: {field: 'service.name', value: 'orders'}}), ['service.name']);
+  assert.deepEqual(Panel.commandFields({value: {fields: ['host.name', 'service.version']}}), ['host.name', 'service.version']);
+  assert.deepEqual(Panel.commandFields({value: {field: '@timestamp', direction: 'asc'}}), []);
+  assert.deepEqual(Panel.commandFields({value: 'service.name: orders'}), []);
+});
+
+test('a result card moves beside the data it talks about only when that saves a long look across the screen', () => {
+  const Panel = loadClass('../src/ui/coach-panel.js', 'IncidentCoachPanel', ['innerWidth', 'innerHeight', 'document'], [1440, 900, {querySelectorAll: () => []}]);
+  const panel = Object.create(Panel.prototype);
+  panel.panel = {hidden: false, style: {}, getBoundingClientRect: () => ({width: 468, height: 300})};
+  panel.applyPosition = () => {};
+  panel.findFlyout = () => null;
+  panel.evidenceFields = [];
+  // A filter pill far away is a control, not data to read: the card doesn't move for it unasked.
+  const pill = {closest: () => null};
+  const row = {closest: selector => (selector.includes('.euiFlyout') ? {} : null)};
+  let element = pill;
+  panel.evidenceTargets = [() => element];
+  let rings = [{left: 900, right: 1400, top: 400, bottom: 430}];
+  panel.evidenceTargetRects = () => rings;
+  panel.pos = {left: 18, top: 72};
+  panel.seekFocus = true;
+  panel.placeAwayFrom(null);
+  assert.deepEqual({...panel.pos}, {left: 18, top: 72});
+  panel.seekFocus = false;
+  // Pinned rows in a document flyout on the right; the card rests clear of them in the far-left corner.
+  element = row;
+  panel.placeAwayFrom(null);
+  assert.deepEqual({...panel.pos}, {left: 18, top: 72}); // Clear, so it stays: no hop on every scroll.
+  panel.seekFocus = true;
+  panel.placeAwayFrom(null);
+  assert.ok(panel.pos.left + 468 <= 900 - 16 && panel.pos.left + 468 >= 900 - 16 - 20, `card at ${JSON.stringify(panel.pos)}`);
+  // Already close: it stays put, so Continue stays under the pointer.
+  const settled = {...panel.pos};
+  rings = [{left: 900, right: 1400, top: 520, bottom: 550}];
+  panel.placeAwayFrom(null);
+  assert.deepEqual({...panel.pos}, settled);
+});
+
+test('the coach buttons sit right under its header, above the step text, so Advance keeps its place', async () => {
+  const {readFileSync} = await import('node:fs');
+  const source = readFileSync(new URL('../src/ui/coach-panel.js', import.meta.url), 'utf8');
+  const markup = source.slice(source.indexOf('<aside'), source.indexOf('</aside>'));
+  const order = ['</header>', 'class="actions"', 'class="progress"', 'class="step-line"', 'id="stage"'].map(part => markup.indexOf(part));
+  assert.ok(order.every(index => index >= 0));
+  assert.deepEqual([...order].sort((a, b) => a - b), order);
 });
 
 test('hints stay with their step and Advance moves through a success card', () => {
@@ -302,7 +371,9 @@ test('the card moves off a thin ringed row even if that puts it over the query b
   panel.pos = {left: 18, top: 567};
   panel.foldReasoning = () => { panel.folds += 1; return false; };
   panel.placeAwayFrom(null);
-  assert.deepEqual({...panel.pos}, {left: 18, top: 72});
+  // Above the row (its keep-out runs 16px around it), over as little of the query bar as that allows.
+  assert.ok(panel.pos.top + 315 <= 559 - 16, `card at ${JSON.stringify(panel.pos)} covers the row`);
+  assert.equal(panel.pos.top, 559 - 16 - 10 - 315);
   // Only the query bar is left under the card, which is no reason to hide the reasoning.
   assert.equal(panel.folds, 0);
 });
@@ -315,7 +386,10 @@ test('a small ring counts for as much as a large one when no corner is clear', (
   ]});
   panel.pos = {left: 18, top: 522};
   panel.placeAwayFrom(null);
-  assert.equal(panel.pos.left, 954);
+  // Clipping the chart's edge beats hiding the count: the card is off the count's ring.
+  const count = {left: 300, right: 476, top: 584, bottom: 648};
+  const hidesCount = panel.pos.left < count.right && panel.pos.left + 468 > count.left && panel.pos.top < count.bottom && panel.pos.top + 360 > count.top;
+  assert.ok(!hidesCount, `card at ${JSON.stringify(panel.pos)} hides the count`);
 });
 
 test('the reasoning folds when that is what clears the evidence, and the shorter card is then placed', () => {
@@ -328,5 +402,5 @@ test('the reasoning folds when that is what clears the evidence, and the shorter
   };
   panel.placeAwayFrom(null);
   assert.equal(panel.size, 356);
-  assert.deepEqual({...panel.pos}, {left: 18, top: 72});
+  assert.ok(panel.pos.top + 356 <= 530 - 16, `card at ${JSON.stringify(panel.pos)} covers the row`);
 });

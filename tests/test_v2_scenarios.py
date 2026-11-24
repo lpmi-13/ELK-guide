@@ -99,16 +99,26 @@ class ScenarioV2Tests(unittest.TestCase):
                     self.assertNotIn("\n", narration)
                     self.assertLessEqual(len(narration.split()), 40)
 
-    def test_deployment_version_pairing_is_revealed_after_column_addition(self):
+    def test_deployment_versions_are_revealed_by_the_data_not_presumed(self):
+        """The rollout pack finds the version as what the failures share (Field statistics), names it only
+        once the column shows it, and names the healthy versions only once the successes are on screen."""
         pack = ROOT / "learning/scenarios/deployment-version-regression"
         playbook = expand_descriptor(ROOT / "learning", "playbook", json.loads((pack / "playbook.json").read_text()))
-        inspect = next(goal for goal in playbook["goals"] if goal["id"] == "inspect")
-        self.assertEqual(inspect["reference_action"]["command"], "add_column")
-        for phase in ("narration", "reasoning"):
-            self.assertNotIn("${param.incident.bad_version}", inspect["demonstration"][phase])
-            self.assertNotIn("${param.incident.good_version}", inspect["demonstration"][phase])
-        self.assertIn("${param.incident.bad_version}", inspect["demonstration"]["evidence"])
-        self.assertIn("${param.incident.good_version}", inspect["demonstration"]["evidence"])
+        goals = {goal["id"]: goal for goal in playbook["goals"]}
+        self.assertEqual(goals["inspect"]["reference_action"]["command"], "show_field_statistics")
+        # Field statistics counts the selected columns, so the facets to compare open as columns.
+        scenario = json.loads((pack / "scenario.json").read_text())
+        for column in ("host.name", "url.path", "service.version"):
+            self.assertIn(column, scenario["starting_view"]["path"])
+        self.assertEqual(goals["contrast"]["reference_action"]["arguments"], {"field": "event.outcome", "value": "failure", "include": False})
+        for goal_id in ("isolate", "failures", "inspect", "first", "contrast"):
+            for phase in ("narration", "reasoning"):
+                for version in ("bad_version", "good_version", "legacy_version"):
+                    self.assertNotIn(f"${{param.incident.{version}}}", goals[goal_id]["demonstration"][phase], (goal_id, phase))
+        self.assertNotIn("${param.incident.bad_version}", goals["inspect"]["demonstration"]["evidence"])
+        self.assertIn("${param.incident.bad_version}", goals["first"]["demonstration"]["evidence"])
+        for version in ("bad_version", "good_version", "legacy_version"):
+            self.assertIn(f"${{param.incident.{version}}}", goals["contrast"]["demonstration"]["evidence"])
 
     def test_schema_drift_query_looks_for_missing_routes_before_identifying_producer(self):
         pack = ROOT / "learning/scenarios/schema-drift-data-quality"
@@ -200,7 +210,7 @@ class ScenarioV2Tests(unittest.TestCase):
         self.assertIn('id="scenario-catalog"', launcher)
         self.assertIn("/api/catalog", launcher)
         self.assertIn("catalogEntries = catalog.scenarios", launcher)
-        self.assertIn("for (const item of catalogEntries)", launcher)
+        self.assertIn("of catalogEntries.entries()", launcher)
         self.assertIn("scenario:selectedScenario", launcher)
         for entry in self.catalog["scenarios"]:
             self.assertNotIn(f'value="{entry["id"]}"', launcher)

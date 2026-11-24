@@ -656,14 +656,17 @@ class KibanaAdapter {
     // ringed only when the card says something about it ("the hit count drops to..."); a number the
     // card never mentions is one more box to look at, whatever it reads.
     const focus = chosen && {...chosen, count: /\bhit count\b/i.test(text || '')};
-    if (focus?.kind === 'columns') return {targets: [], columns: focus.fields || columns};
+    // The fields the card talks about (a document's pinned rows, a Top values list, a filtered field):
+    // the panel keeps their result-table columns clear as well, since those hold the same values.
+    const fields = [focus?.field, ...(Array.isArray(focus?.fields) ? focus.fields : [])].filter(field => typeof field === 'string' && field);
+    if (focus?.kind === 'columns') return {targets: [], columns: focus.fields || columns, fields};
     let targets = [];
     try {
       if (focus) targets = await this.evidenceTargets(focus, signal);
     } catch (error) {
       if (error.name === 'AbortError') throw error;
     }
-    return {targets, columns};
+    return {targets, columns, fields};
   }
 
   defaultEvidenceFocus(command) {

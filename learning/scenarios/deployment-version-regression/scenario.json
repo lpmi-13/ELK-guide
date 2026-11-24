@@ -1,16 +1,17 @@
 {
   "schema_version": 2,
   "id": "deployment-version-regression",
-  "version": 4,
-  "title": "Failing instances after a rollout",
+  "version": 5,
+  "title": "Failures after a rolling deployment",
   "type": "investigation",
   "classification": "core",
   "difficulty": 2,
-  "estimated_minutes": 18,
-  "brief": "After a rolling deployment, only some instances are failing. Find out whether the service version explains the difference, and when the first failure happened.",
+  "estimated_minutes": 20,
+  "brief": "After a rolling deployment, some of a service's requests fail while others succeed. Find what the failing requests have in common, and when the first failure happened.",
   "skills": [
-    "multi-value-filtering",
-    "field-comparison",
+    "top-values",
+    "field-statistics",
+    "include-exclude",
     "sorting"
   ],
   "required_capabilities": [
@@ -26,28 +27,40 @@
           "bad_version": "2.4.1",
           "good_version": "2.4.0",
           "status": 500,
-          "legacy_version": "2.3.7"
+          "legacy_version": "2.3.7",
+          "route_a": "/api/orders",
+          "route_b": "/api/orders/search",
+          "route_c": "/api/orders/history"
         },
         {
           "service": "payments",
           "bad_version": "3.2.0",
           "good_version": "3.1.4",
           "status": 502,
-          "legacy_version": "3.0.9"
+          "legacy_version": "3.0.9",
+          "route_a": "/api/payments/authorize",
+          "route_b": "/api/payments/capture",
+          "route_c": "/api/payments/refund"
         },
         {
           "service": "catalog",
           "bad_version": "1.9.0",
           "good_version": "1.8.5",
           "status": 503,
-          "legacy_version": "1.7.2"
+          "legacy_version": "1.7.2",
+          "route_a": "/api/catalog/search",
+          "route_b": "/api/catalog/items",
+          "route_c": "/api/catalog/categories"
         },
         {
           "service": "auth",
           "bad_version": "4.1.0",
           "good_version": "4.0.7",
           "status": 500,
-          "legacy_version": "3.9.4"
+          "legacy_version": "3.9.4",
+          "route_a": "/api/auth/token",
+          "route_b": "/api/auth/refresh",
+          "route_c": "/api/auth/session"
         }
       ]
     },
@@ -111,7 +124,7 @@
         "transaction": {
           "result": "HTTP 5xx"
         },
-        "message": "request failed on newly deployed ${param.incident.service} ${param.incident.bad_version}"
+        "message": "${param.incident.service} request failed with HTTP ${param.incident.status}"
       },
       "distractors": [
         {
@@ -125,7 +138,13 @@
           "http": {
             "response": {
               "status_code": 200
+            },
+            "request": {
+              "method": "GET"
             }
+          },
+          "url": {
+            "path": "${param.incident.route_b}"
           }
         }
       ],
@@ -148,8 +167,25 @@
                 "status_code": 200
               }
             },
-            "message": "healthy request on previous version ${param.incident.good_version}"
-          }
+            "message": "request completed"
+          },
+          "cycle": [
+            {
+              "url": {
+                "path": "${param.incident.route_a}"
+              }
+            },
+            {
+              "url": {
+                "path": "${param.incident.route_b}"
+              }
+            },
+            {
+              "url": {
+                "path": "${param.incident.route_c}"
+              }
+            }
+          ]
         },
         {
           "count": 5,
@@ -169,8 +205,25 @@
                 "status_code": 200
               }
             },
-            "message": "healthy request on previous version ${param.incident.good_version}"
-          }
+            "message": "request completed"
+          },
+          "cycle": [
+            {
+              "url": {
+                "path": "${param.incident.route_a}"
+              }
+            },
+            {
+              "url": {
+                "path": "${param.incident.route_b}"
+              }
+            },
+            {
+              "url": {
+                "path": "${param.incident.route_c}"
+              }
+            }
+          ]
         },
         {
           "count": 1,
@@ -192,8 +245,25 @@
             "transaction": {
               "result": "HTTP 5xx"
             },
-            "message": "request failed on newly deployed ${param.incident.service} ${param.incident.bad_version}"
-          }
+            "message": "${param.incident.service} request failed with HTTP ${param.incident.status}"
+          },
+          "cycle": [
+            {
+              "url": {
+                "path": "${param.incident.route_a}"
+              }
+            },
+            {
+              "url": {
+                "path": "${param.incident.route_b}"
+              }
+            },
+            {
+              "url": {
+                "path": "${param.incident.route_c}"
+              }
+            }
+          ]
         },
         {
           "count": 24,
@@ -213,7 +283,41 @@
                 "status_code": 200
               }
             },
-            "message": "healthy request on the legacy pool, ${param.incident.legacy_version}"
+            "message": "request completed"
+          },
+          "cycle": [
+            {
+              "url": {
+                "path": "${param.incident.route_a}"
+              }
+            },
+            {
+              "url": {
+                "path": "${param.incident.route_b}"
+              }
+            },
+            {
+              "url": {
+                "path": "${param.incident.route_c}"
+              }
+            }
+          ]
+        }
+      ],
+      "signal_cycle": [
+        {
+          "url": {
+            "path": "${param.incident.route_a}"
+          }
+        },
+        {
+          "url": {
+            "path": "${param.incident.route_b}"
+          }
+        },
+        {
+          "url": {
+            "path": "${param.incident.route_c}"
           }
         }
       ]
@@ -225,7 +329,7 @@
         "minimum": 20,
         "query": {
           "term": {
-            "message.keyword": "request failed on newly deployed ${param.incident.service} ${param.incident.bad_version}"
+            "message.keyword": "${param.incident.service} request failed with HTTP ${param.incident.status}"
           }
         }
       }
@@ -234,13 +338,13 @@
   "starting_view": {
     "app": "discover",
     "saved_object": "incident-investigation",
-    "path": "/app/discover#/view/incident-investigation"
+    "path": "/app/discover#/view/incident-investigation?_a=(columns:!('@timestamp',service.name,host.name,url.path,service.version,http.response.status_code))"
   },
   "truth": {
     "answers": {
       "finding": "${param.incident.bad_version}",
       "scope": "${param.incident.service}",
-      "conclusion": "In ${param.incident.service}, version ${param.incident.bad_version} returned HTTP ${param.incident.status} while version ${param.incident.good_version} returned 200. The new version is causing the failures.",
+      "conclusion": "In ${param.incident.service}, every failed request ran version ${param.incident.bad_version} and no successful one did, so the new version is causing the failures.",
       "first_seen": "${incident.first_clock}"
     },
     "accept": {
@@ -255,7 +359,7 @@
         "minimum": 20,
         "query": {
           "term": {
-            "message.keyword": "request failed on newly deployed ${param.incident.service} ${param.incident.bad_version}"
+            "message.keyword": "${param.incident.service} request failed with HTTP ${param.incident.status}"
           }
         }
       },
@@ -309,12 +413,22 @@
         }
       },
       {
-        "id": "legacy_in_view",
+        "id": "healthy_in_view",
         "kind": "es_count",
         "maximum": 0,
         "query": {
           "term": {
-            "service.version.keyword": "${param.incident.legacy_version}"
+            "event.outcome.keyword": "success"
+          }
+        }
+      },
+      {
+        "id": "failures_in_view",
+        "kind": "es_count",
+        "maximum": 0,
+        "query": {
+          "term": {
+            "event.outcome.keyword": "failure"
           }
         }
       }
@@ -325,9 +439,10 @@
     "fields": [
       {
         "id": "finding",
-        "label": "Affected version",
+        "label": "What the failed requests share",
         "kind": "string",
-        "weight": 2
+        "weight": 2,
+        "placeholder": "A field and its value"
       },
       {
         "id": "scope",

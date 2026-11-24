@@ -93,59 +93,89 @@ class RandomizationTests(unittest.TestCase):
         self.assertEqual(signal["http"]["response"]["status_code"], incident["status"])
         self.assertIsInstance(signal["http"]["response"]["status_code"], int)
         self.assertEqual(manifest["scenario"]["truth"]["answers"]["finding"], incident["finding"])
-        # The demonstrated isolate action (here a filter) targets this run's decisive field and value.
+        # The demonstrated isolate action (here a filter) looks first at the busiest value of this run's
+        # decisive field: a healthy decoy, not the answer. The answer comes from the same field read
+        # inside the server errors (the `where` step).
         self.assertIn(incident["signal_field"], targeted)
-        self.assertIn(incident["finding"], targeted)
-        self.assertEqual(isolate["accepts"][0]["validators"][0].get("fields"), [incident["signal_field"]])
+        self.assertIn(incident["decoy"], targeted)
+        self.assertNotEqual(incident["decoy"], incident["finding"])
+        where = next(goal for goal in playbook["goals"] if goal["id"] == "where")
+        self.assertEqual(where["demonstration"]["evidence_focus"], {"kind": "top_values", "field": incident["signal_field"], "value": incident["finding"]})
 
-    def test_version_rollout_shows_mixed_http_outcomes_before_comparing_versions(self):
+    def test_the_busiest_value_is_checked_first_and_is_not_where_the_errors_are(self):
+        """The server-errors pack teaches that the busiest value is only the most likely place: in every
+        window the coach can recommend it is the clear top value, every one of its requests succeeded,
+        and once it is left out every server error shares the answer's value."""
+        from collections import Counter
+        from datetime import datetime, timedelta
+        for seed in range(24):
+            manifest = self.materialize("http-error-regression", seed)
+            incident = manifest["parameters"]["incident"]
+            field = incident["signal_field"]
+            documents = self.controller.generate_seeded_events(manifest)
+            created = datetime.fromisoformat(manifest["created_at"])
+            value = lambda document: self.controller._lookup_nested(document, field)
+            for minutes in (10, 15, 20):
+                window = [document for document in documents if datetime.fromisoformat(document["@timestamp"]) >= created - timedelta(minutes=minutes)]
+                counts = Counter(value(document) for document in window).most_common()
+                decoy = [document for document in window if value(document) == incident["decoy"]]
+                errors = [document for document in window if value(document) != incident["decoy"] and document["http"]["response"]["status_code"] >= 500]
+                with self.subTest(seed=seed, minutes=minutes):
+                    self.assertEqual(counts[0][0], incident["decoy"])
+                    self.assertGreaterEqual(counts[0][1], 1.5 * dict(counts).get(incident["finding"], 0))
+                    self.assertEqual({document["http"]["response"]["status_code"] for document in decoy}, {200})
+                    self.assertEqual({value(document) for document in errors}, {incident["finding"]})
+
+    def test_rollout_failures_share_one_version_and_nothing_else(self):
+        """The rollout pack teaches a general method: keep only the failures, scan every field for one
+        that they all share, then check that the successes don't share it. So the failures share the new
+        version and nothing about what served them (several hosts and endpoints), no successful request
+        ran that version, and the first page after the service filter shows both outcomes."""
         for seed in range(20):
             manifest = self.materialize("deployment-version-regression", seed)
             incident = manifest["parameters"]["incident"]
             documents = self.controller.generate_seeded_events(manifest)
-            rows = sorted(
-                (document for document in documents
-                 if document["service"]["name"] == incident["service"]
-                 and document["service"]["version"] in {incident["bad_version"], incident["good_version"]}),
-                key=lambda document: document["@timestamp"], reverse=True,
-            )
+            service_rows = [document for document in documents if document["service"]["name"] == incident["service"]]
+            failed = [row for row in service_rows if row["event"]["outcome"] == "failure"]
+            succeeded = [row for row in service_rows if row["event"]["outcome"] == "success"]
+            newest_first = sorted(service_rows, key=lambda document: document["@timestamp"], reverse=True)
             with self.subTest(seed=seed):
-                service_rows = [document for document in documents if document["service"]["name"] == incident["service"]]
-                # The rollout's two releases, and an older one on a legacy pool the rollout doesn't touch
-                # (the multi-value step leaves it out); the legacy pool is healthy.
                 self.assertEqual({row["service"]["version"] for row in service_rows},
                                  {incident["bad_version"], incident["good_version"], incident["legacy_version"]})
-                self.assertEqual({row["http"]["response"]["status_code"] for row in service_rows if row["service"]["version"] == incident["legacy_version"]}, {200})
-                # The first visible Discover page must show both outcomes after the service/all-
-                # versions query. Otherwise the next comparison looks decided before it begins.
-                self.assertTrue({200, incident["status"]}.issubset(
-                    {row["http"]["response"]["status_code"] for row in rows[:10]}))
-                for row in rows:
-                    expected = incident["status"] if row["service"]["version"] == incident["bad_version"] else 200
-                    self.assertEqual(row["http"]["response"]["status_code"], expected)
-                    self.assertEqual(row["transaction"]["result"], "HTTP 5xx" if expected >= 500 else "HTTP 2xx")
+                self.assertEqual({row["service"]["version"] for row in failed}, {incident["bad_version"]})
+                self.assertEqual({row["service"]["version"] for row in succeeded}, {incident["good_version"], incident["legacy_version"]})
+                self.assertEqual({row["http"]["response"]["status_code"] for row in failed}, {incident["status"]})
+                self.assertEqual({row["http"]["response"]["status_code"] for row in succeeded}, {200})
+                self.assertTrue(all(row["transaction"]["result"] == "HTTP 5xx" for row in failed))
+                # What served a request doesn't set the failures apart: they span hosts and endpoints,
+                # the same endpoints the successes do.
+                self.assertGreaterEqual(len({row["host"]["name"] for row in failed}), 3)
+                self.assertEqual({row["url"]["path"] for row in failed}, {row["url"]["path"] for row in succeeded})
+                self.assertEqual(len({row["url"]["path"] for row in failed}), 3)
+                # No log line names the version: the learner finds it in the version field.
+                self.assertTrue(all(incident["bad_version"] not in row["message"] for row in service_rows))
+                # The first page after the service filter shows both outcomes, so failures are a question.
+                self.assertTrue({200, incident["status"]}.issubset({row["http"]["response"]["status_code"] for row in newest_first[:10]}))
 
             session = self.server.create_session({"manifest": manifest}, "demonstration")
             session["run_ready"] = True
             goals = session["playbook"]["goals"]
-            for goal_id, expected_focus in (
-                ("isolate", ["http.response.status_code"]),
-                ("inspect", ["service.version", "http.response.status_code"]),
-            ):
-                session["completed_goals"] = {goal["id"] for goal in goals[:next(
-                    index for index, goal in enumerate(goals) if goal["id"] == goal_id)]}
+            self.assertEqual([goal["id"] for goal in goals], ["scope", "survey", "isolate", "failures", "inspect", "first", "contrast", "submit"])
+            commands = {}
+            for goal_id in ("isolate", "inspect", "first", "contrast"):
+                session["completed_goals"] = {goal["id"] for goal in goals[:next(index for index, goal in enumerate(goals) if goal["id"] == goal_id)]}
                 session["pending_command"] = None
-                command = self.server.next_command(session)
-                with self.subTest(seed=seed, goal=goal_id):
-                    self.assertEqual(command["learning_focus"], expected_focus)
-                    self.assertIn("http.response.status_code", command["reasoning"] + command["evidence"])
-                    self.assertIn(str(incident["status"]), command["evidence"])
-                    self.assertIn("200", command["evidence"])
-                    if goal_id == "inspect":
-                        self.assertNotIn(incident["bad_version"], command["reasoning"])
-                        self.assertNotIn(incident["good_version"], command["reasoning"])
-                        self.assertIn(incident["bad_version"], command["evidence"])
-                        self.assertIn(incident["good_version"], command["evidence"])
+                commands[goal_id] = self.server.next_command(session)
+            with self.subTest(seed=seed, goal="steps"):
+                self.assertEqual(commands["isolate"]["learning_focus"], ["http.response.status_code"])
+                self.assertIn(str(incident["status"]), commands["isolate"]["evidence"])
+                self.assertIn("200", commands["isolate"]["evidence"])
+                # The facet scan names no version: it finds that the failures share one.
+                self.assertEqual(commands["inspect"]["evidence_focus"], {"kind": "field_cardinality", "fields": ["service.version", "host.name", "url.path"]})
+                self.assertNotIn(incident["bad_version"], commands["inspect"]["narration"] + commands["inspect"]["evidence"])
+                self.assertIn(incident["bad_version"], commands["first"]["evidence"])
+                for version in (incident["good_version"], incident["legacy_version"], incident["bad_version"]):
+                    self.assertIn(version, commands["contrast"]["evidence"])
 
     def test_specifics_and_required_filters_vary_across_seeds(self):
         for pack in LOG_HUNT_PACKS:

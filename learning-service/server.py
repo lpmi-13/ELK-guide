@@ -48,6 +48,18 @@ sessions_lock = threading.RLock()
 SESSION_RETENTION_SECONDS = float(os.getenv("SESSION_RETENTION_SECONDS", str(8 * 3600)))
 write_lock = threading.Lock()
 
+# Runs the launcher prepares while the learner is still choosing (the selected card and key), so Start
+# only attaches a session. A run's incident is timed from when it was created, so one left waiting goes
+# stale: past PREPARED_RUN_MAX_AGE_SECONDS it is no longer handed out, and the sweeper deletes it. At most
+# MAX_PREPARED_RUNS wait at once (the oldest goes first), so a launcher left open can't pile them up.
+PREPARED_RUN_MAX_AGE_SECONDS = float(os.getenv("PREPARED_RUN_MAX_AGE_SECONDS", "180"))
+MAX_PREPARED_RUNS = int(os.getenv("MAX_PREPARED_RUNS", "2"))
+# Only scenarios that write nothing shared can be prepared unasked: their own seeded data and saved
+# objects. A live fault or a managed resource (an alert rule) would touch what other runs see.
+PREPARABLE_STRATEGIES = {"seeded-events", "saved-objects"}
+prepared_runs = {}
+prepared_lock = threading.Lock()
+
 MODE_POLICIES = {
     "demonstration": {"action_actor": "tutorial", "show_narration": True, "highlight_target": True, "validate_timing": "immediate", "allow_demonstrate_step": True},
     "guided": {"action_actor": "learner", "show_narration": True, "highlight_target": True, "validate_timing": "immediate", "allow_demonstrate_step": True},
@@ -180,6 +192,74 @@ def http_json(url, method="GET", payload=None, timeout=10):
     except HTTPError as error:
         raw = error.read()
         return error.code, json.loads(raw) if raw else {"error": str(error)}
+
+
+def preparable(scenario):
+    """Whether a scenario can be prepared before the learner asks for it (see PREPARABLE_STRATEGIES)."""
+    try:
+        catalog = json.loads((LEARNING_DIR / "catalog.json").read_text())
+        entry = next(item for item in catalog["scenarios"] if item["id"] == scenario)
+        template = json.loads((LEARNING_DIR / entry["pack"] / "scenario.json").read_text())
+    except (OSError, ValueError, KeyError, StopIteration):
+        return False
+    return set(template.get("provisioning", {}).get("strategies", [])) <= PREPARABLE_STRATEGIES
+
+
+def discard_runs(run_ids):
+    """Delete prepared runs nobody claimed (their Space and data), off the request path."""
+    for run_id in run_ids:
+        threading.Thread(target=http_json, args=(f"{CONTROLLER_URL}/api/runs/{run_id}", "DELETE"), kwargs={"timeout": 30}, daemon=True).start()
+
+
+def remember_prepared(run, scenario, scenario_key):
+    """Keep a just-created run for a later Start; returns the runs pushed out by the cap."""
+    with prepared_lock:
+        prepared_runs[run["run_id"]] = {"run": run, "scenario": scenario, "scenario_key": scenario_key, "at": time.monotonic()}
+        oldest = sorted(prepared_runs, key=lambda run_id: prepared_runs[run_id]["at"])
+        evicted = oldest[:max(0, len(oldest) - MAX_PREPARED_RUNS)]
+        for run_id in evicted:
+            del prepared_runs[run_id]
+    return evicted
+
+
+def claim_prepared(run_id, scenario, scenario_key):
+    """The prepared run for exactly this scenario and key, taken out of the pool, or None. A run that
+    has gone stale or failed is discarded instead, and Start prepares a fresh one as before."""
+    with prepared_lock:
+        entry = prepared_runs.pop(run_id, None)
+    if not entry:
+        return None
+    fresh = time.monotonic() - entry["at"] <= PREPARED_RUN_MAX_AGE_SECONDS
+    if not fresh or entry["scenario"] != scenario or entry["scenario_key"] != scenario_key:
+        discard_runs([run_id])
+        return None
+    status, state = http_json(f"{CONTROLLER_URL}/api/runs/{run_id}")
+    if status >= 400 or state.get("state") in {"FAILED", "ABORTED", "COMPLETED"}:
+        discard_runs([run_id])
+        return None
+    return entry["run"]
+
+
+def forget_prepared(run_id):
+    """Drop a prepared run from the pool; True when it was waiting there (unclaimed)."""
+    with prepared_lock:
+        return prepared_runs.pop(run_id, None) is not None
+
+
+def expired_prepared(now=None):
+    """Take every prepared run past its age out of the pool and return their ids."""
+    now = time.monotonic() if now is None else now
+    with prepared_lock:
+        expired = [run_id for run_id, entry in prepared_runs.items() if now - entry["at"] > PREPARED_RUN_MAX_AGE_SECONDS]
+        for run_id in expired:
+            del prepared_runs[run_id]
+    return expired
+
+
+def sweep_prepared_runs(interval=15):
+    while True:
+        time.sleep(interval)
+        discard_runs(expired_prepared())
 
 
 def emit(session, action, evaluation=None, evidence=None):
@@ -1385,22 +1465,50 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/runs":
+            scenario = payload.get("scenario", "slow-payments")
+            if payload.get("prepare"):
+                # The launcher's card and key, prepared ahead of Start: a run without a session yet.
+                if not preparable(scenario) or not isinstance(payload.get("scenario_key"), str):
+                    self.respond(422, {"error": "this scenario can only be prepared when it is started"})
+                    return
+                status, run = http_json(f"{CONTROLLER_URL}/api/runs", "POST", {"scenario": scenario, "scenario_key": payload["scenario_key"]}, timeout=20)
+                if status >= 400:
+                    self.respond(status, run)
+                    return
+                discard_runs(remember_prepared(run, scenario, payload["scenario_key"]))
+                self.respond(202, {"run": {key: value for key, value in run.items() if key != "manifest"}, "prepared": True})
+                return
             mode = payload.get("mode", "guided")
             if mode not in MODE_POLICIES:
                 self.respond(400, {"error": "mode must be demonstration, guided, or challenge"})
                 return
-            run_request = {"scenario": payload.get("scenario", "slow-payments")}
-            if "scenario_key" in payload:
-                run_request["scenario_key"] = payload["scenario_key"]
-            elif "seed" in payload:
-                run_request["seed"] = payload["seed"]
-            status, run = http_json(f"{CONTROLLER_URL}/api/runs", "POST", run_request, timeout=20)
-            if status >= 400:
-                self.respond(status, run)
-                return
+            run = None
+            if payload.get("prepared_run_id"):
+                run = claim_prepared(str(payload["prepared_run_id"]), scenario, payload.get("scenario_key"))
+            prepared = run is not None
+            if run is None:
+                run_request = {"scenario": scenario}
+                if "scenario_key" in payload:
+                    run_request["scenario_key"] = payload["scenario_key"]
+                elif "seed" in payload:
+                    run_request["seed"] = payload["seed"]
+                status, run = http_json(f"{CONTROLLER_URL}/api/runs", "POST", run_request, timeout=20)
+                if status >= 400:
+                    self.respond(status, run)
+                    return
             session = create_session(run, mode)
             public_run = {key: value for key, value in run.items() if key != "manifest"}
-            self.respond(202, {"run": public_run, "session": session_public(session, include_connection=True)})
+            self.respond(202, {"run": public_run, "session": session_public(session, include_connection=True), "prepared": prepared})
+            return
+
+        if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "discard":
+            # The launcher let go of a run it prepared (another card, another key, the tab closed). Only a
+            # run still waiting unclaimed can be discarded this way, never one a session is using.
+            if forget_prepared(parts[2]):
+                discard_runs([parts[2]])
+                self.respond(202, {"discarded": True})
+            else:
+                self.respond(404, {"error": "no prepared run with that id"})
             return
 
         if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "reset":
@@ -1457,6 +1565,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         parts = urlparse(self.path).path.strip("/").split("/")
         if len(parts) == 3 and parts[:2] == ["api", "runs"]:
+            forget_prepared(parts[2])
             status, result = http_json(f"{CONTROLLER_URL}/api/runs/{parts[2]}", "DELETE", timeout=30)
             self.respond(status, result)
             return
@@ -1609,4 +1718,5 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     assert_catalog_valid(LEARNING_DIR)
+    threading.Thread(target=sweep_prepared_runs, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

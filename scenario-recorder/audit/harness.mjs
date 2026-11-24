@@ -83,7 +83,7 @@ export const INSTRUMENT = () => {
   document.addEventListener('keydown', event => { if (event.key === 'Enter') push('enter', {trusted: event.isTrusted, target: describe(event.target)}); }, true);
   const summarize = message => {
     const pick = (source, keys) => Object.fromEntries(keys.filter(key => source?.[key] !== undefined).map(key => [key, source[key]]));
-    const result = pick(message, ['message_type', 'command_id', 'step_id', 'step_title', 'step_index', 'step_count', 'type', 'mode', 'target', 'error', 'reason', 'level', 'text', 'paused']);
+    const result = pick(message, ['message_type', 'command_id', 'step_id', 'step_title', 'step_index', 'step_count', 'type', 'mode', 'target', 'empty_result_expected', 'error', 'reason', 'level', 'text', 'paused']);
     if (typeof message.narration === 'string') result.narration = message.narration.slice(0, 300);
     if (typeof message.evidence === 'string') result.evidence = message.evidence.slice(0, 300);
     if (message.value !== undefined) result.value = JSON.stringify(message.value).slice(0, 300);

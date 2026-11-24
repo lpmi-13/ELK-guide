@@ -818,6 +818,9 @@ def generate_seeded_events(manifest):
     signal_count = int(profile.get("signal_count", 36))
     noise_count = int(profile.get("noise_count", 72))
     signal = _substitute(profile.get("signal", {}), manifest)
+    # `signal_cycle` (and a companion's `cycle`) is a list of overlays taken in turn, one per event, so a
+    # field can vary across otherwise identical requests: several endpoints, say, rather than one.
+    signal_cycle = [_substitute(item, manifest) for item in profile.get("signal_cycle", [])]
     distractors = [_substitute(item, manifest) for item in profile.get("distractors", [])]
     excluded_services = set(_substitute(profile.get("noise_exclude_services", []), manifest))
     noise_endpoints = [endpoint for endpoint in _NOISE_ENDPOINTS if endpoint["service"] not in excluded_services] or _NOISE_ENDPOINTS
@@ -851,6 +854,8 @@ def generate_seeded_events(manifest):
         trace_key = sequence if application == "apm" else sequence // 2
         trace_id = representative_trace if sequence == 0 else hashlib.md5(f"{manifest['run_id']}:signal:{trace_key}".encode()).hexdigest()
         event = _deep_merge(_event_template(manifest, timestamp, trace_id, sequence), signal)
+        if signal_cycle:
+            event = _deep_merge(event, signal_cycle[sequence % len(signal_cycle)])
         prepared = _prepare_application_event(event, application, signal)
         _apply_realism(prepared, generator)
         documents.append(prepared)
@@ -863,6 +868,7 @@ def generate_seeded_events(manifest):
     for companion_index, companion in enumerate(profile.get("companions", [])):
         repeats = int(companion.get("count", 1))
         template = _substitute(companion.get("event", {}), manifest)
+        cycle = [_substitute(item, manifest) for item in companion.get("cycle", [])]
         if companion.get("trace") == "each":
             documents.extend(_companions_per_signal(manifest, application, generator, companion_index, companion, template, signal_documents, callers))
             continue
@@ -872,6 +878,8 @@ def generate_seeded_events(manifest):
             # (a repetitive warning flood), which must not all claim to be one trace.
             trace_id = representative_trace if companion.get("trace") != "own" else hashlib.md5(f"{manifest['run_id']}:companion:{companion_index}:{sequence}".encode()).hexdigest()
             event = _deep_merge(_event_template(manifest, timestamp, trace_id, 1000 + companion_index * 100 + sequence), template)
+            if cycle:
+                event = _deep_merge(event, cycle[sequence % len(cycle)])
             prepared = _prepare_application_event(event, application, template)
             _apply_realism(prepared, generator)
             documents.append(prepared)

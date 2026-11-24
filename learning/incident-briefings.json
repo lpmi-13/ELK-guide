@@ -85,13 +85,13 @@
       "observed_minutes_ago": [8, 9, 10],
       "timed_facts": [{"at": "rollout", "text": "The rollout of the new release began at {time} ({ago})."}],
       "channels": ["release", "monitoring", "pager"],
-      "headline": "Some instances started failing during a rollout",
-      "summary": "Errors went up on only some of the service's instances during a rolling deployment. The overall health numbers hide which group of instances is different.",
-      "impact": "Some requests fail and others succeed, depending on which instance handles them. The rollout is paused until the evidence shows whether the new version is the cause.",
+      "headline": "Some requests started failing during a rollout",
+      "summary": "Errors went up for one service during a rolling deployment. Some of its requests fail while others succeed, and the overall health numbers hide what sets them apart.",
+      "impact": "Some customer requests fail and others succeed. The rollout is paused until the evidence shows what the failing requests have in common.",
       "signals": [
-        {"label": "Fleet health", "value": "Instances that should be the same give different results"},
+        {"label": "Service health", "value": "Requests to the same service give different results"},
         {"label": "Change context", "value": "The rolling deployment happened during the incident"},
-        {"label": "Triage request", "value": "Compare results for each service version"}
+        {"label": "Triage request", "value": "Find what the failing requests have in common"}
       ]
     },
     "rare-error-signature": {
@@ -130,7 +130,7 @@
       "environment": "Production · shared services",
       "observed_minutes_ago": [8, 13, 17],
       "channels": ["monitoring", "pager", "incident"],
-      "headline": "Warning logs jumped while requests were failing",
+      "headline": "Warning logs increased while requests were failing",
       "summary": "The service logs are full of thousands of repeated warnings. Most of them are not a problem, and only one pattern seems to be linked to failed requests.",
       "impact": "The number of warnings alone does not show what is wrong. The pattern that matters must be separated from the background noise before anyone can fix the problem.",
       "signals": [

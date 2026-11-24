@@ -51,6 +51,9 @@ def emit(payload, client):
         "browser.viewport": str(payload.get("viewport", ""))[:32],
         "url.path": str(payload.get("path", ""))[:512],
     }
+    # Whether Start found the scenario prepared ahead (the launcher prepares the selected card).
+    if isinstance(payload.get("prepared_ahead"), bool):
+        event["labels.prepared_ahead"] = payload["prepared_ahead"]
     line = json.dumps(event, separators=(",", ":"))
     with lock:
         _log_writer.info(line)
