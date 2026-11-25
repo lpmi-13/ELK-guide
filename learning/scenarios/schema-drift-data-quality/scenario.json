@@ -2,7 +2,7 @@
   "schema_version": 2,
   "id": "schema-drift-data-quality",
   "version": 2,
-  "title": "Fewer requests on a dashboard",
+  "title": "Fewer requests than normal on a dashboard",
   "type": "analysis",
   "classification": "core",
   "difficulty": 2,

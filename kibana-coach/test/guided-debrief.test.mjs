@@ -182,3 +182,25 @@ test('Keep exploring tells the panel; the time-up notice\'s Stay on this page do
   assert.equal(exploring, 1);
   assert.equal(notice.parts['.debrief-keep'].onclick, undefined);
 });
+
+test('a long demonstration debrief joins neighboring observations into concise lines', () => {
+  const Debrief = loadClass('../src/ui/debrief.js', 'IncidentDebrief');
+  const created = [];
+  const originalDocument = globalThis.document;
+  globalThis.document = {createElement: () => { const element = fakeElement(); created.push(element); return element; }};
+  try {
+    new Debrief({append() {}}).showDemonstration({title: 'Complete', checks: [
+      {detail: 'Set the time window.'}, {detail: 'Found the busiest service.'},
+      {detail: 'Filtered to that service.'}, {detail: 'Checked the status codes.'},
+      {detail: 'Excluded healthy traffic.'}, {detail: 'Confirmed the server error.'},
+    ]});
+  } finally {
+    globalThis.document = originalDocument;
+  }
+  const lines = created[0].parts['.demo-checks'].children.map(item => item.textContent);
+  assert.deepEqual(lines, [
+    'Set the time window; found the busiest service.',
+    'Filtered to that service; checked the status codes.',
+    'Excluded healthy traffic; confirmed the server error.',
+  ]);
+});

@@ -625,7 +625,7 @@ class IncidentCoachPanel {
       const [finding, support] = IncidentCoachPanel.splitFinding(command?.evidence || 'Step complete.');
       this.renderPhase({eyebrow: 'What this shows', headline: finding, detail: support, why: command?.mode === 'guided' ? command.reasoning : ''});
       this.resetCountdown();
-      this.showEvidenceHighlights(evidence?.columns ?? command?.learning_focus ?? [], evidence?.targets || [], evidence?.fields || []);
+      this.showEvidenceHighlights(evidence?.columns ?? command?.learning_focus ?? [], evidence?.targets || [], evidence?.fields || [], evidence?.primaryTargetIndex);
       this.revealEvidence();
     }
   }
@@ -657,7 +657,7 @@ class IncidentCoachPanel {
   // A goal that starts by reading the page rings what to read while its one line is on screen. The
   // action phase clears the rings when the coach starts acting.
   showGoalFocus(evidence) {
-    this.showEvidenceHighlights(evidence?.columns || [], evidence?.targets || [], evidence?.fields || []);
+    this.showEvidenceHighlights(evidence?.columns || [], evidence?.targets || [], evidence?.fields || [], evidence?.primaryTargetIndex);
     requestAnimationFrame(() => this.placeAwayFrom(null));
   }
 
@@ -939,7 +939,7 @@ class IncidentCoachPanel {
   // Ring the evidence a result card talks about: result-table columns (`fields`, drawn down to the
   // bottom of the view) and page elements (`targets`, functions returning the live element). `named`
   // are the fields the card talks about, whose columns the card keeps clear of without ringing them.
-  showEvidenceHighlights(fields, targets = [], named = []) {
+  showEvidenceHighlights(fields, targets = [], named = [], primaryTargetIndex = -1) {
     this.clearEvidenceHighlights();
     this.evidenceFields = Array.isArray(fields) ? fields : [];
     this.evidenceTargets = targets.filter(Boolean);
@@ -949,7 +949,7 @@ class IncidentCoachPanel {
       // On a busy page the eye needs a cue to find the ring, so each one arrives once (`.entering`):
       // wide, closing in on its evidence, then a single pulse. Rings follow one another in the order
       // given. A ring whose element is off screen plays its entrance when it is scrolled into view.
-      highlight.className = 'incident-evidence-highlight entering';
+      highlight.className = `incident-evidence-highlight entering${index === this.evidenceFields.length + primaryTargetIndex && primaryTargetIndex >= 0 ? ' primary' : ''}`;
       highlight.style.setProperty('--ring-delay', `${index * 110}ms`);
       highlight.addEventListener('animationend', event => {
         if (event.animationName === 'ring-pulse' || event.animationName === 'ring-fade') highlight.classList.remove('entering');
@@ -1484,6 +1484,7 @@ class IncidentCoachPanel {
     :is(.incident-spotlight,.incident-evidence-highlight) { --ring:#ffb000;--ring-edge:#b86e00;--ring-glow:#ffb00059;position:fixed;z-index:1;box-sizing:border-box;border-radius:7px;pointer-events:none; }
     .incident-spotlight { display:none;box-shadow:0 0 0 9999px #10182070; }
     .incident-evidence-highlight { background:#ffb0001a; }
+    .incident-evidence-highlight.primary { --ring:#0879a5;--ring-edge:#075878;--ring-glow:#0879a559;background:#0879a51f; }
     :is(.incident-spotlight,.incident-evidence-highlight)::before,:is(.incident-spotlight,.incident-evidence-highlight)::after { content:"";position:absolute;inset:0;box-sizing:border-box;border-radius:inherit; }
     :is(.incident-spotlight,.incident-evidence-highlight)::before { border:3px solid var(--ring);box-shadow:0 0 0 1px var(--ring-edge),inset 0 0 0 1px #fffc,0 0 14px 2px var(--ring-glow); }
     :is(.incident-spotlight,.incident-evidence-highlight).entering { animation:ring-flash .6s calc(var(--ring-delay,0ms) + .34s) ease-out both; }

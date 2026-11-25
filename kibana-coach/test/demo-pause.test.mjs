@@ -89,12 +89,14 @@ async function makeDemo({carried = null} = {}) {
     timeRangeMinutes() { return 15; }
   }
   const source = fs.readFileSync(new URL('../src/content-script.js', import.meta.url), 'utf8');
+  const listeners = {};
   const document = {
     readyState: 'complete',
+    hidden: false,
     querySelector: () => null,
     createElement: () => ({}),
     documentElement: {append() {}},
-    addEventListener() {},
+    addEventListener(type, listener) { listeners[type] = listener; },
   };
   const stored = new Map([['incident-coach:auto-connect', JSON.stringify({session: 'test'})]]);
   if (carried) stored.set('incident-coach:carried-result', JSON.stringify(carried));
@@ -111,8 +113,46 @@ async function makeDemo({carried = null} = {}) {
     clock.setTimeout.bind(clock), clock.clearTimeout.bind(clock), clock.performance);
   await Promise.resolve();
   await Promise.resolve();
-  return {clock, calls, stored, get coach() { return coach; }, get client() { return client; }, get adapter() { return adapter; }};
+  return {clock, calls, stored, document, listeners, get coach() { return coach; }, get client() { return client; }, get adapter() { return adapter; }};
 }
+
+test('switching tabs pauses an active demonstration and clears its incomplete editor', async () => {
+  const demo = await makeDemo();
+  demo.client.mode = 'demonstration';
+  let cancelled = 0;
+  demo.adapter.cancelIncompleteAction = () => { cancelled++; };
+  demo.adapter.perform = async (_command, _coach, {signal}) => {
+    demo.calls.actions++;
+    await new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new DOMException('Stopped', 'AbortError')), {once: true});
+    });
+  };
+  const command = {command_id: 'hidden-filter', mode: 'demonstration', type: 'add_filter', target: 'filter', narration: 'Add a filter'};
+  await demo.client.onCommand(command);
+  demo.coach.advanceCelebration = () => false;
+  demo.coach.advanceInfo = () => false;
+  demo.adapter.advanceTyping = () => false;
+  demo.coach.onAdvance();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(demo.calls.actions, 1);
+
+  demo.document.hidden = true;
+  demo.listeners.visibilitychange();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(demo.coach.paused, true);
+  assert.equal(cancelled, 1);
+  assert.equal(demo.calls.messages.at(-1).message_type, 'pause');
+
+  demo.document.hidden = false;
+  demo.listeners.visibilitychange();
+  assert.equal(demo.coach.paused, false);
+  assert.equal(demo.calls.messages.at(-1).message_type, 'resume');
+  await demo.client.onCommand(command);
+  await new Promise(resolve => setImmediate(resolve));
+  demo.clock.advance(5000); // The replayed opening card still gives the learner context.
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(demo.calls.actions, 2);
+});
 
 test('guided steps render before waiting for an unavailable Kibana anchor', async () => {
   const demo = await makeDemo();

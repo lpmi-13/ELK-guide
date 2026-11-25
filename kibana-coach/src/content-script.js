@@ -179,6 +179,9 @@ function startIncidentCoach() {
   // Advance pressed on it while paused (`advancedAction`) still stands when it plays again.
   let pausedAction = null;
   let advancedAction = null;
+  // Browser timers and Kibana controls can be throttled or redrawn while this tab is hidden.
+  // Remember whether visibility, rather than the learner, paused the demonstration.
+  let hiddenTabPaused = false;
 
   function readingBeatWait(milliseconds, signal) {
     if (signal?.aborted) return Promise.reject(new DOMException('Demonstration stopped', 'AbortError'));
@@ -943,6 +946,24 @@ function startIncidentCoach() {
       }
       client.setPaused(paused);
     };
+    const pauseHiddenDemonstration = () => {
+      if (client.mode !== 'demonstration' || investigationFinished) return;
+      if (document.hidden) {
+        // Result cards already wait for Continue, including while hidden.
+        if (coach.paused || coach.phase === 'learning') return;
+        hiddenTabPaused = true;
+        const interruptedAction = Boolean(executionController && !activeReadingBeat);
+        coach.setPaused(true);
+        // An interrupted filter can leave Kibana's editor half filled. Clear it before the
+        // service resends that step; otherwise its next click lands in the stale editor.
+        if (interruptedAction) adapter.cancelIncompleteAction?.();
+      } else if (hiddenTabPaused) {
+        hiddenTabPaused = false;
+        coach.setPaused(false);
+      }
+    };
+    document.addEventListener('visibilitychange', pauseHiddenDemonstration);
+    pauseHiddenDemonstration();
     coach.onHint = () => client.requestHint();
     coach.onReviewFeedback = async () => {
       try { showFeedback(await client.getFeedback()); }
@@ -998,6 +1019,7 @@ function startIncidentCoach() {
       completeReadingBeat?.();
     };
     coach.onStop = () => {
+      hiddenTabPaused = false;
       executionController?.abort();
       currentCommand = null;
       pausedAction = null;

@@ -101,6 +101,8 @@ export interface EvidenceFocus {
     | 'entity' | 'inventory_outlier' | 'esql_row' | 'span_details' | 'alert_summary';
   field?: string;
   fields?: string[];
+  /** 'field_cardinality': give one of the listed rows the primary evidence color. */
+  primary_field?: string;
   value?: string | number;
   text?: string;
   metric?: string;

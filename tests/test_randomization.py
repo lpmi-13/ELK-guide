@@ -171,7 +171,11 @@ class RandomizationTests(unittest.TestCase):
                 self.assertIn(str(incident["status"]), commands["isolate"]["evidence"])
                 self.assertIn("200", commands["isolate"]["evidence"])
                 # The facet scan names no version: it finds that the failures share one.
-                self.assertEqual(commands["inspect"]["evidence_focus"], {"kind": "field_cardinality", "fields": ["service.version", "host.name", "url.path"]})
+                self.assertEqual(commands["inspect"]["evidence_focus"], {
+                    "kind": "field_cardinality",
+                    "fields": ["service.name", "service.version", "host.name", "url.path"],
+                    "primary_field": "service.name",
+                })
                 self.assertNotIn(incident["bad_version"], commands["inspect"]["narration"] + commands["inspect"]["evidence"])
                 self.assertIn(incident["bad_version"], commands["first"]["evidence"])
                 for version in (incident["good_version"], incident["legacy_version"], incident["bad_version"]):

@@ -666,7 +666,9 @@ class KibanaAdapter {
     } catch (error) {
       if (error.name === 'AbortError') throw error;
     }
-    return {targets, columns, fields};
+    const primaryTargetIndex = focus?.kind === 'field_cardinality'
+      ? (focus.fields || []).indexOf(focus.primary_field) : -1;
+    return {targets, columns, fields, primaryTargetIndex};
   }
 
   defaultEvidenceFocus(command) {
@@ -1108,6 +1110,14 @@ class KibanaAdapter {
     } finally {
       this.performing = false;
     }
+  }
+
+  // A demonstration may be interrupted while the Add filter editor is open. Cancel its
+  // incomplete draft before replaying the step, then dismiss any field menus it opened.
+  cancelIncompleteAction() {
+    const cancel = this.resolve('kibana.filter_cancel');
+    if (cancel?.getClientRects().length) cancel.click();
+    this.closeTransientPopovers();
   }
 
   // Discover's URL state: the parsed `_a` (app) and `_g` (global) rison plus what is needed to write

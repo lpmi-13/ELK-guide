@@ -39,29 +39,18 @@
     #launch-status { margin:14px 0 0;color:#c6d4df; }
     #launch-status[hidden] { display:none; }
     #launch-status a { color:#78c7ff; }
-    ol { color:#c6d4df;padding-left:20px;line-height:1.65; }
     .section-heading { display:flex;align-items:center;justify-content:space-between;gap:18px; }
     .section-heading h2 { margin-bottom:0; }
-    button.secondary-button { flex:none;margin:0;padding:8px 11px;border:1px solid #668096;background:#203447; }
-    dialog { width:min(520px,calc(100% - 28px));box-sizing:border-box;padding:0;border:1px solid #3e566a;border-radius:12px;background:#142331;color:#eef5fb;box-shadow:0 24px 80px #000a; }
-    dialog::backdrop { background:#050c13cc;backdrop-filter:blur(3px); }
-    .dialog-content { padding:24px; }
-    .dialog-heading { display:flex;align-items:center;justify-content:space-between;gap:18px; }
-    .dialog-heading h2 { margin:0; }
-    button.dialog-close { margin:0;padding:2px 8px;background:transparent;color:#c6d4df;font-size:26px;font-weight:400;line-height:1; }
-    button.dialog-close:hover { color:#fff;background:#203447; }
-    .dialog-actions { display:flex;justify-content:flex-end; }
     .visually-hidden { position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0; }
     /* Fixed height (not min/max) so the form below never jumps while the catalog loads. */
     .scenario-catalog { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;height:clamp(380px,56vh,560px);margin:16px 0;overflow:auto;padding:3px 6px 3px 3px; }
     .scenario-catalog .catalog-msg { grid-column:1/-1;align-self:center;margin:0;text-align:center;color:#9fb2c1; }
-    /* A card is a column: the title sits at the top, the green details line at the bottom, and only the
-       brief between them varies in height (cards in a row stretch to the tallest). */
+    /* Keep descriptions level even when neighboring titles wrap differently. */
     .scenario-card { position:relative;display:flex;flex-direction:column;gap:6px;box-sizing:border-box;margin:0;padding:15px 16px;border:1px solid #3d566b;border-radius:8px;background:#10202e;color:#eef5fb;font-weight:400;cursor:pointer; }
     .scenario-card:hover:not(.disabled),.scenario-card:has(input:checked) { border-color:#43d7a0;box-shadow:inset 0 0 0 1px #43d7a0; }
     .scenario-card:has(input:focus-visible) { outline:3px solid #ffb000;outline-offset:2px; }
     .scenario-card.disabled { cursor:not-allowed; } .scenario-card.disabled > :not(.unavailable) { opacity:.6; }
-    .scenario-card strong { font-size:18px;line-height:1.3;font-weight:700; }
+    .scenario-card strong { min-height:2.6em;font-size:18px;line-height:1.3;font-weight:700; }
     .scenario-card .brief { color:#c6d4df;font-size:16px;line-height:1.45; }
     .scenario-card .meta { margin-top:auto;padding-top:6px;color:#76cdb0;font-size:15px;line-height:1.4; }
     .scenario-card .unavailable { color:#ffad9f;font-size:15px;line-height:1.4; }
@@ -74,7 +63,6 @@
       main{grid-template-columns:1fr;justify-content:stretch}
       .scenario-catalog{grid-template-columns:1fr}
       .field-row{grid-template-columns:1fr}
-      .dialog-content{padding:20px}
     }
   </style>
 </head>
@@ -90,7 +78,6 @@
     <section>
       <div class="section-heading">
         <h2>Choose a Kibana scenario</h2>
-        <button id="show-instructions" class="secondary-button" type="button">How it works</button>
       </div>
       <p>Pick a production problem and investigate it in Kibana. Watch a demonstration, get guided practice, or try a challenge. You only read data here, so nothing you do can change it.</p>
       <form id="start-form">
@@ -111,21 +98,6 @@
       <p class="muted">Some scenarios need Kibana features that this installation may not have. Those scenarios are turned off, and the reason is shown.</p>
     </section>
   </main>
-  <dialog id="instructions" aria-labelledby="instructions-title" aria-describedby="instructions-list">
-    <div class="dialog-content">
-      <div class="dialog-heading">
-        <h2 id="instructions-title">How it works</h2>
-        <button id="close-instructions" class="dialog-close" type="button" aria-label="Close how it works dialog">&times;</button>
-      </div>
-      <ol id="instructions-list">
-        <li>Choose a scenario and start it.</li>
-        <li>The coach is built into this Kibana, so there is nothing to install in your browser.</li>
-        <li>A new tab opens while the data is prepared. When the data is ready, the tab opens Kibana for you.</li>
-        <li>Your demonstration, guided practice or challenge then starts straight away.</li>
-      </ol>
-      <div class="dialog-actions"><button id="dismiss-instructions" type="button">Got it</button></div>
-    </div>
-  </dialog>
   <script>
     const kibanaUrl = __KIBANA_URL__ === 'same-origin' ? location.origin : __KIBANA_URL__;
     const learningUrl = __LEARNING_URL__ === 'same-origin' ? `${location.origin}/incident-coach/learning` : __LEARNING_URL__;
@@ -138,8 +110,6 @@
     const scenarioKey = document.querySelector('#scenario-key');
     const scenarioCatalog = document.querySelector('#scenario-catalog');
     const launchStatus = document.querySelector('#launch-status');
-    const instructions = document.querySelector('#instructions');
-    const instructionsStorageKey = 'adaptive-kibana-how-it-works-dismissed-v1';
     let investigationUrl = '';
     let investigationTab = null;
     let launched = false;
@@ -417,30 +387,6 @@
       if (!modeControl.contains(event.target)) closeModeSelect();
     });
     renderModeSelect();
-
-    function openInstructions() {
-      if (!instructions.open) instructions.showModal();
-    }
-
-    function closeInstructions() {
-      if (instructions.open) instructions.close();
-    }
-
-    instructions.addEventListener('close', () => {
-      try { localStorage.setItem(instructionsStorageKey, 'true'); } catch (_error) {}
-    });
-    instructions.addEventListener('click', event => {
-      if (event.target === instructions) closeInstructions();
-    });
-    document.querySelector('#show-instructions').addEventListener('click', openInstructions);
-    document.querySelector('#close-instructions').addEventListener('click', closeInstructions);
-    document.querySelector('#dismiss-instructions').addEventListener('click', closeInstructions);
-
-    try {
-      if (localStorage.getItem(instructionsStorageKey) !== 'true') openInstructions();
-    } catch (_error) {
-      openInstructions();
-    }
 
     async function detectCoachRuntime() {
       try {

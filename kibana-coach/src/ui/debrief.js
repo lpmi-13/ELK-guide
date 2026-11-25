@@ -206,10 +206,20 @@ class IncidentDebrief {
     problemBox.querySelector('p').textContent = problem;
     problemBox.hidden = !problem;
     const checks = dialog.querySelector('.demo-checks');
-    for (const check of summary.checks || []) {
+    const checksToShow = (summary.checks || []).map(check => typeof check === 'string' ? check : (check.detail || check.title || ''));
+    // A long route reads better as a few linked observations. Keep the source checks
+    // intact for scoring and review, but pair neighboring steps in the visible recap.
+    const recap = checksToShow.length > 4 ? checksToShow.reduce((lines, line, index) => {
+      if (index % 2 === 0) lines.push(line);
+      else {
+        const next = /^[A-Z][a-z]/.test(line) ? line[0].toLowerCase() + line.slice(1) : line;
+        lines[lines.length - 1] = `${lines[lines.length - 1].replace(/[.!?]$/, '')}; ${next}`;
+      }
+      return lines;
+    }, []) : checksToShow;
+    for (const line of recap) {
       const item = document.createElement('li');
-      // Checks are one-line recaps; only the detail is shown (the title is an internal label).
-      item.textContent = typeof check === 'string' ? check : (check.detail || check.title || '');
+      item.textContent = line;
       checks.append(item);
     }
     checks.hidden = !checks.children.length;

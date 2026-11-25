@@ -8,7 +8,7 @@ categories:
 markdown: |-
     Investigate production-style incidents in Kibana with a built-in coach.
 
-    Open **Lab launcher**, choose a scenario and mode, and start an investigation. A new browser tab shows preparation progress and opens Kibana when the evidence is ready.
+    The **Lab launcher** opens when the playground loads. Choose a scenario and mode, then start an investigation. A new browser tab shows preparation progress and opens Kibana when the evidence is ready.
 playground:
     networks:
         - name: local
@@ -20,7 +20,7 @@ playground:
             - name: laborant
               default: true
           drives:
-            - source: oci://ghcr.io/lpmi-13/elk-guide-rootfs:v5
+            - source: oci://ghcr.io/lpmi-13/elk-guide-rootfs:v6
               mount: /
               size: 35GiB
           network:
@@ -35,7 +35,7 @@ playground:
           name: Lab launcher
           machine: docker-01
           number: 5601
-          target: window
+          target: pane
     initTasks:
         init_start_lab:
             name: init_start_lab

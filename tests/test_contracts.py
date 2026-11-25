@@ -392,7 +392,7 @@ class ContractTests(unittest.TestCase):
         scenario_key = manifest_schema["properties"]["scenario_key"]
         self.assertEqual(scenario_key, {"type": "string", "minLength": 10, "maxLength": 40})
 
-    def test_launcher_defaults_to_demonstration_and_uses_dismissible_instructions_dialog(self):
+    def test_launcher_defaults_to_demonstration_without_an_opening_dialog(self):
         launcher = (ROOT / "telemetry/index.html").read_text(encoding="utf-8")
         demonstration = '<option value="demonstration" selected>Demonstration</option>'
         guided = '<option value="guided">Guided practice</option>'
@@ -400,10 +400,10 @@ class ContractTests(unittest.TestCase):
 
         self.assertLess(launcher.index(demonstration), launcher.index(guided))
         self.assertLess(launcher.index(guided), launcher.index(challenge))
-        self.assertIn('<dialog id="instructions"', launcher)
-        self.assertIn("instructions.showModal()", launcher)
-        self.assertIn("localStorage.setItem(instructionsStorageKey, 'true')", launcher)
-        self.assertIn("localStorage.getItem(instructionsStorageKey) !== 'true'", launcher)
+        self.assertNotIn('<dialog id="instructions"', launcher)
+        self.assertNotIn("instructions.showModal()", launcher)
+        manifest = (ROOT / "iximiuz/manifest.yaml").read_text(encoding="utf-8")
+        self.assertIn("target: pane", manifest)
 
     def test_launcher_assistance_options_match_the_closed_control_width(self):
         launcher = (ROOT / "telemetry/index.html").read_text(encoding="utf-8")
@@ -437,7 +437,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn("kibana-gateway:", compose)
         self.assertIn("location /incident-coach/learning/", gateway)
         self.assertIn("sub_filter '</head>'", gateway)
-        self.assertIn("there is nothing to install in your browser", launcher)
+        self.assertIn("built-in Kibana coach", launcher)
         self.assertIn("if (coachRuntimeReady)", launcher)
         self.assertIn("launchWhenReady()", launcher)
         self.assertIn("investigationTab = openPrepTab()", launcher)

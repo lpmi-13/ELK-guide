@@ -61,6 +61,32 @@ test('the hit count is ringed beside the chart, query or pill only when the card
   assert.deepEqual(await ringed({type: 'enter_kql', evidence: 'The query keeps failed requests.'}), ['kibana.query_bar']);
 });
 
+test('field statistics marks only the requested primary row for the special ring', async () => {
+  const source = fs.readFileSync(new URL('../src/kibana-adapter.js', import.meta.url), 'utf8');
+  const Adapter = new Function('location', `${source}\nreturn KibanaAdapter;`)({pathname: '/app/discover'});
+  const adapter = new Adapter();
+  adapter.evidenceTargets = async focus => focus.fields.map(field => () => ({field}));
+  const evidence = await adapter.findEvidence({type: 'show_field_statistics', value: {}, evidence_focus: {
+    kind: 'field_cardinality', fields: ['service.name', 'service.version', 'host.name'], primary_field: 'service.name',
+  }});
+  assert.equal(evidence.primaryTargetIndex, 0);
+  assert.equal(evidence.targets.length, 3);
+  assert.match(Panel.styles, /incident-evidence-highlight\.primary \{[^}]*--ring:#0879a5/);
+  const rendered = [];
+  const panel = Object.create(Panel.prototype);
+  panel.evidenceHighlights = [];
+  panel.root = {append(highlight) { rendered.push(highlight); }};
+  panel.refreshEvidenceHighlights = () => {};
+  const originalDocument = globalThis.document;
+  globalThis.document = {createElement: () => ({style: {setProperty() {}}, addEventListener() {}, setAttribute() {}, remove() {}})};
+  try {
+    panel.showEvidenceHighlights(evidence.columns, evidence.targets, evidence.fields, evidence.primaryTargetIndex);
+  } finally {
+    globalThis.document = originalDocument;
+  }
+  assert.deepEqual(rendered.map(highlight => highlight.className.includes(' primary')), [true, false, false]);
+});
+
 // The spotlight on the control the coach acts on arrives the way the evidence rings do.
 function makeSpotlight() {
   const source = fs.readFileSync(new URL('../src/ui/spotlight.js', import.meta.url), 'utf8');
