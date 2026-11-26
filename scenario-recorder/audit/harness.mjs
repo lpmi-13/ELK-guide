@@ -129,10 +129,13 @@ export const INSTRUMENT = () => {
   audit.drain = () => audit.events.splice(0);
 };
 
-// Kibana-internal requests that fail only because this lab runs without security, with nothing shown to
-// the learner (verified 2026-11-12): the ES|QL editor's lookup-index privilege check and a dashboard's
-// per-user view tracking. Recorded as notes, not failures.
-export const KNOWN_SILENT_FAILURES = [/\/internal\/esql\/lookup_index\/privileges/, /\/internal\/dashboard\/user_activity\//];
+// Optional Kibana requests that do not affect an investigation: the ES|QL editor's lookup-index
+// privilege check, per-user dashboard view tracking, and the external news feed. Recorded as notes.
+export const KNOWN_SILENT_FAILURES = [
+  /\/internal\/esql\/lookup_index\/privileges/,
+  /\/internal\/dashboard\/user_activity\//,
+  /^https:\/\/feeds\.elastic\.co\/kibana\//,
+];
 
 // What the coach shows right now, read from its (open) shadow root and the page around it.
 export const READ_COACH = () => {

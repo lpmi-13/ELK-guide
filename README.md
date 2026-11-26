@@ -180,6 +180,7 @@ python tests/live_scenario_matrix.py --all --isolation --replay   # every availa
 cd scenario-recorder && npm ci
 PW_CHANNEL=chrome node coach-audit.mjs --mvp --mode demonstration --mode guided --mode challenge   # the first gate: both viewports, normal and Advance speed
 PW_CHANNEL=chrome node coach-audit.mjs --mvp --case robustness --case recovery --case replay       # Pause/Advance/hidden tab/reload/outage/expired session; guided dead ends; tabs and keys
+PW_CHANNEL=chrome node coach-audit.mjs --scenario http-error-regression --case diagnostics --viewport 1280x800 # Guided: hint, wrong field, missing colon, absent value, fix/reset, finish
 PW_CHANNEL=chrome node coach-audit.mjs --all --surface dashboard                                   # the manual catalog sweep, one surface at a time
 ```
 

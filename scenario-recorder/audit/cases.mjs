@@ -96,7 +96,7 @@ export async function recoveryCase(tab, deadline) {
   await tab.waitFor(state => /what to do/i.test(state.eyebrow), {label: 'the step after the filter'});
   // The earned pill removed: explained, then put back.
   await expectRecovery(tab, {
-    name: 'filter-removed', eyebrow: /earned filter removed/i, mentions: /without/i,
+    name: 'filter-removed', eyebrow: /(?:filter you need|earned filter) (?:was )?removed/i, mentions: /without/i,
     act: () => removeFirstPill(page),
     resolve: async () => {},
   });
@@ -122,6 +122,64 @@ export async function recoveryCase(tab, deadline) {
     else await sleep(400);
   }
   throw new Error('guided recovery did not reach its debrief in time');
+}
+
+// Guided diagnostics, as a learner would encounter them: ask for a hint, make three
+// distinct query mistakes, read the specific explanation, use the suggested fix where
+// there is one, reset the search, and finish the same step and investigation.
+export async function guidedDiagnosticsCase(tab, deadline) {
+  const {page, record} = tab;
+  await tab.beginBriefing();
+  const opening = await tab.waitFor(state => tab.current && /what to do/i.test(state.eyebrow), {label: 'the first guided step'});
+  if (!opening.buttons.hint) record.fail('missing_guided_hint', 'the first guided step offers no Hint');
+  else {
+    await tab.click('#hint', 'Hint');
+    const hint = page.locator('#adaptive-incident-coach #hint-card');
+    await hint.waitFor({state: 'visible', timeout: 10000});
+    if (!(await hint.innerText()).trim()) record.fail('empty_guided_hint', 'the Hint card is empty');
+    await record.screenshot(page, 'guided-hint');
+  }
+  await showMe(tab);
+  await tab.waitFor(state => tab.current?.message.type === 'open_field_statistics' && /what to do/i.test(state.eyebrow), {label: 'the field statistics step'});
+  const step = tab.current;
+  if (!step || step.message.type !== 'open_field_statistics') record.fail('unexpected_guided_step', 'the next step is not the field statistics step');
+
+  for (const slip of [
+    {name: 'wrong-field', query: 'http.response.status: 503', mentions: /No field named http\.response\.status.*Did you mean http\.response\.status_code/i,
+      fix: 'http.response.status_code: 503'},
+    {name: 'missing-colon', query: 'http.response.status_code is 503', mentions: /Kibana searched every field.*colon/i,
+      fix: 'http.response.status_code: 503'},
+    {name: 'absent-value', query: 'http.response.status_code: 999', mentions: /No http\.response\.status_code values of.*999.*Top values/i,
+      choice: 'Show top values'},
+  ]) {
+    await expectRecovery(tab, {
+      name: slip.name, eyebrow: /no results/i, mentions: slip.mentions,
+      act: () => query(page, slip.query),
+      resolve: async card => {
+        if (slip.fix) {
+          if (!card.choices.includes('Fix my query')) record.fail('missing_query_fix', `${slip.name}: Fix my query is absent`);
+          else {
+            await page.locator('#adaptive-incident-coach #stage-actions button', {hasText: 'Fix my query'}).click();
+            const filled = await page.locator("[data-test-subj='queryInput']").inputValue();
+            if (filled !== slip.fix) record.fail('wrong_query_fix', `${slip.name}: suggested ${filled}, expected ${slip.fix}`);
+          }
+        }
+        if (slip.choice && !card.choices.includes(slip.choice)) record.fail('missing_query_help', `${slip.name}: ${slip.choice} is absent`);
+        await page.locator('#adaptive-incident-coach #stage-actions button', {hasText: 'Reset search'}).click();
+      },
+    });
+    const restored = await tab.waitFor(state => !state.page.noResults && state.page.hits, {timeout: 30000, label: `results after ${slip.name}`}).catch(() => null);
+    if (!restored) record.fail('recovery_not_restored', `${slip.name}: results did not come back`);
+    if (tab.current !== step) record.fail('diagnostic_advanced_step', `${slip.name}: the coach moved to another step`);
+  }
+
+  while (Date.now() < deadline) {
+    const state = await tab.poll();
+    if (state.debrief) return state;
+    if (tab.current && !tab.current.showMe && /what to do/i.test(state.eyebrow)) await showMe(tab);
+    else await sleep(400);
+  }
+  throw new Error('guided diagnostics did not reach the debrief in time');
 }
 
 // ------------------------------------------------------------------------------------------------

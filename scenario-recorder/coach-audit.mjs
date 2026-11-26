@@ -9,6 +9,7 @@
 //   node coach-audit.mjs --mvp                                    # the first gate (see LOCAL_TEST_PLAN.md)
 //   node coach-audit.mjs --scenario rare-error-signature --mode guided --viewport 1280x800
 //   node coach-audit.mjs --mvp --case robustness --case recovery --case replay
+//   node coach-audit.mjs --scenario http-error-regression --case diagnostics --viewport 1280x800
 //   node coach-audit.mjs --all --surface dashboard                # the manual catalog sweep, by surface
 //
 // Each case writes recordings/audit/<run>/<case>/: summary.json, events.jsonl, step screenshots, and
@@ -17,7 +18,7 @@ import {mkdir, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {INSTRUMENT, Record, api, config, deleteRun, manifest, playwright, runState, sleep} from './audit/harness.mjs';
 import {LearnerTab} from './audit/session.mjs';
-import {recoveryCase, replayCase} from './audit/cases.mjs';
+import {guidedDiagnosticsCase, recoveryCase, replayCase} from './audit/cases.mjs';
 
 const MVP = ['http-error-regression', 'rare-error-signature'];
 
@@ -46,7 +47,7 @@ function parseArgs(argv) {
 
 function argv0Help() {
   return 'usage: coach-audit.mjs [--mvp | --scenario ID ... | --all [--surface S]] [--mode demonstration|guided|challenge ...]\n' +
-    '  [--viewport 1440x900 ...] [--speed normal|advance ...] [--case flow|robustness|recovery|replay ...] [--key KEY] [--out DIR] [--headed]';
+    '  [--viewport 1440x900 ...] [--speed normal|advance ...] [--case flow|robustness|recovery|diagnostics|replay ...] [--key KEY] [--out DIR] [--headed]';
 }
 
 export function fixedKey(scenario, suffix = '') {
@@ -328,6 +329,7 @@ async function runCase(browser, spec, root) {
       await tab.launch();
       if (spec.case === 'robustness') await robustness(tab, deadline);
       else if (spec.case === 'recovery') await checkCompletion(tab, await recoveryCase(tab, deadline));
+      else if (spec.case === 'diagnostics') await checkCompletion(tab, await guidedDiagnosticsCase(tab, deadline));
       else {
         const state = spec.mode === 'demonstration' ? await demonstrate(tab, spec.speed, deadline)
           : spec.mode === 'guided' ? await guide(tab, deadline) : await challenge(tab, deadline);
@@ -367,7 +369,7 @@ async function main() {
   const specs = [];
   for (const kind of cases) {
     for (const scenario of kind === 'replay' ? [scenarios[0]] : scenarios) {
-      const caseModes = kind === 'robustness' ? ['demonstration'] : kind === 'recovery' || kind === 'replay' ? ['guided'] : modes;
+      const caseModes = kind === 'robustness' ? ['demonstration'] : ['recovery', 'diagnostics', 'replay'].includes(kind) ? ['guided'] : modes;
       for (const mode of caseModes) {
         for (const viewport of kind === 'flow' ? viewports : [viewports[0]]) {
           for (const speed of kind === 'flow' && mode === 'demonstration' ? speeds : [null]) {
