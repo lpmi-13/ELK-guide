@@ -54,6 +54,20 @@
     .scenario-card .brief { color:#c6d4df;font-size:16px;line-height:1.45; }
     .scenario-card .meta { margin-top:auto;padding-top:6px;color:#76cdb0;font-size:15px;line-height:1.4; }
     .scenario-card .unavailable { color:#ffad9f;font-size:15px;line-height:1.4; }
+    .launch-controls #start { width:100%; }
+    /* Desktop: the cards take the width, with the mode, key and Start beside them, so starting a scenario
+       never needs a scroll. The catalog fills the height left under the heading and scrolls on its own. */
+    @media(min-width:1100px){
+      body{max-width:1640px;padding:24px 32px}
+      header{margin-bottom:18px}
+      main{grid-template-columns:minmax(0,1fr)}
+      main > section{padding:22px 26px}
+      .intro{margin:8px 0 0;max-width:72ch}
+      .launch-layout{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:28px;align-items:start;margin-top:16px}
+      .scenario-catalog{grid-template-columns:repeat(auto-fill,minmax(300px,1fr));height:max(420px,calc(100vh - 252px));margin:0}
+      .launch-controls{padding:2px 0 0 28px;border-left:1px solid #2e4559}
+      .launch-controls > label:first-child{margin-top:0}
+    }
     @media(max-width:760px){
       body{padding:22px 14px}
       header{display:block;margin-bottom:24px}
@@ -79,23 +93,25 @@
       <div class="section-heading">
         <h2>Choose a Kibana scenario</h2>
       </div>
-      <p>Pick a production problem and investigate it in Kibana. Watch a demonstration, get guided practice, or try a challenge. You only read data here, so nothing you do can change it.</p>
-      <form id="start-form">
+      <p class="intro">Pick a production problem and investigate it in Kibana. Watch a demonstration, get guided practice, or try a challenge. You only read data here, so nothing you do can change it.</p>
+      <form id="start-form" class="launch-layout">
         <div id="scenario-catalog" class="scenario-catalog" role="radiogroup" aria-label="Available scenarios"><p class="catalog-msg" role="status">Loading scenarios…</p></div>
-        <label id="mode-label" for="mode">Assistance mode</label>
-        <span class="select-control">
-          <select id="mode"><option value="demonstration" selected>Demonstration</option><option value="guided">Guided practice</option><option value="challenge">Challenge</option></select>
-        </span>
-        <label for="scenario-key">Scenario key</label>
-        <div class="field-row">
-          <input id="scenario-key" type="text" value="quiet-river-signal" minlength="10" maxlength="40" title="Use 10 to 40 characters." autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="scenario-key-help" required>
-          <button id="new-key" type="button">New key</button>
+        <div class="launch-controls">
+          <label id="mode-label" for="mode">Assistance mode</label>
+          <span class="select-control">
+            <select id="mode"><option value="demonstration" selected>Demonstration</option><option value="guided">Guided practice</option><option value="challenge">Challenge</option></select>
+          </span>
+          <label for="scenario-key">Scenario key</label>
+          <div class="field-row">
+            <input id="scenario-key" type="text" value="quiet-river-signal" minlength="10" maxlength="40" title="Use 10 to 40 characters." autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="scenario-key-help" required>
+            <button id="new-key" type="button">New key</button>
+          </div>
+          <p class="field-help" id="scenario-key-help">Each start gets a new key, so you get a fresh incident. Type a key you used before to get its incident again.</p>
+          <button id="start" type="submit" disabled>Start selected scenario</button>
+          <p id="launch-status" role="status" aria-live="polite" hidden></p>
+          <p class="muted">Some scenarios need Kibana features that this installation may not have. Those scenarios are turned off, and the reason is shown.</p>
         </div>
-        <p class="field-help" id="scenario-key-help">Use any 10–40 characters. Use the same key again to get the same incident.</p>
-        <button id="start" type="submit" disabled>Start selected scenario</button>
-        <p id="launch-status" role="status" aria-live="polite" hidden></p>
       </form>
-      <p class="muted">Some scenarios need Kibana features that this installation may not have. Those scenarios are turned off, and the reason is shown.</p>
     </section>
   </main>
   <script>
@@ -209,6 +225,34 @@
     function keyIsValid() {
       return scenarioKey.value.length >= 10 && scenarioKey.value.length <= 40;
     }
+
+    // Fresh incidents. A key decides its incident, so starting the same scenario again with the same key
+    // would repeat every value to filter on. Unless the learner typed the key, each card gets a key from
+    // the service whose incident differs in every value from the learner's last run of that scenario,
+    // and every Start rolls on to a new one. A typed key is left alone, so an old incident can be replayed.
+    const LAST_KEYS = 'incident-lab:last-keys';
+    let keyIsAuto = true;
+    let freshFor = ''; // the scenario the key on screen was drawn for
+    function lastKeys() {
+      try { return JSON.parse(localStorage.getItem(LAST_KEYS) || '{}') || {}; } catch (_error) { return {}; }
+    }
+    function rememberKey(scenario, key) {
+      try { localStorage.setItem(LAST_KEYS, JSON.stringify({...lastKeys(), [scenario]: key})); } catch (_error) { /* storage may be unavailable */ }
+    }
+    async function freshKey(scenario) {
+      if (!scenario || !keyIsAuto || freshFor === scenario) return;
+      const after = lastKeys()[scenario];
+      try {
+        const response = await fetch(`${learningUrl}/api/scenario-keys`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({scenario, after: after ? [after] : []})});
+        const result = await response.json();
+        // The learner typed a key or moved to another card meanwhile: theirs stands.
+        if (!response.ok || !keyIsAuto || scenario !== selectedScenario || typeof result.key !== 'string') return;
+        scenarioKey.value = result.key;
+        freshFor = scenario;
+      } catch (_error) {
+        /* The key on screen still works; it may just repeat an earlier incident. */
+      }
+    }
     function discardPrepared(held = prepared, {beacon = false} = {}) {
       if (!held) return;
       if (held === prepared) prepared = null;
@@ -223,9 +267,12 @@
     }
     async function prepareSelection() {
       const scenario = selectedScenario;
+      let entry = catalogEntries.find(item => item.id === scenario);
+      if (starting || document.visibilityState !== 'visible' || !entry?.available) return;
+      await freshKey(scenario);
+      entry = catalogEntries.find(item => item.id === scenario);
+      if (starting || scenario !== selectedScenario || !entry?.available || !keyIsValid()) return;
       const key = scenarioKey.value;
-      const entry = catalogEntries.find(item => item.id === scenario);
-      if (starting || document.visibilityState !== 'visible' || !entry?.available || !keyIsValid()) return;
       if (preparing?.scenario === scenario && preparing?.key === key) return;
       const current = prepared?.scenario === scenario && prepared?.key === key;
       if (current && Date.now() - prepared.at < PREPARE_REFRESH_MS) return;
@@ -568,14 +615,10 @@
       newKey.disabled = true;
       scenarioKey.readOnly = true;
       start.textContent = 'Activating…';
-      // Hand the run prepared for this card and key to Start; one prepared for another choice is let go.
       starting = true;
       clearTimeout(prepareTimer);
       prepareSequence += 1;
       preparing = null;
-      const claim = prepared?.scenario === selectedScenario && prepared?.key === scenarioKey.value ? prepared.runId : null;
-      if (claim) prepared = null;
-      else discardPrepared();
       clearLaunchStatus();
       investigationUrl = '';
       sessionConnection = null;
@@ -586,11 +629,20 @@
       launchId = crypto.randomUUID();
       investigationTab = openPrepTab();
       if (!investigationTab) setLaunchStatus('If no new tab opened, a link will appear here when the investigation is ready.');
+      const scenario = selectedScenario;
       try {
-        if (!selectedScenario) throw new Error('Select an available scenario first.');
-        const response = await fetch(`${learningUrl}/api/runs`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario:selectedScenario,mode:modeSelect.value,scenario_key:scenarioKey.value,...(claim ? {prepared_run_id: claim} : {})})});
+        if (!scenario) throw new Error('Select an available scenario first.');
+        // Usually drawn already, when the card was prepared.
+        await freshKey(scenario);
+        const key = scenarioKey.value;
+        // Hand the run prepared for this card and key to Start; one prepared for another choice is let go.
+        const claim = prepared?.scenario === scenario && prepared?.key === key ? prepared.runId : null;
+        if (claim) prepared = null;
+        else discardPrepared();
+        const response = await fetch(`${learningUrl}/api/runs`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario,mode:modeSelect.value,scenario_key:key,...(claim ? {prepared_run_id: claim} : {})})});
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || `Start failed (${response.status})`);
+        rememberKey(scenario, key);
         sessionConnection = result.session;
         sessionStorage.launcherSession = result.session.session_id;
         send('scenario_started', {run_id: result.run.run_id, tutorial_mode: result.session.mode, prepared_ahead: result.prepared === true});
@@ -604,14 +656,24 @@
         newKey.disabled = false;
         scenarioKey.readOnly = false;
         starting = false;
+        // The next start, of any card, gets a new incident.
+        keyIsAuto = true;
+        freshFor = '';
       }
     });
-    document.querySelector('#new-key').addEventListener('click', () => {
+    document.querySelector('#new-key').addEventListener('click', async () => {
+      keyIsAuto = true;
+      freshFor = '';
       scenarioKey.value = generateScenarioKey();
       scenarioKey.focus();
+      await freshKey(selectedScenario);
       schedulePrepare(400);
     });
-    scenarioKey.addEventListener('input', () => schedulePrepare(900));
+    scenarioKey.addEventListener('input', () => {
+      keyIsAuto = false;
+      freshFor = '';
+      schedulePrepare(900);
+    });
     scenarioKey.value = generateScenarioKey();
     detectCoachRuntime();
     // Paint the last-known catalog synchronously so a reload shows the cards at

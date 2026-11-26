@@ -370,7 +370,12 @@ class ContractTests(unittest.TestCase):
         self.assertIn('id="scenario-key"', launcher)
         self.assertIn('minlength="10" maxlength="40"', launcher)
         self.assertNotIn('id="scenario-key" type="text" value="quiet-river-signal" pattern=', launcher)
-        self.assertIn("scenario_key:scenarioKey.value", launcher)
+        self.assertIn("scenario_key:key", launcher)
+        # Each start rolls on to a key the service draws, so a scenario started again is a new incident
+        # (a key the learner typed is left alone, so an old incident can be replayed).
+        self.assertIn("/api/scenario-keys", launcher)
+        self.assertIn("await freshKey(scenario);", launcher)
+        self.assertIn("rememberKey(scenario, key);", launcher)
         self.assertNotIn('id="session-card"', launcher)
         self.assertNotIn('id="evidence-progress"', launcher)
         self.assertNotIn("Incident evidence is ready", launcher)

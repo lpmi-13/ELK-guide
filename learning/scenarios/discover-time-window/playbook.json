@@ -120,11 +120,11 @@
         "concept": "Inside the failing requests, a second field's top values show where the failures are happening.",
         "narration": "The failing status code is now filtered. Open the url.path field and read its Top values to see which endpoint the errors hit.",
         "reasoning": "Knowing the status code isn't the same as knowing where it happens. The url.path top values show whether one route is behind most of them.",
-        "evidence": "The url.path top values show the endpoint behind almost all of the failures.",
+        "evidence": "The url.path top values show the endpoint behind all of the failures.",
         "demonstration": {
           "narration": "I'll check url.path Top values within the ${param.incident.status} responses to see which endpoint the failures hit.",
           "reasoning": "The failures could be spread across many routes, or all on one. Reading url.path in the filtered results tells us which.",
-          "evidence": "Almost all of the ${param.incident.status} responses are on ${param.incident.route}, which serves the ${param.incident.journey} requests that support said were failing. The failures are tied to that one endpoint, not spread across the API.",
+          "evidence": "All of the ${param.incident.status} responses are on ${param.incident.route}, which serves the ${param.incident.journey} requests that support said were failing. The failures are tied to that one endpoint, not spread across the API.",
           "evidence_focus": {"kind": "top_values", "field": "${var.route_field}", "value": "${param.incident.route}"}
         },
         "requires": ["isolate"],
@@ -150,11 +150,10 @@
     "demonstration_summary": {
       "title": "${var.title} complete",
       "checks": [
-        {"title": "Time range", "detail": "Found where the histogram rises and started the window just before it."},
-        {"title": "Status codes", "detail": "Found the top status-code values — ${param.incident.status} stood out."},
-        {"title": "Filtering", "detail": "Filtered for ${param.incident.status}, the failing status code."},
-        {"title": "Affected endpoint", "detail": "Found the affected endpoint, ${param.incident.route}."},
-        {"title": "Confirming", "detail": "Confirmed ${param.incident.status} and ${param.incident.route} together in the same event."}
+        {"title": "Time range", "detail": "We found when the failures started from the rise in the histogram, and set the time window around it."},
+        {"title": "Status codes", "detail": "We counted the status codes across the whole window and found the error code that stood out."},
+        {"title": "Affected endpoint", "detail": "We kept only the failing requests, and found that they were all on one endpoint."},
+        {"title": "Confirming", "detail": "We opened one failing request to confirm that the error and the endpoint go together."}
       ],
       "answer": {"finding": "${truth.finding}", "scope": "${truth.scope}", "conclusion": "${truth.conclusion}", "evidence": "The status-code and url.path top values, plus the event we opened, connect ${var.finding_phrase} to ${truth.scope}."}
     }

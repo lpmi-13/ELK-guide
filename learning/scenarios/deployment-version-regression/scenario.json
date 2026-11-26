@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "id": "deployment-version-regression",
-  "version": 5,
+  "version": 6,
   "title": "Failures after a rolling deployment",
   "type": "investigation",
   "classification": "core",
@@ -21,47 +21,18 @@
   ],
   "parameters": {
     "incident": {
-      "choose": [
+      "merge": [
         {
-          "service": "orders",
-          "bad_version": "2.4.1",
-          "good_version": "2.4.0",
-          "status": 500,
-          "legacy_version": "2.3.7",
-          "route_a": "/api/orders",
-          "route_b": "/api/orders/search",
-          "route_c": "/api/orders/history"
+          "choose": [
+            {"service": "orders", "route_a": "/api/orders", "route_b": "/api/orders/search", "route_c": "/api/orders/history"},
+            {"service": "payments", "route_a": "/api/payments/authorize", "route_b": "/api/payments/capture", "route_c": "/api/payments/refund"},
+            {"service": "catalog", "route_a": "/api/catalog/search", "route_b": "/api/catalog/items", "route_c": "/api/catalog/categories"},
+            {"service": "auth", "route_a": "/api/auth/token", "route_b": "/api/auth/refresh", "route_c": "/api/auth/session"},
+            {"service": "checkout", "route_a": "/checkout", "route_b": "/checkout/cart", "route_c": "/checkout/confirm"}
+          ]
         },
-        {
-          "service": "payments",
-          "bad_version": "3.2.0",
-          "good_version": "3.1.4",
-          "status": 502,
-          "legacy_version": "3.0.9",
-          "route_a": "/api/payments/authorize",
-          "route_b": "/api/payments/capture",
-          "route_c": "/api/payments/refund"
-        },
-        {
-          "service": "catalog",
-          "bad_version": "1.9.0",
-          "good_version": "1.8.5",
-          "status": 503,
-          "legacy_version": "1.7.2",
-          "route_a": "/api/catalog/search",
-          "route_b": "/api/catalog/items",
-          "route_c": "/api/catalog/categories"
-        },
-        {
-          "service": "auth",
-          "bad_version": "4.1.0",
-          "good_version": "4.0.7",
-          "status": 500,
-          "legacy_version": "3.9.4",
-          "route_a": "/api/auth/token",
-          "route_b": "/api/auth/refresh",
-          "route_c": "/api/auth/session"
-        }
+        {"release": {"major": [1, 6], "minor": [2, 9], "patch": [1, 9], "as": {"new": "bad_version", "current": "good_version", "legacy": "legacy_version"}}},
+        {"choose": [{"status": 500}, {"status": 502}, {"status": 503}, {"status": 504}]}
       ]
     },
     "timing": {

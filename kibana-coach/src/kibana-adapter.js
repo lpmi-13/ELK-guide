@@ -201,6 +201,9 @@ const QueryExplainer = {
 
 globalThis.QueryExplainer = QueryExplainer;
 
+// How long a step's opening card waits for the control it keeps clear of (see resolveAnchor).
+const ANCHOR_WAIT_MS = 3000;
+
 class KibanaAdapter {
   constructor() {
     this.registry = null;
@@ -314,6 +317,10 @@ class KibanaAdapter {
   // propagates so the run unwinds. Given the command, the anchor is the element the card's words are
   // about when that can be told: a named span, host or panel action rather than the first thing the
   // registry's selector happens to match.
+  //
+  // The opening card waits on this, so the wait is short: a control that isn't on the page yet (the
+  // sort menu of a table hidden behind Field statistics) appears only once the action switches views,
+  // and waiting it out left the learner with no coach on screen for half a minute.
   async resolveAnchor(name, signal, command = null) {
     if (command) {
       const application = (globalThis.KibanaApplicationAdapters || []).find(item => item.commands.has(command.type));
@@ -326,7 +333,7 @@ class KibanaAdapter {
     }
     if (!name || !this.registry?.targets?.[name]) return this.resolve(name);
     try {
-      return await this.waitFor(name, 20000, signal);
+      return await this.waitFor(name, ANCHOR_WAIT_MS, signal);
     } catch (error) {
       if (error.name === 'AbortError') throw error;
       return null;
@@ -1110,6 +1117,17 @@ class KibanaAdapter {
     } finally {
       this.performing = false;
     }
+  }
+
+  // Whether `command` carries on in the popover open now: it filters from the Top values of the same
+  // field (`openFieldPopover` reuses an open one rather than clicking the field again, which would
+  // close it). Then a demonstration leaves it open between the step that read it and this one.
+  reusesOpenPopover(command) {
+    const field = command?.value?.field;
+    if (!field || !['filter_top_value', 'filter_field_present'].includes(command.type)) return false;
+    const panels = [...document.querySelectorAll('[data-popover-panel]')].filter(panel => panel.getClientRects().length);
+    return panels.length > 0 && panels.every(panel =>
+      panel.querySelector("[data-test-subj='fieldPopoverHeader_fieldDisplayName']")?.textContent?.trim() === field);
   }
 
   // A demonstration may be interrupted while the Add filter editor is open. Cancel its

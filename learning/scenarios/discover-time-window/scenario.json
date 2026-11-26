@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "id": "discover-time-window",
-  "version": 5,
+  "version": 6,
   "title": "Find the incident window",
   "type": "analysis",
   "classification": "core",
@@ -12,11 +12,21 @@
   "required_capabilities": ["discover", "spaces", "saved_objects"],
   "parameters": {
     "incident": {
-      "choose": [
-        {"service": "checkout", "route": "/checkout", "status": 503, "status_family": "HTTP 503", "journey": "checkout", "headline": "Checkout failing on and off for some users"},
-        {"service": "orders", "route": "/api/orders", "status": 500, "status_family": "HTTP 5xx", "journey": "order", "headline": "Orders failing on and off for some users"},
-        {"service": "payments", "route": "/api/payments/authorize", "status": 502, "status_family": "HTTP 502", "journey": "card payment", "headline": "Card payments failing on and off for some users"},
-        {"service": "catalog", "route": "/api/catalog/search", "status": 503, "status_family": "HTTP 503", "journey": "product search", "headline": "Product search failing on and off for some users"}
+      "merge": [
+        {
+          "choose": [
+            {"service": "checkout", "route": "/checkout", "journey": "checkout", "headline": "Checkout failing on and off for some users"},
+            {"service": "checkout", "route": "/checkout/cart", "journey": "shopping cart", "headline": "Shopping carts failing on and off for some users"},
+            {"service": "orders", "route": "/api/orders", "journey": "order", "headline": "Orders failing on and off for some users"},
+            {"service": "orders", "route": "/api/orders/history", "journey": "order history", "headline": "Order history failing on and off for some users"},
+            {"service": "payments", "route": "/api/payments/authorize", "journey": "card payment", "headline": "Card payments failing on and off for some users"},
+            {"service": "payments", "route": "/api/payments/refund", "journey": "refund", "headline": "Refunds failing on and off for some users"},
+            {"service": "catalog", "route": "/api/catalog/search", "journey": "product search", "headline": "Product search failing on and off for some users"},
+            {"service": "catalog", "route": "/api/catalog/items", "journey": "product page", "headline": "Product pages failing on and off for some users"},
+            {"service": "auth", "route": "/api/auth/token", "journey": "sign-in", "headline": "Sign-ins failing on and off for some users"}
+          ]
+        },
+        {"choose": [{"status": 500}, {"status": 502}, {"status": 503}, {"status": 504}]}
       ]
     },
     "timing": {

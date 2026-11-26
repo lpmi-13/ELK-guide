@@ -105,6 +105,8 @@ def _param_lookup(parameters, dotted):
     for part in dotted.split("."):
         if isinstance(current, dict) and part in current:
             current = current[part]
+        elif isinstance(current, list) and part.isdigit() and int(part) < len(current):
+            current = current[int(part)]
         else:
             return None
     return current
@@ -1499,6 +1501,13 @@ class Handler(BaseHTTPRequestHandler):
             session = create_session(run, mode)
             public_run = {key: value for key, value in run.items() if key != "manifest"}
             self.respond(202, {"run": public_run, "session": session_public(session, include_connection=True), "prepared": prepared})
+            return
+
+        if parsed.path == "/api/scenario-keys":
+            # The launcher's next key for a card: one whose incident differs in every value from the
+            # learner's last run of that scenario (the controller draws it).
+            status, result = http_json(f"{CONTROLLER_URL}/api/keys", "POST", {"scenario": payload.get("scenario"), "after": payload.get("after") or []}, timeout=10)
+            self.respond(status, result)
             return
 
         if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "discard":

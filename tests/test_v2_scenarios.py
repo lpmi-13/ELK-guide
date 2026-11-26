@@ -58,7 +58,10 @@ class ScenarioV2Tests(unittest.TestCase):
                 # a demonstration card shown before the corresponding action.
                 self.assertIn("${truth.", json.dumps(demonstrated[-1]["demonstration"]["evidence"]))
                 summary = playbook["demonstration_summary"]
-                self.assertEqual(len(summary["checks"]), len(demonstrated))
+                # The debrief tells the investigation as a short story of its big steps: fewer lines than
+                # steps, never a list of what was clicked.
+                self.assertGreaterEqual(len(summary["checks"]), 3)
+                self.assertLessEqual(len(summary["checks"]), len(demonstrated))
                 # Each check is a concise recap of one step — a real sentence, not a stub — but the
                 # debrief is a summary, so it is no longer required to restate the step's reasoning at
                 # essay length. Evidence/conclusion prose is likewise optional (the steps carried it).
@@ -181,9 +184,9 @@ class ScenarioV2Tests(unittest.TestCase):
         self.assertEqual(goals["endpoints"]["reference_action"]["arguments"]["field"], "url.path")
         # No goal presumes the status code or endpoint via a hard-coded compound query anymore.
         self.assertNotIn("url.path:", json.dumps(playbook["goals"]))
-        # The debrief has one check per demonstrated (non-answer) step.
+        # The debrief tells the big steps, at most one line per demonstrated (non-answer) step.
         demonstrated = [goal for goal in playbook["goals"] if goal["reference_action"]["command"] not in {"request_answer", "request_diagnosis"}]
-        self.assertEqual(len(playbook["demonstration_summary"]["checks"]), len(demonstrated))
+        self.assertLessEqual(len(playbook["demonstration_summary"]["checks"]), len(demonstrated))
 
     def test_evaluator_has_no_scenario_id_branches(self):
         source = (ROOT / "learning-service/engine/evaluator.py").read_text()
@@ -211,7 +214,8 @@ class ScenarioV2Tests(unittest.TestCase):
         self.assertIn("/api/catalog", launcher)
         self.assertIn("catalogEntries = catalog.scenarios", launcher)
         self.assertIn("of catalogEntries.entries()", launcher)
-        self.assertIn("scenario:selectedScenario", launcher)
+        self.assertIn("const scenario = selectedScenario;", launcher)
+        self.assertIn("body:JSON.stringify({scenario,mode:modeSelect.value,scenario_key:key", launcher)
         for entry in self.catalog["scenarios"]:
             self.assertNotIn(f'value="{entry["id"]}"', launcher)
 

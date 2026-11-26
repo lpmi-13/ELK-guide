@@ -170,16 +170,62 @@ class RandomizationTests(unittest.TestCase):
                 self.assertEqual(commands["isolate"]["learning_focus"], ["http.response.status_code"])
                 self.assertIn(str(incident["status"]), commands["isolate"]["evidence"])
                 self.assertIn("200", commands["isolate"]["evidence"])
-                # The facet scan names no version: it finds that the failures share one.
+                # The facet scan names no version: it finds that the failures share one. The version is
+                # the new fact, so it gets the primary ring; host and endpoint are ringed to show they vary.
                 self.assertEqual(commands["inspect"]["evidence_focus"], {
                     "kind": "field_cardinality",
-                    "fields": ["service.name", "service.version", "host.name", "url.path"],
-                    "primary_field": "service.name",
+                    "fields": ["service.version", "host.name", "url.path"],
+                    "primary_field": "service.version",
                 })
+                # It says why the other one-value rows don't count: our own filters put them there.
+                self.assertIn("because we filtered", commands["inspect"]["evidence"])
+                self.assertIn(".keyword", commands["inspect"]["evidence"])
                 self.assertNotIn(incident["bad_version"], commands["inspect"]["narration"] + commands["inspect"]["evidence"])
                 self.assertIn(incident["bad_version"], commands["first"]["evidence"])
                 for version in (incident["good_version"], incident["legacy_version"], incident["bad_version"]):
                     self.assertIn(version, commands["contrast"]["evidence"])
+
+    def test_a_scenario_started_again_is_a_new_incident_in_every_value(self):
+        """The launcher asks for a key whose run differs from the learner's last run of that scenario in
+        every value drawn for it, so nothing filtered on last time (a client, a service, a version, a
+        status) carries over and only the method does. The key still decides its run."""
+        import random
+        generator = random.Random(20261126)
+        # Every scenario a learner can start (the launcher lists the MVP track), not a fixed list, so a
+        # new one that forgets to draw its values fails here.
+        visible = [entry["id"] for entry in json.loads((ROOT / "learning/catalog.json").read_text())["scenarios"] if entry.get("track") == "mvp"]
+        self.assertEqual(set(visible), set(LOG_HUNT_PACKS))
+        for pack in visible:
+            specs = self.template(pack).get("parameters") or {}
+            for _ in range(25):
+                previous = "-".join(generator.choice(words) for words in self.controller.KEY_WORDS) + "-11"
+                key, fresh = self.controller.fresh_key_for(specs, [previous])
+                with self.subTest(pack=pack, previous=previous):
+                    self.assertTrue(fresh)
+                    mine, last = self.controller.drawn_values(specs, key), self.controller.drawn_values(specs, previous)
+                    self.assertTrue(mine)
+                    self.assertEqual(mine.keys(), last.keys())
+                    self.assertTrue(all(mine[path] != last[path] for path in mine), (mine, last))
+                    self.assertEqual(self.controller.drawn_values(specs, key), mine)
+
+    def test_values_that_belong_apart_are_drawn_apart(self):
+        """A client is not tied to one rejection reason, nor a service to one version or status: each
+        is drawn on its own, so knowing one from an earlier run says nothing about the others."""
+        pairs = {
+            "auth-rejection-surge": ("reason", "client"),
+            "deployment-version-regression": ("service", "status"),
+            "discover-time-window": ("route", "status"),
+            "schema-drift-data-quality": ("service", "producer"),
+        }
+        for pack, (first, second) in pairs.items():
+            seen = {}
+            for seed in range(400):
+                incident = self.materialize(pack, seed)["parameters"]["incident"]
+                seen.setdefault(incident[first], set()).add(incident[second])
+            with self.subTest(pack=pack):
+                self.assertTrue(all(len(values) > 1 for values in seen.values()), seen)
+        versions = {self.materialize("deployment-version-regression", seed)["parameters"]["incident"]["bad_version"] for seed in range(200)}
+        self.assertGreater(len(versions), 20)
 
     def test_specifics_and_required_filters_vary_across_seeds(self):
         for pack in LOG_HUNT_PACKS:
@@ -261,16 +307,24 @@ class RandomizationTests(unittest.TestCase):
                     if command["type"] == "show_debrief":
                         summary = command["value"]
                         answer = summary.get("answer", {})
-                        # The debrief is a compact recap: one terse line per step plus the graded
-                        # answer (shown as "Problem found"). There is no intro sentence and no
-                        # evidence/conclusion prose — the steps themselves carried the reasoning.
+                        # The debrief is a compact recap: a few lines that tell the investigation as a
+                        # story ("we found the service, then the version that fails"), plus the graded
+                        # answer shown as "Problem found". The lines name what kind of thing was found,
+                        # never the value itself (that is the Problem found box's job), and join their
+                        # clauses with commas and "and"/"so", never semicolons.
+                        for check in summary["checks"]:
+                            self.assertNotIn(";", check["detail"])
+                            self.assertRegex(check["detail"], r"\b[Ww]e\b")
+                            self.assertFalse(self.server.reveals_answer(check["detail"], [part for part in finding.split("–") if part]), check["detail"])
                         summary_copy = " ".join([
                             answer.get("conclusion", ""), answer.get("evidence", ""),
                             *(check["detail"] for check in summary["checks"]),
                         ])
                         # A clock-time finding ("14:05–14:12") reads "between 14:05 and 14:12" in prose.
                         self.assertTrue(all(part in summary_copy for part in finding.split("–")), finding)
-                        self.assertEqual(len(summary["checks"]), len(demonstrated))
+                        # A short story of the investigation's big steps, not one line per click.
+                        self.assertGreaterEqual(len(summary["checks"]), 3)
+                        self.assertLessEqual(len(summary["checks"]), len(demonstrated))
                         self.assertEqual(summary["answer"]["conclusion"], conclusion)
                         self.assertLessEqual(len(summary["answer"]["conclusion"].split()), 25)
                         # Each check is a real one-line recap, not a stub — but no longer an essay.
@@ -281,7 +335,7 @@ class RandomizationTests(unittest.TestCase):
                             # are plain language now, so assert the concept and the observed values
                             # rather than the raw field ids.
                             titles = [check["title"] for check in summary["checks"]]
-                            self.assertEqual(titles, ["Time range", "Status codes", "Filtering", "Affected endpoint", "Confirming"])
+                            self.assertEqual(titles, ["Time range", "Status codes", "Affected endpoint", "Confirming"])
                             status_check = next(check for check in summary["checks"] if check["title"] == "Status codes")
                             self.assertIn("status", status_check["detail"].lower())
                             endpoint_check = next(check for check in summary["checks"] if check["title"] == "Affected endpoint")
@@ -340,6 +394,22 @@ class RandomizationTests(unittest.TestCase):
                     with self.subTest(pack=pack, seed=seed, mode=mode):
                         self.assertEqual(command["value"]["to"], "now")
                         self.assertEqual(start.second, 0)
+                        self.assertIn(local(start), rendered_hints[-1])
+                        if "baseline" in moments:
+                            # A pack that compares the incident with the usual level before it starts the
+                            # window where that stretch begins, on a five-minute mark, well before the rise
+                            # the briefing dates.
+                            self.assertEqual(start.minute % 5, 0)
+                            self.assertGreaterEqual((moments["baseline"] - start).total_seconds() / 60, 0)
+                            self.assertLess((moments["baseline"] - start).total_seconds() / 60, 5)
+                            self.assertGreaterEqual((moments["onset"] - start).total_seconds() / 60, 10)
+                            self.assertIn(local(moments["onset"]), command["narration"])
+                            if mode == "demonstration":
+                                self.assertIn(local(start), command["narration"])
+                            else:
+                                self.assertFalse(self.server.reveals_answer(command["narration"], [local(start)]))
+                                self.assertIn(local(start), command["walkthrough"]["narration"])
+                            continue
                         self.assertEqual(start.minute % reference["step_minutes"], 0)
                         self.assertGreaterEqual(lead, reference["lead_minutes"])
                         self.assertLess(lead, reference["lead_minutes"] + reference["step_minutes"])
@@ -431,10 +501,12 @@ class RandomizationTests(unittest.TestCase):
     def test_every_log_hunt_filter_comes_from_a_value_a_survey_revealed(self):
         """No demonstrated filter may name a value the learner hasn't been shown on screen.
 
-        Each pack reads a field's Top values before its first filter, and that filter (or the phrase
-        it excludes) is the value the survey step rings — never one taken from the answer key. A filter
-        for the field's presence names no value at all; the authentication pack first leaves the
-        surveyed value out (its baseline step) and then turns that same pill around to include it.
+        Each pack reads a field's Top values before it filters on one of that field's values, and that
+        filter (or the phrase it searches for) is the value the survey step rings — never one taken from
+        the answer key. A pack may first narrow to the problem itself (the failed requests), with the +
+        in event.outcome's Top values or a query for the failures, before it surveys. A filter for the
+        field's presence names no value at all; the authentication pack first leaves the surveyed value
+        out (its baseline step) and then turns that same pill around to include it.
         """
         for pack in ("discover-time-window", "http-error-regression", "rare-error-signature", "auth-rejection-surge",
                      "log-pattern-noise-reduction", "deployment-version-regression"):
@@ -447,8 +519,11 @@ class RandomizationTests(unittest.TestCase):
                 first = goals[order[order.index("survey") + 1]]
                 focus = survey["demonstration"]["evidence_focus"]
                 with self.subTest(pack=pack, seed=seed):
-                    self.assertEqual(order[:2], ["scope", "survey"])
-                    self.assertIn(first["id"], {"isolate", "baseline"})
+                    self.assertEqual(order[0], "scope")
+                    for step in order[1:order.index("survey")]:
+                        self._assert_narrows_to_the_failures(goals[step])
+                    self.assertLessEqual(order.index("survey"), 2)
+                    self.assertIn(first["id"], {"isolate", "baseline", "warning"})
                     self.assertEqual(first["requires"], ["survey"])
                     if first["id"] == "baseline":
                         self.assertEqual(goals["isolate"]["requires"], ["baseline"])
@@ -457,6 +532,13 @@ class RandomizationTests(unittest.TestCase):
                         self._assert_filter_names_the_survey(step, focus, manifest)
                     for phase in ("narration", "reasoning"):
                         self.assertNotIn(str(focus["value"]), survey["demonstration"][phase])
+
+    def _assert_narrows_to_the_failures(self, step):
+        action = step["reference_action"]
+        if action["command"] == "filter_top_value":
+            self.assertEqual(action["arguments"], {"field": "event.outcome", "value": "failure", "negate": False})
+        else:
+            self.assertEqual(action, {"command": "enter_kql", "target": "kibana.query_bar", "arguments": "event.outcome: failure"})
 
     def _assert_filter_names_the_survey(self, step, focus, manifest):
         arguments = step["reference_action"]["arguments"]
@@ -468,11 +550,11 @@ class RandomizationTests(unittest.TestCase):
                 self.assertEqual(step["reference_action"]["command"], "filter_field_present")
         else:
             # A query may only name what was on screen: the surveyed value, or a phrase of the
-            # ringed line when it excludes noise.
+            # ringed line when it searches for (or leaves out) that line.
             fragment = manifest["parameters"]["incident"].get("exclude_fragment")
             if fragment:
                 self.assertIn(fragment, focus["value"])
-                self.assertIn(f'not {focus["field"]}: "{fragment}"', arguments)
+                self.assertIn(f'{focus["field"]}: "{fragment}"', arguments)
             else:
                 self.assertIn(f'{focus["field"]}: {focus["value"]}', arguments)
 

@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "id": "schema-drift-data-quality",
-  "version": 2,
+  "version": 3,
   "title": "Fewer requests than normal on a dashboard",
   "type": "analysis",
   "classification": "core",
@@ -12,11 +12,27 @@
   "required_capabilities": ["discover", "spaces", "saved_objects"],
   "parameters": {
     "incident": {
-      "choose": [
-        {"service": "checkout", "producer": "telemetry-java/3.2", "good_producer": "telemetry-java/3.1", "version": "4.8.0", "route": "/checkout"},
-        {"service": "orders", "producer": "telemetry-go/2.5", "good_producer": "telemetry-go/2.4", "version": "5.1.0", "route": "/api/orders"},
-        {"service": "payments", "producer": "telemetry-node/1.9", "good_producer": "telemetry-node/1.8", "version": "2.3.0", "route": "/api/payments"},
-        {"service": "catalog", "producer": "telemetry-python/4.0", "good_producer": "telemetry-python/3.9", "version": "6.0.0", "route": "/api/catalog"}
+      "merge": [
+        {
+          "choose": [
+            {"service": "checkout", "route": "/checkout"},
+            {"service": "orders", "route": "/api/orders"},
+            {"service": "payments", "route": "/api/payments"},
+            {"service": "catalog", "route": "/api/catalog"},
+            {"service": "auth", "route": "/api/auth"}
+          ]
+        },
+        {
+          "choose": [
+            {"producer": "telemetry-java/3.2", "good_producer": "telemetry-java/3.1"},
+            {"producer": "telemetry-go/2.5", "good_producer": "telemetry-go/2.4"},
+            {"producer": "telemetry-node/1.9", "good_producer": "telemetry-node/1.8"},
+            {"producer": "telemetry-python/4.0", "good_producer": "telemetry-python/3.9"},
+            {"producer": "telemetry-dotnet/1.4", "good_producer": "telemetry-dotnet/1.3"},
+            {"producer": "telemetry-ruby/2.2", "good_producer": "telemetry-ruby/2.1"}
+          ]
+        },
+        {"choose": [{"version": "4.8.0"}, {"version": "5.1.0"}, {"version": "2.3.0"}, {"version": "6.0.0"}, {"version": "3.4.0"}]}
       ]
     }
   },

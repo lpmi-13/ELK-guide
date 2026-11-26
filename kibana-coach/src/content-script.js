@@ -125,6 +125,8 @@ function startIncidentCoach() {
   let lastSearch = null;
   // Set once a step that opens another page has reported; that page's coach picks the session up.
   let leavingPage = false;
+  // Set when a demonstrated step's popovers were left open for the next step (see showResult).
+  let popoversLeftOpen = false;
   const stepClock = new GuidedStepClock({
     isPaused: () => Boolean(document.hidden || coach.paused || coach.briefing?.active || coach.celebrating ||
       walkthroughController || executionController || recoveryController || checkIn),
@@ -223,7 +225,10 @@ function startIncidentCoach() {
   // it shows, then wait for the learner — reading the result is where the inference happens, so it is
   // never on a timer.
   // The step is only reported done afterwards, so the next step (or the debrief) can't cover it.
-  // Popovers the step opened are closed on the way out so they don't pile up over the next step.
+  // Popovers the step opened are closed on the way out so they don't pile up over the next step. In a
+  // demonstration that waits for the next step: one that works in the same popover (a field's Top
+  // values read in one step and filtered from in the next) keeps it open rather than closing it only
+  // to open it again.
   async function showResult(command, signal) {
     const evidence = await adapter.findEvidence(command, signal);
     if (advanceAfterAction === signal) {
@@ -233,7 +238,15 @@ function startIncidentCoach() {
     }
     coach.showResult(command, evidence);
     await coach.waitForAdvance(signal);
-    adapter.closeTransientPopovers();
+    if (command.mode === 'demonstration') popoversLeftOpen = true;
+    else adapter.closeTransientPopovers();
+  }
+
+  // Close what the last demonstrated step left open, unless `next` carries on in that popover.
+  function settleLeftPopovers(next = null) {
+    if (!popoversLeftOpen) return;
+    popoversLeftOpen = false;
+    if (!next || !adapter.reusesOpenPopover?.(next)) adapter.closeTransientPopovers();
   }
 
   async function execute(command, explicitlyRequested = false) {
@@ -256,6 +269,7 @@ function startIncidentCoach() {
         await readingBeatWait(completedActionHoldMs, controller.signal);
       } : null;
       if (command.mode === 'demonstration') {
+        settleLeftPopovers(command);
         // State the step's goal in one line before touching Kibana.
         // The anchor is only the control the opening cards point at; perform() resolves the controls
         // the step actually drives. Some steps (e.g. add_filter) deliberately point at an anchor the
@@ -720,6 +734,7 @@ function startIncidentCoach() {
 
   async function finishDemonstration(command) {
     const summary = command.value;
+    settleLeftPopovers();
     try {
       await client.submitDiagnosis({
         ...(summary.answer || summary.diagnosis),
@@ -1024,6 +1039,7 @@ function startIncidentCoach() {
       currentCommand = null;
       pausedAction = null;
       advancedAction = null;
+      popoversLeftOpen = false;
       stepClock.stop();
       checkIn = null;
       recoveryController?.abort();

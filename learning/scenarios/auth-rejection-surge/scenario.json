@@ -1,30 +1,51 @@
 {
   "schema_version": 2,
   "id": "auth-rejection-surge",
-  "version": 3,
+  "version": 4,
   "title": "An increase in rejected sign-ins",
   "type": "investigation",
   "classification": "core",
   "difficulty": 1,
-  "estimated_minutes": 15,
-  "brief": "More sign-ins are being rejected than usual, but everyday rejections are mixed in. Find the unusual reason and the client it affects.",
+  "estimated_minutes": 16,
+  "brief": "More sign-ins are being rejected than usual, but some rejections happen every day. Find the reason behind the increase and the client it affects.",
   "skills": ["boolean-kql", "include-exclude", "top-values"],
   "required_capabilities": ["discover", "spaces", "saved_objects"],
   "parameters": {
     "incident": {
+      "merge": [
+        {
+          "choose": [
+            {"reason": "device_untrusted", "message": "sign-in rejected: device not trusted", "detail": "blocked a sign-in from an untrusted device"},
+            {"reason": "mfa_timeout", "message": "sign-in rejected: MFA challenge timed out", "detail": "let an MFA challenge time out"},
+            {"reason": "expired_nonce", "message": "sign-in rejected: expired nonce", "detail": "sent an expired nonce"},
+            {"reason": "token_reuse", "message": "sign-in rejected: replayed refresh token", "detail": "replayed a refresh token"},
+            {"reason": "region_blocked", "message": "sign-in rejected: region not allowed", "detail": "signed in from a blocked region"},
+            {"reason": "captcha_failed", "message": "sign-in rejected: captcha check failed", "detail": "failed a captcha check"}
+          ]
+        },
+        {
+          "choose": [
+            {"client": "desktop-app"}, {"client": "ios-app"}, {"client": "android-app"}, {"client": "mobile-web"},
+            {"client": "partner-api"}, {"client": "smart-tv-app"}, {"client": "kiosk-app"}
+          ]
+        }
+      ]
+    },
+    "everyday": {"sample": ["bad_password", "session_expired", "account_locked", "rate_limited"], "count": 2},
+    "timing": {
       "choose": [
-        {"reason": "expired_nonce", "client": "mobile-web", "message": "sign-in rejected: expired nonce", "noise_reason_a": "bad_password", "noise_client_a": "public-web", "noise_reason_b": "account_locked", "noise_client_b": "admin", "corroboration_message": "mobile web nonce validation failed"},
-        {"reason": "mfa_timeout", "client": "ios-app", "message": "sign-in rejected: MFA challenge timed out", "noise_reason_a": "rate_limited", "noise_client_a": "partner-api", "noise_reason_b": "bad_password", "noise_client_b": "public-web", "corroboration_message": "ios app MFA challenge expired"},
-        {"reason": "token_reuse", "client": "partner-api", "message": "sign-in rejected: replayed refresh token", "noise_reason_a": "account_locked", "noise_client_a": "admin", "noise_reason_b": "bad_password", "noise_client_b": "public-web", "corroboration_message": "partner api replayed a refresh token"},
-        {"reason": "device_untrusted", "client": "desktop-app", "message": "sign-in rejected: device not trusted", "noise_reason_a": "session_expired", "noise_client_a": "mobile-web", "noise_reason_b": "bad_password", "noise_client_b": "public-web", "corroboration_message": "desktop app blocked an untrusted device"}
+        {"onset": 10, "onset_seconds": 600, "noticed": 6, "baseline": 25},
+        {"onset": 12, "onset_seconds": 720, "noticed": 7, "baseline": 27},
+        {"onset": 14, "onset_seconds": 840, "noticed": 9, "baseline": 29}
       ]
     }
   },
   "provisioning": {
     "strategies": ["seeded-events", "saved-objects"],
     "seeded_events": {
-      "signal_count": 30,
-      "noise_count": 100,
+      "signal_count": 50,
+      "noise_count": 90,
+      "signal_window_seconds": [10, "${param.timing.onset_seconds}"],
       "signal": {
         "service": {"name": "auth"},
         "event": {"outcome": "failure"},
@@ -33,20 +54,59 @@
         "authentication": {"rejection_reason": "${param.incident.reason}"},
         "message": "${param.incident.message}"
       },
-      "distractors": [
-        {"authentication": {"rejection_reason": "${param.incident.noise_reason_a}"}, "client": {"application": {"name": "${param.incident.noise_client_a}"}}},
-        {"authentication": {"rejection_reason": "${param.incident.noise_reason_b}"}, "client": {"application": {"name": "${param.incident.noise_client_b}"}}}
-      ],
       "companions": [
         {
           "count": 2,
           "event": {
             "service": {"name": "auth"},
             "event": {"outcome": "failure"},
+            "http": {"response": {"status_code": 401}},
             "client": {"application": {"name": "${param.incident.client}"}},
             "authentication": {"rejection_reason": "${param.incident.reason}"},
-            "message": "${param.incident.corroboration_message}"
+            "message": "${param.incident.client} ${param.incident.detail}"
           }
+        },
+        {
+          "count": 25,
+          "offset_seconds": 20,
+          "interval_seconds": 90,
+          "jitter_seconds": 40,
+          "trace": "own",
+          "event": {
+            "service": {"name": "auth"},
+            "event": {"outcome": "failure"},
+            "http": {"response": {"status_code": 401}},
+            "authentication": {"rejection_reason": "${param.everyday.0}"},
+            "message": "sign-in rejected: ${param.everyday.0}"
+          },
+          "cycle": [
+            {"client": {"application": {"name": "public-web"}}},
+            {"client": {"application": {"name": "mobile-web"}}},
+            {"client": {"application": {"name": "ios-app"}}},
+            {"client": {"application": {"name": "android-app"}}},
+            {"client": {"application": {"name": "desktop-app"}}}
+          ]
+        },
+        {
+          "count": 25,
+          "offset_seconds": 65,
+          "interval_seconds": 90,
+          "jitter_seconds": 40,
+          "trace": "own",
+          "event": {
+            "service": {"name": "auth"},
+            "event": {"outcome": "failure"},
+            "http": {"response": {"status_code": 401}},
+            "authentication": {"rejection_reason": "${param.everyday.1}"},
+            "message": "sign-in rejected: ${param.everyday.1}"
+          },
+          "cycle": [
+            {"client": {"application": {"name": "android-app"}}},
+            {"client": {"application": {"name": "public-web"}}},
+            {"client": {"application": {"name": "desktop-app"}}},
+            {"client": {"application": {"name": "mobile-web"}}},
+            {"client": {"application": {"name": "ios-app"}}}
+          ]
         }
       ]
     },
@@ -59,11 +119,12 @@
     "answers": {
       "finding": "${param.incident.reason}",
       "scope": "${param.incident.client}",
-      "conclusion": "The unusual ${param.incident.reason} rejections come mainly from the ${param.incident.client} client."
+      "conclusion": "The unusual ${param.incident.reason} rejections all come from the ${param.incident.client} client."
     },
     "assertions": [
       {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.message}"}}},
-      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "${param.incident.corroboration_message}"}}}
+      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "${param.incident.client} ${param.incident.detail}"}}},
+      {"id": "healthy_in_view", "kind": "es_count", "maximum": 0, "query": {"term": {"event.outcome.keyword": "success"}}}
     ]
   },
   "answer_schema": {

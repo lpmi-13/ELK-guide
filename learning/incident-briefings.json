@@ -67,10 +67,11 @@
       "severity": "SEV-2",
       "owner": "Identity Platform",
       "environment": "Production · global",
-      "observed_minutes_ago": [7, 11, 14],
+      "observed_minutes_ago": [6, 7, 9],
+      "timed_facts": [{"at": "onset", "text": "Rejections started rising at {time} ({ago})."}],
       "channels": ["monitoring", "pager", "support"],
       "headline": "Many more sign-ins are being rejected than usual",
-      "summary": "Sign-in failures are much higher than normal. Everyday rejections are mixed in with the unusual ones, which hides the real cause.",
+      "summary": "Sign-in failures are much higher than normal. Some sign-ins are rejected every day, so the total alone doesn't show the real cause.",
       "impact": "Some customers cannot sign in. People who are already signed in are fine, so only new sign-ins are affected.",
       "signals": [
         {"label": "Anomaly", "value": "Rejections are more than 3× the usual rate"},

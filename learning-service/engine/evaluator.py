@@ -671,6 +671,11 @@ def recommended_window_start(moments):
     reference = window_reference(moments)
     if reference is None:
         return None
+    # A pack that compares the incident with the usual level before it names where that stretch begins
+    # (``baseline``), and the window starts there, on a five-minute mark, rather than just before the rise.
+    if "baseline" in moments:
+        start = moments["baseline"].replace(second=0, microsecond=0)
+        return start - timedelta(minutes=start.minute % 5)
     start = (reference["at"] - timedelta(minutes=reference["lead_minutes"])).replace(second=0, microsecond=0)
     return start - timedelta(minutes=start.minute % reference["step_minutes"])
 

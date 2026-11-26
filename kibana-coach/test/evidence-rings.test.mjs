@@ -1,5 +1,5 @@
-// Evidence rings around page elements: rows that sit close together get rings that meet halfway
-// instead of overlapping. Run with: node --test kibana-coach/test/*.test.mjs
+// Evidence rings around page elements: elements next to each other share one ring around them all.
+// Run with: node --test kibana-coach/test/*.test.mjs
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
@@ -7,22 +7,21 @@ import test from 'node:test';
 const source = fs.readFileSync(new URL('../src/ui/coach-panel.js', import.meta.url), 'utf8');
 const Panel = new Function(`${source}\nreturn IncidentCoachPanel;`)();
 const rect = (left, top, width, height) => ({left, top, width, height, right: left + width, bottom: top + height});
-const overlap = (a, b) => Math.min(a.right, b.right) > Math.max(a.left, b.left) && Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top);
 
-test('rings around two touching rows meet halfway, a gap apart, and keep their outer padding', () => {
-  // The inspect step's pinned doc-viewer rows: one directly under the other, sharing a 1px border.
-  const [upper, lower] = Panel.ringBoxes([rect(1400, 380, 480, 31), rect(1400, 410, 480, 31)]);
-  assert.equal(overlap(upper, lower), false);
-  assert.equal(lower.top - upper.bottom, 4);
-  assert.deepEqual([upper.left, upper.top, upper.right], [1395, 375, 1885]);
-  assert.deepEqual([lower.left, lower.right, lower.bottom], [1395, 1885, 446]);
+test('touching rows share one ring around them all, drawn by the first', () => {
+  // The inspect step's pinned doc-viewer rows: one under the other, sharing a 1px border (and the third
+  // row a little lower, as when a long field name wraps).
+  const boxes = Panel.ringBoxes([rect(1400, 380, 480, 31), rect(1400, 410, 480, 31), rect(1400, 444, 480, 31)]);
+  assert.deepEqual(boxes, [{left: 1395, top: 375, right: 1885, bottom: 480}, null, null]);
 });
 
-test('rings around elements side by side meet halfway across', () => {
-  const [left, right] = Panel.ringBoxes([rect(100, 50, 80, 20), rect(184, 50, 80, 20)]);
-  assert.equal(overlap(left, right), false);
-  assert.equal(right.left - left.right, 4);
-  assert.deepEqual([left.top, left.bottom, right.top, right.bottom], [45, 75, 45, 75]);
+test('elements side by side share one ring across', () => {
+  assert.deepEqual(Panel.ringBoxes([rect(100, 50, 80, 20), rect(184, 50, 80, 20)]), [{left: 95, top: 45, right: 269, bottom: 75}, null]);
+});
+
+test('a primary ring keeps its own colour beside ordinary ones', () => {
+  const boxes = Panel.ringBoxes([rect(0, 0, 100, 20), rect(0, 20, 100, 20), rect(0, 40, 100, 20)], 5, 8, ['', 'primary', '']);
+  assert.equal(boxes.filter(Boolean).length, 3);
 });
 
 test('rings far apart, rings around overlapping elements, and missing elements are left alone', () => {

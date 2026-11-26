@@ -213,7 +213,11 @@ globalThis.KibanaApplicationAdapters.push({
     }
     if (command.type === 'set_filter_inclusion') return host.findFilterPill(command.value?.field, command.value?.value);
     if (command.type === 'show_field_statistics') return waitForSelector("[data-test-subj='dscViewModeFieldStatsButton']", 8000, signal);
-    if (command.type === 'expand_document' && this.fieldStatisticsShown()) return waitForSelector("[data-test-subj='dscViewModeDocumentButton']", 8000, signal);
+    // A step on the documents table starts from Field statistics by switching back, so that switch is
+    // what the card keeps clear of: the table's own headers and rows aren't on the page yet.
+    if (['expand_document', 'sort_column', 'add_column', 'remove_column'].includes(command.type) && this.fieldStatisticsShown()) {
+      return waitForSelector("[data-test-subj='dscViewModeDocumentButton']", 8000, signal);
+    }
     if (command.type === 'open_surrounding_documents' && host.resolve('kibana.doc_viewer')) {
       return [...document.querySelectorAll("[data-test-subj='docViewerFlyout'] [data-test-subj='docTableRowAction']")]
         .find(node => /surrounding/i.test(node.getAttribute('aria-label') || node.textContent || '')) || null;

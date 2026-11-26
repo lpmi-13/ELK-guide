@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "id": "rare-error-signature",
-  "version": 3,
+  "version": 4,
   "title": "A rare error in a busy service",
   "type": "investigation",
   "classification": "core",
@@ -52,6 +52,38 @@
           "message": "refused a replayed session token",
           "noise_message": "auth key rotation completed",
           "precursor": "refresh token presented again from a second device"
+        },
+        {
+          "service": "checkout",
+          "error_type": "CartLockTimeout",
+          "route_path": "/checkout/cart",
+          "message": "cart lock held past its timeout",
+          "noise_message": "checkout session cache trimmed",
+          "precursor": "two tabs updated the same cart within one second"
+        },
+        {
+          "service": "orders",
+          "error_type": "ShipmentAddressMismatch",
+          "route_path": "/api/orders/ship",
+          "message": "shipment address did not match the order",
+          "noise_message": "orders shipping estimate refreshed",
+          "precursor": "address book update arrived after the order was placed"
+        },
+        {
+          "service": "payments",
+          "error_type": "RefundCurrencyMismatch",
+          "route_path": "/api/payments/refund",
+          "message": "refund currency did not match the original charge",
+          "noise_message": "payments exchange rates refreshed",
+          "precursor": "refund requested in the store's display currency"
+        },
+        {
+          "service": "catalog",
+          "error_type": "PriceVersionConflict",
+          "route_path": "/api/catalog/items",
+          "message": "price version conflict on item update",
+          "noise_message": "catalog search index compacted",
+          "precursor": "two price imports touched the same item"
         }
       ]
     }

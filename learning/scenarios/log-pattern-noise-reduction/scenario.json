@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "id": "log-pattern-noise-reduction",
-  "version": 3,
+  "version": 4,
   "title": "Find the log pattern that matters",
   "type": "investigation",
   "classification": "core",
@@ -14,9 +14,13 @@
     "incident": {
       "choose": [
         {"service": "payments", "error_message": "payment authorization exhausted", "noise_a": "payment provider heartbeat delayed", "noise_b": "payment token cache nearing expiry", "exclude_fragment": "heartbeat delayed", "status": 502},
+        {"service": "payments", "error_message": "settlement ledger lock lost", "noise_a": "payment fraud score cache cold", "noise_b": "payment webhook retry queued", "exclude_fragment": "score cache cold", "status": 503},
         {"service": "catalog", "error_message": "catalog index rebuild failed", "noise_a": "catalog cache warm skipped", "noise_b": "catalog sync retry scheduled", "exclude_fragment": "cache warm skipped", "status": 503},
+        {"service": "catalog", "error_message": "price feed checksum mismatch", "noise_a": "catalog image resize deferred", "noise_b": "catalog search shard slow", "exclude_fragment": "resize deferred", "status": 500},
         {"service": "orders", "error_message": "order settlement rejected", "noise_a": "order shipping estimate stale", "noise_b": "order inventory sync delayed", "exclude_fragment": "shipping estimate stale", "status": 500},
-        {"service": "auth", "error_message": "session key validation failed", "noise_a": "auth token refresh throttled", "noise_b": "auth cache eviction noisy", "exclude_fragment": "token refresh throttled", "status": 401}
+        {"service": "orders", "error_message": "order id sequence exhausted", "noise_a": "order export batch slow", "noise_b": "order audit log rotated", "exclude_fragment": "export batch slow", "status": 502},
+        {"service": "auth", "error_message": "session key validation failed", "noise_a": "auth token refresh throttled", "noise_b": "auth cache eviction noisy", "exclude_fragment": "token refresh throttled", "status": 401},
+        {"service": "checkout", "error_message": "cart total recalculation failed", "noise_a": "checkout promo cache refreshed late", "noise_b": "checkout session store compacting", "exclude_fragment": "promo cache refreshed late", "status": 500}
       ]
     }
   },
@@ -52,14 +56,16 @@
           "trace": "own",
           "event": {
             "service": {"name": "${param.incident.service}"},
+            "event": {"outcome": "success"},
+            "http": {"response": {"status_code": 200}},
             "log": {"level": "WARN"},
             "message": "${param.incident.noise_a}"
           }
         },
         {
-          "count": 20,
+          "count": 60,
           "offset_seconds": 22,
-          "interval_seconds": 27,
+          "interval_seconds": 15,
           "trace": "own",
           "event": {
             "service": {"name": "${param.incident.service}"},
@@ -75,16 +81,17 @@
       {"id": "seeded-signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.error_message}"}}}
     ]
   },
-  "starting_view": {"app": "discover", "saved_object": "incident-investigation", "path": "/app/discover#/view/incident-investigation"},
+  "starting_view": {"app": "discover", "saved_object": "incident-investigation", "path": "/app/discover#/view/incident-investigation?_a=(columns:!('@timestamp',service.name,event.outcome,log.level,message))"},
   "truth": {
     "answers": {
       "finding": "${param.incident.error_message}",
       "scope": "${param.incident.service}",
-      "conclusion": "The '${param.incident.error_message}' pattern is linked to the failures. The many repeated ${param.incident.service} warnings are just background noise."
+      "conclusion": "The '${param.incident.error_message}' pattern is linked to the failures. The repeated ${param.incident.service} warning shows up whether requests fail or not."
     },
     "assertions": [
       {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.error_message}"}}},
-      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "request failed after ${param.incident.error_message}"}}}
+      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "request failed after ${param.incident.error_message}"}}},
+      {"id": "warning_everywhere", "kind": "es_count", "minimum": 1, "query": {"bool": {"filter": [{"term": {"message.keyword": "${param.incident.noise_a}"}}], "must_not": [{"term": {"event.outcome.keyword": "failure"}}]}}}
     ]
   },
   "answer_schema": {

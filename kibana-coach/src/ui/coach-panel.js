@@ -943,6 +943,7 @@ class IncidentCoachPanel {
     this.clearEvidenceHighlights();
     this.evidenceFields = Array.isArray(fields) ? fields : [];
     this.evidenceTargets = targets.filter(Boolean);
+    this.evidencePrimaryIndex = primaryTargetIndex;
     this.namedFields = Array.isArray(named) ? named.filter(field => typeof field === 'string' && field) : [];
     for (let index = 0; index < this.evidenceFields.length + this.evidenceTargets.length; index += 1) {
       const highlight = document.createElement('div');
@@ -982,7 +983,8 @@ class IncidentCoachPanel {
       highlight.hidden = !rect || right <= left || top >= innerHeight - 48;
       if (!highlight.hidden) IncidentCoachPanel.placeHighlight(highlight, left, top, right - left, innerHeight - top - 48);
     }
-    for (const [index, box] of IncidentCoachPanel.ringBoxes(this.evidenceTargetRects()).entries()) {
+    const kinds = this.evidenceTargets.map((_, index) => (index === this.evidencePrimaryIndex ? 'primary' : ''));
+    for (const [index, box] of IncidentCoachPanel.ringBoxes(this.evidenceTargetRects(), undefined, undefined, kinds).entries()) {
       const highlight = this.evidenceHighlights[this.evidenceFields.length + index];
       highlight.hidden = !box;
       if (box) IncidentCoachPanel.placeHighlight(highlight, box.left, box.top, box.right - box.left, box.bottom - box.top);
@@ -994,29 +996,40 @@ class IncidentCoachPanel {
     Object.assign(highlight.style, {left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px`});
   }
 
-  // Rings around page elements, `pad` px outside each. Elements that sit close together (the inspect
-  // step pins its fields into adjacent doc-viewer rows) would get overlapping rings, so where two
-  // would overlap, their facing sides are pulled back to meet halfway between the elements, `gap` px
-  // apart. Elements that overlap each other keep their rings as they are. Null rects stay null.
-  static ringBoxes(rects, pad = 5, gap = 4) {
-    const boxes = rects.map(rect => rect && {left: rect.left - pad, top: rect.top - pad, right: rect.right + pad, bottom: rect.bottom + pad});
+  // Rings around page elements, `pad` px outside each. Elements that sit next to each other (the
+  // inspect step pins its fields into adjacent doc-viewer rows) share one ring around them all: the
+  // group's first element gets the ring and the others null, so the eye reads one block of evidence,
+  // not a stack of boxes. Next to each other means stacked (mostly the same columns, at most `join` px
+  // apart) or side by side (mostly the same rows, at most `join` px apart). Elements that overlap each
+  // other (one drawn inside another) keep their own rings, and so do elements of different `kinds`
+  // (the primary ring has its own colour). Null rects stay null.
+  static ringBoxes(rects, pad = 5, join = 8, kinds = []) {
+    const group = rects.map((_, index) => index);
+    const root = index => (group[index] === index ? index : (group[index] = root(group[index])));
+    const neighbours = (a, b) => {
+      const across = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+      const down = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+      // Kibana's rows share a 1px border, so a sliver of overlap still counts as touching.
+      if (across > 2 && down > 2) return false;
+      const width = Math.min(a.right - a.left, b.right - b.left);
+      const height = Math.min(a.bottom - a.top, b.bottom - b.top);
+      return (across >= width / 2 && -down <= join) || (down >= height / 2 && -across <= join);
+    };
     for (let i = 0; i < rects.length; i += 1) {
       for (let j = i + 1; j < rects.length; j += 1) {
-        const [a, b] = [boxes[i], boxes[j]];
-        if (!a || !b || Math.min(a.right, b.right) <= Math.max(a.left, b.left) || Math.min(a.bottom, b.bottom) <= Math.max(a.top, b.top)) continue;
-        const [upper, lower] = rects[i].top <= rects[j].top ? [i, j] : [j, i];
-        const [first, second] = rects[i].left <= rects[j].left ? [i, j] : [j, i];
-        // A shared border (Kibana's rows overlap by a pixel) still counts as one above the other.
-        if (rects[upper].bottom <= rects[lower].top + 2) {
-          const middle = (rects[upper].bottom + rects[lower].top) / 2;
-          boxes[upper].bottom = Math.min(boxes[upper].bottom, middle - gap / 2);
-          boxes[lower].top = Math.max(boxes[lower].top, middle + gap / 2);
-        } else if (rects[first].right <= rects[second].left + 2) {
-          const middle = (rects[first].right + rects[second].left) / 2;
-          boxes[first].right = Math.min(boxes[first].right, middle - gap / 2);
-          boxes[second].left = Math.max(boxes[second].left, middle + gap / 2);
-        }
+        if (!rects[i] || !rects[j] || (kinds[i] || '') !== (kinds[j] || '') || !neighbours(rects[i], rects[j])) continue;
+        const [a, b] = [root(i), root(j)];
+        group[Math.max(a, b)] = Math.min(a, b);
       }
+    }
+    const boxes = rects.map(() => null);
+    for (const [index, rect] of rects.entries()) {
+      if (!rect) continue;
+      const lead = root(index);
+      const box = boxes[lead];
+      boxes[lead] = box
+        ? {left: Math.min(box.left, rect.left - pad), top: Math.min(box.top, rect.top - pad), right: Math.max(box.right, rect.right + pad), bottom: Math.max(box.bottom, rect.bottom + pad)}
+        : {left: rect.left - pad, top: rect.top - pad, right: rect.right + pad, bottom: rect.bottom + pad};
     }
     return boxes;
   }

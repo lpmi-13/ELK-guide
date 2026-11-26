@@ -257,14 +257,32 @@ PARAM_TOKEN = re.compile(r"\$\{param\.([A-Za-z0-9_.]+)\}")
 
 
 def _param_lookup(parameters, dotted):
-    """Resolve a dotted path such as ``incident.finding`` inside chosen parameters."""
+    """Resolve a dotted path such as ``incident.finding`` (or ``reasons.0.id``) inside chosen parameters."""
     current = parameters
     for part in dotted.split("."):
         if isinstance(current, dict) and part in current:
             current = current[part]
+        elif isinstance(current, list) and part.isdigit() and int(part) < len(current):
+            current = current[int(part)]
         else:
             return None
     return current
+
+
+def _release(spec, generator):
+    """Three versions of one service, oldest last: the new release, the one it replaces, and an older one
+    still running on a legacy pool. Drawn from ranges, so the version to find is new on every run. ``as``
+    renames the three (e.g. to ``bad_version``) when they are merged into a bundle."""
+    major = generator.randint(*spec.get("major", (1, 6)))
+    minor = generator.randint(*spec.get("minor", (2, 9)))
+    patch = generator.randint(*spec.get("patch", (1, 9)))
+    versions = {
+        "new": f"{major}.{minor}.0",
+        "current": f"{major}.{minor - 1}.{patch}",
+        "legacy": f"{major}.{generator.randint(0, minor - 2)}.{generator.randint(0, 9)}",
+    }
+    names = spec.get("as", {})
+    return {names.get(key, key): value for key, value in versions.items()}
 
 
 def _choose_parameter(spec, generator):
@@ -272,11 +290,26 @@ def _choose_parameter(spec, generator):
 
     Supported declarations mirror the Parameterized Scenario Contract in PLAN.md §14:
     ``choose`` picks one entry (a scalar or a correlated bundle) uniformly, while
-    ``integer``/``decimal`` pick from an inclusive stepped range. Anything else is a
-    literal constant shared by every run.
+    ``integer``/``decimal`` pick from an inclusive stepped range. ``sample`` picks
+    ``count`` different entries in a random order, so one pool can supply the value to
+    find and the everyday values around it without repeating one. ``release`` draws a
+    service's versions (see ``_release``). ``merge`` draws each of its specs in turn
+    and joins the resulting bundles into one, so values that don't belong together
+    (a service and the status its failures return) are drawn independently and every
+    pairing can occur. Anything else is a literal constant shared by every run.
     """
+    if isinstance(spec, dict) and "merge" in spec:
+        merged = {}
+        for part in spec["merge"]:
+            merged.update(_choose_parameter(part, generator))
+        return merged
     if isinstance(spec, dict) and "choose" in spec:
         return copy.deepcopy(generator.choice(spec["choose"]))
+    if isinstance(spec, dict) and "sample" in spec:
+        pool = spec["sample"]
+        return copy.deepcopy(generator.sample(pool, int(spec.get("count", len(pool)))))
+    if isinstance(spec, dict) and "release" in spec:
+        return _release(spec["release"], generator)
     if isinstance(spec, dict) and "integer" in spec:
         bounds = spec["integer"]
         step = max(1, int(bounds.get("step", 1)))
@@ -313,6 +346,79 @@ def choose_parameters(param_specs, seed):
     """Choose a concrete value for every declared parameter, seeded for reproducibility."""
     generator = random.Random(f"parameters:{seed}")
     return {name: _choose_parameter(spec, generator) for name, spec in param_specs.items()}
+
+
+def _is_drawn(spec):
+    """Whether a parameter is drawn per run (a literal constant is the same in every run)."""
+    return isinstance(spec, dict) and any(kind in spec for kind in ("choose", "integer", "decimal", "sample", "release", "merge"))
+
+
+def _leaves(value, path=""):
+    """Every scalar in a chosen parameter, by its dotted path (list items by index)."""
+    if isinstance(value, dict):
+        return {leaf: item for key, child in value.items() for leaf, item in _leaves(child, f"{path}.{key}" if path else str(key)).items()}
+    if isinstance(value, list):
+        return {leaf: item for index, child in enumerate(value) for leaf, item in _leaves(child, f"{path}.{index}" if path else str(index)).items()}
+    return {path: value}
+
+
+def _fixed_leaves(name, spec):
+    """The scalars of a ``choose`` that every option shares, so no run can differ in them."""
+    if isinstance(spec, dict) and "merge" in spec:
+        return set().union(*(_fixed_leaves(name, part) for part in spec["merge"]))
+    if not isinstance(spec, dict) or "choose" not in spec or len(spec["choose"]) < 2:
+        return set()
+    options = [_leaves(option, name) for option in spec["choose"]]
+    return {path for path in options[0] if all(option.get(path) == options[0][path] for option in options)}
+
+
+def drawn_values(param_specs, scenario_key):
+    """What a scenario key draws for a pack: the scalars of each drawn parameter that can differ from
+    run to run, by dotted path."""
+    seed, _ = scenario_key_seed(scenario_key)
+    chosen = choose_parameters(param_specs, seed)
+    values = {}
+    for name, spec in param_specs.items():
+        if _is_drawn(spec):
+            fixed = _fixed_leaves(name, spec)
+            values.update({path: value for path, value in _leaves(chosen[name], name).items() if path not in fixed})
+    return values
+
+
+# Fresh keys read like the launcher's own (three words), with a number so there are plenty to draw from.
+KEY_WORDS = (
+    ("amber", "bright", "calm", "clear", "gentle", "hidden", "lively", "quiet", "silver", "steady", "swift", "warm"),
+    ("canyon", "delta", "forest", "garden", "harbor", "island", "meadow", "prairie", "reef", "river", "summit", "valley"),
+    ("beacon", "comet", "falcon", "heron", "lantern", "orbit", "otter", "pine", "signal", "sparrow", "tide", "willow"),
+)
+FRESH_KEY_ATTEMPTS = 500
+
+
+def fresh_scenario_key(scenario_name, after=()):
+    """A scenario key whose run differs from each run in `after` (earlier keys) in every drawn value.
+
+    A learner who starts the same scenario again must get a different incident, so filtering on what
+    they found last time leads nowhere and the method is what carries over. The key still decides its
+    run, so typing it again gives the same incident. Returns the key and whether it is wholly fresh,
+    which it can only fail to be if a pack draws a value from a single option (a test rules that out).
+    """
+    return fresh_key_for(load_template(scenario_name).get("parameters") or {}, after)
+
+
+def fresh_key_for(specs, after=()):
+    """``fresh_scenario_key`` for a pack's parameter declarations."""
+    earlier = [drawn_values(specs, key) for key in after if isinstance(key, str) and SCENARIO_KEY_MIN_LENGTH <= len(key) <= SCENARIO_KEY_MAX_LENGTH]
+    generator = random.SystemRandom()
+    best, best_repeats = "", None
+    for _attempt in range(FRESH_KEY_ATTEMPTS):
+        key = "-".join([*(generator.choice(words) for words in KEY_WORDS), str(generator.randint(10, 99))])
+        mine = drawn_values(specs, key)
+        repeats = sum(mine[path] == values.get(path) for values in earlier for path in mine)
+        if not repeats:
+            return key, True
+        if best_repeats is None or repeats < best_repeats:
+            best, best_repeats = key, repeats
+    return best, False
 
 
 def materialize(template, seed, run_id=None, scenario_key=None):
@@ -872,8 +978,14 @@ def generate_seeded_events(manifest):
         if companion.get("trace") == "each":
             documents.extend(_companions_per_signal(manifest, application, generator, companion_index, companion, template, signal_documents, callers))
             continue
+        # `jitter_seconds` moves each one up to that far either way, so a steady background reads as
+        # traffic rather than a metronome (the histogram would otherwise draw identical bars).
+        jitter = float(companion.get("jitter_seconds", 0))
         for sequence in range(repeats):
-            timestamp = now - timedelta(seconds=int(companion.get("offset_seconds", 120)) + sequence * int(companion.get("interval_seconds", 1)))
+            offset = int(companion.get("offset_seconds", 120)) + sequence * int(companion.get("interval_seconds", 1))
+            if jitter:
+                offset = max(5, offset + generator.uniform(-jitter, jitter))
+            timestamp = now - timedelta(seconds=offset)
             # Companions corroborate the representative request unless they are background of their own
             # (a repetitive warning flood), which must not all claim to be one trace.
             trace_id = representative_trace if companion.get("trace") != "own" else hashlib.md5(f"{manifest['run_id']}:companion:{companion_index}:{sequence}".encode()).hexdigest()
@@ -1349,6 +1461,14 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/runs":
                 run = create_run(scenario_name=payload.get("scenario"), scenario_key=payload["scenario_key"]) if "scenario_key" in payload else create_run(payload.get("seed"), payload.get("scenario"))
                 self.respond(202, run)
+                return
+            if parsed.path == "/api/keys":
+                after = payload.get("after") or []
+                if not isinstance(payload.get("scenario"), str) or not isinstance(after, list):
+                    self.respond(400, {"error": "expected a scenario and a list of earlier keys"})
+                    return
+                key, fresh = fresh_scenario_key(payload["scenario"], after[:5])
+                self.respond(200, {"key": key, "fresh": fresh})
                 return
             if len(parts) == 4 and parts[:2] == ["api", "runs"] and parts[3] == "reset":
                 existing = get_run(parts[2])
