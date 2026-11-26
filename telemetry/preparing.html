@@ -67,15 +67,25 @@
         bar.hidden = true;
         document.getElementById('back').hidden = false;
       }
-      if (window.__halt) {
+      function showHalt(heading, message, link) {
         halt();
         const set = (id, text) => { const el = document.getElementById(id); if (el && text) el.textContent = text; };
-        const heading = read('prep:heading');
         if (heading) { document.title = heading; set('h', heading); }
-        set('msg', read('prep:msg'));
-        const extra = document.getElementById('extra'), go = document.getElementById('go'), link = read('prep:link');
+        set('msg', message);
+        const extra = document.getElementById('extra'), go = document.getElementById('go');
         if (link && extra && go) { go.href = link; extra.hidden = false; }
       }
+      if (window.__halt) showHalt(read('prep:heading'), read('prep:msg'), read('prep:link'));
+      // Navigate to Kibana once, whichever signal arrives first.
+      let leaving = false;
+      function leave() {
+        if (leaving || !window.__url) return;
+        leaving = true;
+        location.replace(window.__url);
+      }
+      const webUrl = value => {
+        try { return ['http:', 'https:'].includes(new URL(value).protocol) ? value : ''; } catch (_error) { return ''; }
+      };
       // Keep one start time across refreshes so the bar resumes its curve instead
       // of snapping back to the beginning.
       let startedAt = Number(read('prep:started')) || 0;
@@ -102,7 +112,7 @@
         if (window.__done && now - doneAt >= 650) {
           bar.value = 1000;
           document.title = 'Opening Kibana…';
-          if (window.__url) location.replace(window.__url);
+          leave();
           return;
         }
         requestAnimationFrame(step);
@@ -115,11 +125,41 @@
         if (!url) return;
         window.__url = url;
         window.__done = true;
-        if (document.hidden) location.replace(url);
+        if (document.hidden) leave();
       });
       document.addEventListener('visibilitychange', () => {
         lastFrame = performance.now();
       });
+      // The launcher can't always reach this tab: on iximiuz it opens it as noopener, so there is no opener,
+      // no flags and no copied sessionStorage. It also posts the outcome to the telemetry service under the
+      // launch id in this page's fragment (/preparing#<id>); ask for it until it arrives.
+      const launchId = /^#([A-Za-z0-9-]{16,64})$/.exec(location.hash)?.[1] || '';
+      async function pollHandoff() {
+        if (!launchId || window.__done || window.__halt) return;
+        try {
+          const response = await fetch(`/preparing/handoff/${launchId}`, {cache: 'no-store'});
+          const outcome = response.ok ? await response.json() : null;
+          if (window.__done || window.__halt) return;
+          const url = webUrl(outcome?.url);
+          if (url) {
+            window.__url = url;
+            window.__done = true;
+            write('prep:url', url);
+            // A hidden tab has no animation frames to finish the bar with.
+            if (document.hidden) leave();
+            return;
+          }
+          if (outcome?.halt) {
+            const {heading = '', message = ''} = outcome.halt, link = webUrl(outcome.halt.link);
+            write('prep:halt', '1'); write('prep:heading', heading); write('prep:msg', message); write('prep:link', link);
+            window.__halt = true;
+            showHalt(heading, message, link);
+            return;
+          }
+        } catch (_error) { /* not posted yet, or a network blip: ask again */ }
+        setTimeout(pollHandoff, 500);
+      }
+      pollHandoff();
       requestAnimationFrame(step);
     })();
   </script>

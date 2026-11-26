@@ -376,7 +376,7 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn("Incident evidence is ready", launcher)
         self.assertIn('id="launch-status" role="status" aria-live="polite" hidden', launcher)
         self.assertIn("investigationTab = openPrepTab()", launcher)
-        self.assertIn("return window.open('/preparing', '_blank')", launcher)
+        self.assertIn("return window.open(`/preparing#${launchId}`, '_blank')", launcher)
         self.assertIn("signalTab({__url: investigationUrl, __done: true})", launcher)
         self.assertIn("if (!investigationTab) setLaunchStatus", launcher)
         self.assertIn("revealManualOpen('Investigation ready.')", launcher)

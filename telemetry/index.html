@@ -112,6 +112,7 @@
     const launchStatus = document.querySelector('#launch-status');
     let investigationUrl = '';
     let investigationTab = null;
+    let launchId = '';
     let launched = false;
     let sessionConnection = null;
     let socket;
@@ -453,8 +454,16 @@
     // and the browser tab has a useful title from its first response. The page owns
     // its progress animation and reads these expando flags before replacing itself
     // with Kibana: __done + __url on success, or __halt on failure.
+    // The tab can't always be reached that way. On iximiuz this launcher runs in a pane
+    // inside a page with Cross-Origin-Opener-Policy: same-origin, so the browser opens
+    // the tab as noopener: window.open returns null and the tab has no opener. So the
+    // tab also polls for the outcome by its launch id (relayToTab, telemetry/service.py).
     function openPrepTab() {
-      return window.open('/preparing', '_blank');
+      return window.open(`/preparing#${launchId}`, '_blank');
+    }
+    function relayToTab(outcome) {
+      if (!launchId) return;
+      fetch(`/preparing/handoff/${launchId}`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(outcome), keepalive: true}).catch(() => {});
     }
     function prepTabDoc() {
       try { return (investigationTab && !investigationTab.closed) ? investigationTab.document : null; }
@@ -477,6 +486,7 @@
       } catch (_error) { /* best-effort; cross-tab storage may be blocked */ }
     }
     function tabMessage(heading, message, linkUrl) {
+      relayToTab({halt: {heading: heading || '', message: message || '', link: linkUrl || ''}});
       // Persist the halt state so a refresh of the prep tab keeps showing it.
       persistTab({'prep:halt': '1', 'prep:heading': heading || '', 'prep:msg': message || '', 'prep:link': linkUrl || ''});
       const doc = prepTabDoc();
@@ -495,6 +505,7 @@
       if (launched || !investigationUrl) return;
       if (coachRuntimeReady) {
         launched = true;
+        relayToTab({url: investigationUrl});
         // Persist first so a refresh mid-handoff can still land, then hand the URL
         // to the prep page: it fills the bar, then navigates itself.
         persistTab({'prep:url': investigationUrl});
@@ -502,15 +513,15 @@
         // Animation frames pause in a hidden preparation tab. Wake its handoff
         // independently so readiness never waits for that tab to become visible.
         try { investigationTab?.postMessage({type: 'prep:ready'}, location.origin); } catch (_error) { /* tab may have closed */ }
-        if (signaled) clearLaunchStatus();
+        // A tab the launcher can't reach still navigates itself (relayToTab). A hidden launcher
+        // means that tab opened in front of it, so the link is only offered while it's in view.
+        if (signaled || document.visibilityState === 'hidden') clearLaunchStatus();
         else revealManualOpen('Investigation ready.');
       } else if (coachRuntimeResolved) {
         launched = true;
         const coachMsg = 'The built-in Kibana coach is not available. Check the Kibana gateway service, then open Kibana.';
-        if (prepTabDoc()) {
-          signalTab({__halt: true});
-          tabMessage('Evidence is ready', coachMsg, investigationUrl);
-        } else {
+        signalTab({__halt: true});
+        if (!tabMessage('Evidence is ready', coachMsg, investigationUrl)) {
           revealManualOpen('The data is ready, but the built-in Kibana coach is not available. Check the Kibana gateway service, then open Kibana yourself.');
         }
       }
@@ -572,8 +583,9 @@
       // Open the destination tab during the click gesture (so the browser will not
       // block it) and show a live progress page in it; the same tab navigates itself
       // to Kibana when the evidence is ready (see poll + launchWhenReady).
+      launchId = crypto.randomUUID();
       investigationTab = openPrepTab();
-      if (!investigationTab) setLaunchStatus('The preparation tab was blocked. A link will appear here when the investigation is ready.');
+      if (!investigationTab) setLaunchStatus('If no new tab opened, a link will appear here when the investigation is ready.');
       try {
         if (!selectedScenario) throw new Error('Select an available scenario first.');
         const response = await fetch(`${learningUrl}/api/runs`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario:selectedScenario,mode:modeSelect.value,scenario_key:scenarioKey.value,...(claim ? {prepared_run_id: claim} : {})})});

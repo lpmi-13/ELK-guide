@@ -5,8 +5,10 @@ import hashlib
 import json
 import logging
 import os
+import re
 import struct
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -35,6 +37,46 @@ FAVICONS = {
     "/apple-touch-icon.png": (Path(__file__).with_name("apple-touch-icon.png"), "image/png"),
 }
 lock = threading.Lock()
+
+# Launch handoff. Start opens /preparing#<launch id> in a new tab and later posts the outcome here (the
+# Kibana URL, or why preparation stopped); the preparation page polls for it. The launcher can't always
+# reach that tab directly: on iximiuz it runs in a pane inside a page with Cross-Origin-Opener-Policy:
+# same-origin, so the browser opens its popup as noopener (window.open returns null, the tab has no opener
+# and its own sessionStorage). Outcomes are small, kept briefly, and readable only by their unguessable id.
+HANDOFF_PATH = re.compile(r"^/preparing/handoff/([A-Za-z0-9-]{16,64})$")
+HANDOFF_TTL_SECONDS = 900
+HANDOFF_LIMIT = 200
+HANDOFF_MAX_BYTES = 8192
+handoffs = {}  # launch id -> (stored at, outcome JSON bytes)
+handoff_lock = threading.Lock()
+
+
+def valid_outcome(outcome):
+    if not isinstance(outcome, dict):
+        return False
+    if "url" in outcome:
+        return isinstance(outcome["url"], str) and outcome["url"].startswith(("http://", "https://"))
+    halt = outcome.get("halt")
+    return isinstance(halt, dict) and all(isinstance(value, str) for value in halt.values())
+
+
+def store_handoff(launch_id, body):
+    now = time.monotonic()
+    with handoff_lock:
+        for key in [key for key, (at, _) in handoffs.items() if now - at > HANDOFF_TTL_SECONDS]:
+            del handoffs[key]
+        while len(handoffs) >= HANDOFF_LIMIT:
+            del handoffs[next(iter(handoffs))]
+        handoffs.pop(launch_id, None)
+        handoffs[launch_id] = (now, body)
+
+
+def read_handoff(launch_id):
+    with handoff_lock:
+        entry = handoffs.get(launch_id)
+    if entry and time.monotonic() - entry[0] <= HANDOFF_TTL_SECONDS:
+        return entry[1]
+    return b'{"pending":true}'
 
 
 def emit(payload, client):
@@ -109,11 +151,37 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(page.encode(), "text/html; charset=utf-8")
         elif self.path == "/preparing":
             self.respond(PREPARING.read_bytes(), "text/html; charset=utf-8")
+        elif handoff := HANDOFF_PATH.match(self.path):
+            self.respond(read_handoff(handoff.group(1)), "application/json")
         elif self.path in FAVICONS:
             path, content_type = FAVICONS[self.path]
             self.respond(path.read_bytes(), content_type)
         else:
             self.send_error(404)
+
+    def do_POST(self):
+        handoff = HANDOFF_PATH.match(self.path)
+        if not handoff:
+            self.send_error(404)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = -1
+        if not 0 < length <= HANDOFF_MAX_BYTES:
+            self.send_error(413 if length > HANDOFF_MAX_BYTES else 400)
+            return
+        try:
+            outcome = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            outcome = None
+        if not valid_outcome(outcome):
+            self.send_error(400)
+            return
+        store_handoff(handoff.group(1), json.dumps(outcome, separators=(",", ":")).encode())
+        self.send_response(204)
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
 
     def respond(self, body, content_type):
         self.send_response(200)
