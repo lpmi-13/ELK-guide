@@ -100,8 +100,8 @@ class RandomizationTests(unittest.TestCase):
         self.assertEqual(signal["http"]["response"]["status_code"], incident["status"])
         self.assertIsInstance(signal["http"]["response"]["status_code"], int)
         self.assertEqual(manifest["scenario"]["truth"]["answers"]["finding"], incident["finding"])
-        # The demonstrated isolate action (here a filter) looks first at the busiest value of this run's
-        # decisive field: a healthy decoy, not the answer. The answer comes from the same field read
+        # The demonstrated isolate action (a filter) checks the briefing's first guess, a value of this
+        # run's decisive field: a healthy decoy, not the answer. The answer comes from the same field read
         # inside the server errors (the `where` step).
         self.assertIn(incident["signal_field"], targeted)
         self.assertIn(incident["decoy"], targeted)
@@ -109,27 +109,30 @@ class RandomizationTests(unittest.TestCase):
         where = next(goal for goal in playbook["goals"] if goal["id"] == "where")
         self.assertEqual(where["demonstration"]["evidence_focus"], {"kind": "top_values", "field": incident["signal_field"], "value": incident["finding"]})
 
-    def test_the_busiest_value_is_checked_first_and_is_not_where_the_errors_are(self):
-        """The server-errors pack teaches that the busiest value is only the most likely place: in every
-        window the coach can recommend it is the clear top value, every one of its requests succeeded,
-        and once it is left out every server error shares the answer's value."""
-        from collections import Counter
+    def test_the_first_guess_is_healthy_and_not_where_the_errors_are_at_any_delay(self):
+        """The server-errors pack teaches that a teammate's first guess has to be checked: the briefing
+        names a value of the decisive field, every one of its requests succeeded, and once it is left out
+        every server error shares the answer's value. Nothing depends on how much traffic each value has,
+        so it holds in any window from the recommended start to hours later, background traffic and all."""
         from datetime import datetime, timedelta
+        evaluator = sys.modules["engine.evaluator"]
         for seed in range(24):
             manifest = self.materialize("http-error-regression", seed)
             incident = manifest["parameters"]["incident"]
             field = incident["signal_field"]
-            documents = self.controller.generate_seeded_events(manifest)
+            documents = self.controller.generate_seeded_events(manifest) + self.controller._background_requests(manifest)
             created = datetime.fromisoformat(manifest["created_at"])
+            start = evaluator.recommended_window_start(evaluator.incident_moments(manifest, 10))
             value = lambda document: self.controller._lookup_nested(document, field)
-            for minutes in (10, 15, 20):
-                window = [document for document in documents if datetime.fromisoformat(document["@timestamp"]) >= created - timedelta(minutes=minutes)]
-                counts = Counter(value(document) for document in window).most_common()
+            session = self.server.create_session({"manifest": manifest}, "guided")
+            briefing = self.server.build_incident_briefing(session)
+            self.assertIn(f"{incident['where']} {incident['decoy']}", " ".join(signal["value"] for signal in briefing["signals"]))
+            for hours in (0, 1, 3, 6):
+                window = [document for document in documents if start <= datetime.fromisoformat(document["@timestamp"]) <= created + timedelta(hours=hours)]
                 decoy = [document for document in window if value(document) == incident["decoy"]]
                 errors = [document for document in window if value(document) != incident["decoy"] and document["http"]["response"]["status_code"] >= 500]
-                with self.subTest(seed=seed, minutes=minutes):
-                    self.assertEqual(counts[0][0], incident["decoy"])
-                    self.assertGreaterEqual(counts[0][1], 1.5 * dict(counts).get(incident["finding"], 0))
+                with self.subTest(seed=seed, hours=hours):
+                    self.assertTrue(decoy)
                     self.assertEqual({document["http"]["response"]["status_code"] for document in decoy}, {200})
                     self.assertEqual({value(document) for document in errors}, {incident["finding"]})
 
@@ -170,7 +173,7 @@ class RandomizationTests(unittest.TestCase):
             session = self.server.create_session({"manifest": manifest}, "demonstration")
             session["run_ready"] = True
             goals = session["playbook"]["goals"]
-            self.assertEqual([goal["id"] for goal in goals], ["scope", "survey", "isolate", "failures", "inspect", "first", "contrast", "submit"])
+            self.assertEqual([goal["id"] for goal in goals], ["scope", "isolate", "failures", "inspect", "first", "contrast", "submit"])
             commands = {}
             for goal_id in ("isolate", "inspect", "first", "contrast"):
                 session["completed_goals"] = {goal["id"] for goal in goals[:next(index for index, goal in enumerate(goals) if goal["id"] == goal_id)]}
@@ -521,8 +524,7 @@ class RandomizationTests(unittest.TestCase):
         field's presence names no value at all; the authentication pack first leaves the surveyed value
         out (its baseline step) and then turns that same pill around to include it.
         """
-        for pack in ("discover-time-window", "http-error-regression", "rare-error-signature", "auth-rejection-surge",
-                     "log-pattern-noise-reduction", "deployment-version-regression"):
+        for pack in ("discover-time-window", "rare-error-signature", "auth-rejection-surge", "log-pattern-noise-reduction"):
             for seed in range(12):
                 manifest = self.materialize(pack, seed)
                 playbook = self.server.load_manifest_definition(manifest, "playbook")
@@ -545,6 +547,29 @@ class RandomizationTests(unittest.TestCase):
                         self._assert_filter_names_the_survey(step, focus, manifest)
                     for phase in ("narration", "reasoning"):
                         self.assertNotIn(str(focus["value"]), survey["demonstration"][phase])
+
+    def test_a_named_lead_comes_from_the_briefing(self):
+        """The server-errors and change packs start from a lead the report gives (the on-call engineer's
+        first guess, the service the change went to), not from the busiest value of a field: that ranking
+        moves as traffic keeps arriving. Their first filter names exactly that value, and the briefing the
+        learner reads first names it too."""
+        leads = {"http-error-regression": lambda incident: (incident["signal_field"], incident["decoy"]),
+                 "deployment-version-regression": lambda incident: ("service.name", incident["service"])}
+        for pack, lead in leads.items():
+            for seed in range(12):
+                manifest = self.materialize(pack, seed)
+                session = self.server.create_session({"manifest": manifest}, "guided")
+                goals = session["playbook"]["goals"]
+                field, value = lead(manifest["parameters"]["incident"])
+                briefing = self.server.build_incident_briefing(session)
+                shown = " ".join([briefing["summary"], *(signal["value"] for signal in briefing["signals"])])
+                isolate = goals[1]
+                with self.subTest(pack=pack, seed=seed):
+                    self.assertEqual([goal["id"] for goal in goals[:2]], ["scope", "isolate"])
+                    self.assertEqual(isolate["requires"], ["scope"])
+                    arguments = isolate["reference_action"]["arguments"]
+                    self.assertEqual((arguments["field"], arguments["value"]), (field, value))
+                    self.assertIn(str(value), shown)
 
     def _assert_narrows_to_the_failures(self, step):
         action = step["reference_action"]
@@ -975,7 +1000,10 @@ class StepCheckTests(unittest.TestCase):
                     self.assertTrue(self.completes(session, evidence, "inspect", {"type": "field_statistics_opened", "details": {"view": "field_statistics"}}))
                     self.assertFalse(self.completes(session, evidence, "inspect", {"type": "document_expanded", "details": {}}))
                 else:
-                    self.assertTrue(self.completes(session, evidence, "inspect", {"type": "document_expanded", "details": {}}))
+                    # Guided practice asks for the evidence pinned in the open event, as the demonstration
+                    # leaves it; opening one isn't enough on its own.
+                    self.assertFalse(self.completes(session, evidence, "inspect", {"type": "document_expanded", "details": {}}))
+                    self.assertTrue(self.completes(session, evidence, "inspect", {"type": "field_pinned", "details": {"pinned": _inspect["pinned_fields"]}}))
 
 
 class ChallengeModeTests(unittest.TestCase):

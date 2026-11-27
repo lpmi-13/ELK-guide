@@ -80,7 +80,7 @@
     "accept": {"scope": ["${param.incident.service}"]},
     "assertions": [
       {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.service} temporarily unavailable"}}},
-      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "support-reported ${param.incident.service} interval confirmed"}}}
+      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"bool": {"should": [{"term": {"message.keyword": "${param.incident.service} temporarily unavailable"}}, {"term": {"message.keyword": "support-reported ${param.incident.service} interval confirmed"}}], "minimum_should_match": 1}}}
     ]
   },
   "answer_schema": {

@@ -15,7 +15,7 @@
         "app_navigated", "saved_object_opened", "time_range_changed", "auto_refresh_changed", "data_refreshed",
         "data_view_selected", "query_language_changed", "query_submitted", "esql_submitted", "query_rejected",
         "filter_added", "filter_changed", "filter_removed", "filter_disabled", "column_added", "column_removed",
-        "sort_changed", "document_expanded", "field_inspected", "field_statistics_opened", "surrounding_documents_opened",
+        "sort_changed", "document_expanded", "field_pinned", "field_inspected", "field_statistics_opened", "surrounding_documents_opened",
         "dashboard_control_changed", "panel_value_selected", "panel_drilldown_opened", "panel_inspected", "panel_underlying_data_opened",
         "apm_service_selected", "apm_environment_selected", "transaction_group_opened", "trace_sample_selected", "trace_opened",
         "span_selected", "error_details_opened", "correlated_logs_opened",

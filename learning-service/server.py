@@ -20,7 +20,7 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qs, quote, urlparse
 from urllib.request import Request, urlopen
 
-from engine.evaluator import IGNORED_ACTIONS, SEARCH_ACTIONS, TIME_WINDOW_TOLERANCE_MINUTES, answer_phrases, current_goal, evaluate_action, guided_feedback, incident_moments, incident_timing, parse_instant, playbook_goals, recommended_window_start, relative_window, reveals_answer, score_session, scope_complete, window_miss, window_reaches_incident, window_reference, window_start
+from engine.evaluator import IGNORED_ACTIONS, OUTCOME_ACTIONS, OUTCOME_COMMANDS, SEARCH_ACTIONS, TIME_WINDOW_TOLERANCE_MINUTES, answer_phrases, current_goal, evaluate_action, guided_feedback, incident_moments, incident_timing, parse_instant, playbook_goals, recommended_window_start, relative_window, reveals_answer, score_session, scope_complete, window_miss, window_reaches_incident, window_reference, window_start, with_pinned_evidence
 from engine.contracts import assert_catalog_valid, insert_goals
 from engine.kql import view_query
 
@@ -294,6 +294,10 @@ def create_session(run_response, mode):
     # graded truth all derive from that one moment (see incident_clock).
     detected_offset_minutes = select_detected_offset(manifest)
     playbook = load_manifest_definition(manifest, "playbook")
+    if mode == "guided":
+        # Guided practice finishes a "check one event" step the way the demonstration does: with the
+        # evidence fields pinned side by side, not by opening any event.
+        playbook = with_pinned_evidence(playbook)
     rubric = load_manifest_definition(manifest, "rubric")
     session_id = f"session-{uuid.uuid4().hex[:12]}"
     session = {
@@ -603,6 +607,8 @@ def window_feedback(session, reason):
     window = f"Your window, {relative}," if relative else "Your window"
     restart = recommended_window_start(incident_moments(session["manifest"], session.get("detected_offset_minutes")))
     feedback = {}
+    if code == "window_too_wide":
+        return too_wide_feedback(session, reason, name, clock, window, start, restart)
     if code != "window_misses_incident" and restart is not None:
         feedback["restore_time"] = {"from": iso_instant(restart), "to": "now"}
     put_back = f"I'll set the window to start at {clock_text(restart, session)}, before it." if restart is not None else "I'll put the window back."
@@ -648,6 +654,39 @@ def window_feedback(session, reason):
         return feedback
     feedback["detail"] = f"{put_back} Or make it wider yourself, and I'll stop."
     feedback["note"] = f"You changed the window to start at {started}, after {name} at {clock}, so the evidence was out of view."
+    return feedback
+
+
+def span_text(minutes):
+    """A long stretch of time as a reader rounds it: "about 50 minutes", "about 3 hours", "about 2 days"."""
+    minutes = max(0, float(minutes))
+    if minutes < 90:
+        return f"about {round(minutes)} minutes"
+    if minutes < 36 * 60:
+        hours = round(minutes / 60)
+        return "about an hour" if hours == 1 else f"about {hours} hours"
+    days = round(minutes / 1440)
+    return "about a day" if days == 1 else f"about {days} days"
+
+
+def too_wide_feedback(session, reason, name, clock, window, start, restart):
+    """A window that starts far earlier than it needs to: so much older, normal traffic that the incident
+    is a sliver of every count. On the scope step the learner chooses again; after it, the coach types the
+    recommended start back."""
+    moment = parse_instant(reason.get("incident_reference_at"))
+    span = span_text((moment - start).total_seconds() / 60) if start is not None and moment is not None else "far"
+    suggested = clock_text(restart, session) if restart is not None else None
+    feedback = {"headline": f"{window} starts {span} before {name} at {clock}. That's far wider than this investigation needs."}
+    if reason.get("on_scope_step"):
+        feedback["detail"] = ("Hours of older, normal traffic would outweigh the incident in every count you read. "
+                              + (f"Choose a window that starts a little before {clock}, such as {suggested}." if suggested else f"Choose a window that starts a little before {clock}."))
+    else:
+        if restart is not None:
+            feedback["restore_time"] = {"from": iso_instant(restart), "to": "now"}
+        feedback["detail"] = ("All that older, normal traffic outweighs the incident in every count you read. "
+                              + (f"I'll set the window to start at {suggested}. " if suggested else "I'll put the window back. ")
+                              + "Or narrow it yourself, and I'll stop.")
+    feedback["note"] = f"Your window started {span} before {name} at {clock}, so older, normal traffic outweighed the incident in every count."
     return feedback
 
 
@@ -820,33 +859,81 @@ def restore_state(session):
     for goal in playbook_goals(session):
         if goal["id"] not in session["completed_goals"]:
             continue
-        reference = goal.get("reference_action", {})
-        command = reference.get("command")
-        value = substitute(reference.get("arguments"), session)
-        if command == "set_time_range" and isinstance(value, dict):
-            state["time"] = {"from": value.get("from"), "to": value.get("to", "now")}
-        elif command in {"add_filter", "filter_top_value"} and isinstance(value, dict) and value.get("field"):
-            operator = str(value.get("operator", "is")).lower()
-            earned = {
-                "field": value["field"],
-                "value": value.get("value"),
-                "negate": operator in {"is not", "not", "is not one of"} or bool(value.get("negate")),
-            }
-            # "is one of" (Kibana's phrases filter) keeps any of several values of the field.
-            if isinstance(earned["value"], list):
-                earned["type"] = "phrases"
-            state["filters"].append(earned)
-        elif command == "filter_field_present" and isinstance(value, dict) and value.get("field"):
-            state["filters"].append({"field": value["field"], "value": "exists", "negate": False, "type": "exists"})
-        elif command == "set_filter_inclusion" and isinstance(value, dict) and value.get("field"):
-            # The same pill, turned to keep (include) or leave out its value: it replaces the earlier one.
-            negate = value.get("include") is False
-            state["filters"] = [item for item in state["filters"]
-                                if not (item["field"] == value["field"] and str(item.get("value")) == str(value.get("value")))]
-            state["filters"].append({"field": value["field"], "value": value.get("value"), "negate": negate})
-        elif command in {"enter_kql", "enter_query"}:
-            state["query"] = value.get("query", "") if isinstance(value, dict) else str(value or "")
+        apply_reference(state, goal, session)
     return state
+
+
+def apply_reference(state, goal, session):
+    """Apply one goal's reference action to a search state (restore_state's shape), as the coach would."""
+    reference = goal.get("reference_action", {})
+    command = reference.get("command")
+    value = substitute(reference.get("arguments"), session)
+    if command == "set_time_range" and isinstance(value, dict):
+        state["time"] = {"from": value.get("from"), "to": value.get("to", "now")}
+    elif command in {"add_filter", "filter_top_value"} and isinstance(value, dict) and value.get("field"):
+        operator = str(value.get("operator", "is")).lower()
+        earned = {
+            "field": value["field"],
+            "value": value.get("value"),
+            "negate": operator in {"is not", "not", "is not one of"} or bool(value.get("negate")),
+        }
+        # "is one of" (Kibana's phrases filter) keeps any of several values of the field.
+        if isinstance(earned["value"], list):
+            earned["type"] = "phrases"
+        state["filters"].append(earned)
+    elif command == "filter_field_present" and isinstance(value, dict) and value.get("field"):
+        state["filters"].append({"field": value["field"], "value": "exists", "negate": False, "type": "exists"})
+    elif command == "set_filter_inclusion" and isinstance(value, dict) and value.get("field"):
+        # The same pill, turned to keep (include) or leave out its value: it replaces the earlier one.
+        negate = value.get("include") is False
+        state["filters"] = [item for item in state["filters"]
+                            if not (item["field"] == value["field"] and str(item.get("value")) == str(value.get("value")))]
+        state["filters"].append({"field": value["field"], "value": value.get("value"), "negate": negate})
+    elif command in {"enter_kql", "enter_query"}:
+        state["query"] = value.get("query", "") if isinstance(value, dict) else str(value or "")
+    return state
+
+
+def expected_search(session, goal):
+    """The search a step's reference action leaves: what the earlier steps established, with the step's
+    own query or pill applied."""
+    return apply_reference(restore_state(session), goal, session)
+
+
+def outcome_evidence(session, action):
+    """Whether the learner's search holds exactly the records the current step's reference search would,
+    both in the learner's own window: {goal, match, learner, expected, both}, or None when that can't be
+    told (another kind of step or action, a view or reference that isn't KQL this service can read, or a
+    step whose answer is an empty search, where every empty search would "match")."""
+    if action.get("type") not in OUTCOME_ACTIONS or action.get("actor") == "tutorial" or session["mode"] == "demonstration":
+        return None
+    goal = current_goal(session)
+    if not goal or goal.get("empty_result_expected") or goal.get("reference_action", {}).get("command") not in OUTCOME_COMMANDS:
+        return None
+    view = session.get("view") or {}
+    if str(view.get("language") or "kql").casefold() not in {"kql", "kuery"}:
+        return None
+    expected = expected_search(session, goal)
+    reference_view = {"time_from": view.get("time_from"), "time_to": view.get("time_to"), "language": "kql",
+                      "query": expected.get("query") or "", "filters": expected.get("filters") or []}
+    learner, reference = view_query(view), view_query(reference_view)
+    if learner is None or reference is None:
+        return None
+    index = f"lab-{session['run_id']}"
+    body = "".join(json.dumps(line) + "\n" for query in (learner, reference, {"bool": {"filter": [learner, reference]}})
+                   for line in ({"index": index, "allow_no_indices": True}, {"size": 0, "track_total_hits": True, "query": query}))
+    try:
+        request = Request(f"{ELASTICSEARCH_URL}/_msearch", data=body.encode(), method="POST", headers={"Content-Type": "application/x-ndjson"})
+        with urlopen(request, timeout=10) as response:
+            responses = json.loads(response.read()).get("responses", [])
+    except (OSError, ValueError):
+        return None
+    if len(responses) != 3 or any(item.get("error") for item in responses):
+        return None
+    counts = [hit_total(item) for item in responses]
+    learner_count, expected_count, both = counts
+    return {"goal": goal["id"], "learner": learner_count, "expected": expected_count, "both": both,
+            "match": expected_count > 0 and learner_count == expected_count == both}
 
 
 def next_command(session):
@@ -862,7 +949,12 @@ def next_command(session):
     if index >= len(goals):
         return None
     if session["pending_command"] and session["pending_command"]["step_index"] == index:
-        return session["pending_command"]
+        pending = session["pending_command"]
+        # Sent again (a reconnect, a resume): with the hints seen since and its times as of now.
+        if "hints_used" in pending:
+            pending["hints_used"] = min(session["hint_level"].get(pending["step_id"], 0), pending.get("hint_count", 0))
+        pending["moments"] = moment_clocks(session)
+        return pending
     step = goals[index]
     session["last_command_sequence"] += 1
     reference = step.get("reference_action", {})
@@ -927,15 +1019,30 @@ def next_command(session):
         command["restore_state"] = restore_state(session)
         if command_type not in {"request_diagnosis", "request_answer"}:
             command["pace_seconds"] = pace_seconds(step)
+            # The Hint button shows how many of the step's hints are used and how many are left.
+            command["hint_count"] = len(step.get("hints", []))
+            command["hints_used"] = min(session["hint_level"].get(step["id"], 0), command["hint_count"])
+    command["moments"] = moment_clocks(session)
     session["pending_command"] = command
     return command
+
+
+def moment_clocks(session):
+    """The instant behind each clock time the coach's copy can name ("12:18" → ISO), so it can say how
+    long ago each was as time passes rather than as of when the card was sent."""
+    moments = incident_moments(session.get("manifest", {}), session.get("detected_offset_minutes"))
+    clocks = {clock_text(moment, session): iso_instant(moment) for moment in moments.values()}
+    start = recommended_window_start(moments)
+    if start is not None:
+        clocks.setdefault(clock_text(start, session), iso_instant(start))
+    return clocks
 
 
 def next_hint(session):
     """The current step's next hint, one level deeper each time. A hint that names the step's answer
     (the bottom-out level usually does) is recorded, so the step scores like Show me."""
     if not session["policy"].get("allow_hints", True):
-        return {"message_type": "hint", "step_id": None, "level": 0, "text": "Hints are off in challenge mode. The debrief shows the reference route afterwards."}
+        return {"message_type": "hint", "step_id": None, "level": 0, "total": 0, "text": "Hints are off in challenge mode. The debrief shows the reference route afterwards."}
     index = current_step_index(session)
     goals = playbook_goals(session)
     if index >= len(goals):
@@ -943,7 +1050,7 @@ def next_hint(session):
     step = goals[index]
     hints = step.get("hints", [])
     if not hints:
-        return {"message_type": "hint", "step_id": step["id"], "level": 0, "text": "No additional hint is available for this goal."}
+        return {"message_type": "hint", "step_id": step["id"], "level": 0, "total": 0, "text": "No additional hint is available for this goal."}
     level = min(session["hint_level"].get(step["id"], 0), len(hints) - 1)
     session["hint_level"][step["id"]] = level + 1
     session["assistance"]["hints"] += 1
@@ -957,7 +1064,7 @@ def next_hint(session):
         phrases += [clock_text(start, session), typed_start(start, session)]
     if reveals_answer(text, phrases):
         session["hint_revealed"][step["id"]] = True
-    return {"message_type": "hint", "step_id": step["id"], "level": level + 1, "text": text}
+    return {"message_type": "hint", "step_id": step["id"], "level": level + 1, "total": len(hints), "text": text}
 
 
 def learner_evaluation(session, evaluation):
@@ -1206,6 +1313,9 @@ def action_evidence(session, action):
         elif kind == "resource_isolated":
             evidence["assertions"][assertion["id"]] = bool(session["manifest"].get("space_id"))
     evidence.update(evidence["assertions"])
+    outcome = outcome_evidence(session, action)
+    if outcome is not None:
+        evidence["outcome"] = outcome
     return evidence
 
 

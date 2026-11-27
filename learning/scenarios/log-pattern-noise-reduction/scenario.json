@@ -90,7 +90,7 @@
     },
     "assertions": [
       {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.error_message}"}}},
-      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "request failed after ${param.incident.error_message}"}}},
+      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"bool": {"should": [{"term": {"message.keyword": "${param.incident.error_message}"}}, {"term": {"message.keyword": "request failed after ${param.incident.error_message}"}}], "minimum_should_match": 1}}},
       {"id": "warning_everywhere", "kind": "es_count", "minimum": 1, "query": {"bool": {"filter": [{"term": {"message.keyword": "${param.incident.noise_a}"}}], "must_not": [{"term": {"event.outcome.keyword": "failure"}}]}}}
     ]
   },

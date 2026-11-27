@@ -45,6 +45,10 @@ COMPLETED_RETENTION_SECONDS = float(os.getenv("COMPLETED_RETENTION_SECONDS", "60
 ENDED_STATES = {"COMPLETED", "ABORTED", "FAILED"}
 METRIC_TAIL_SECONDS = int(os.getenv("METRIC_TAIL_SECONDS", str(3 * 3600)))
 METRIC_TAIL_INTERVAL_SECONDS = 30
+# How far a run's ordinary background requests reach on each side of the pack's own hour of seeded
+# traffic (see _background_requests): back into the hours before it, and on after the run is provisioned,
+# so a learner who comes back to an investigation hours later still sees traffic arriving.
+BACKGROUND_SECONDS = int(os.getenv("BACKGROUND_SECONDS", str(6 * 3600)))
 LAB_ILM_POLICY = "lab-retention"
 LAB_INDEX_TEMPLATE = "lab-lifecycle"
 LAB_INDEX_PATTERNS = ["microservices-*", "tutorial-*", "scenario-*", "lab-*"]
@@ -1068,6 +1072,96 @@ def generate_seeded_events(manifest):
     return documents
 
 
+def _background_requests(manifest):
+    """The run's ordinary background requests, before and after its own seeded hour.
+
+    A run seeds an hour of background traffic around its incident, which leaves a production system
+    that only existed for that hour: a wider window shows nothing before it, and a learner who comes
+    back to an investigation later sees the histogram stop where the run began. So the same background
+    (the pack's endpoints, field cycles and occasional distractor lines, at its usual rate) reaches
+    ``BACKGROUND_SECONDS`` further back than that hour and as far forward from the run's creation. The
+    later ones are future-dated: Discover's searches end at now, so each appears when its time comes.
+    None of them carries the incident's signal or companions, and the hour the coach works in is the
+    pack's own, so the incident and every step's evidence stay as they were. Metrics packs keep their
+    own tail (_metric_tail).
+    """
+    application = manifest["scenario"].get("starting_view", {}).get("app")
+    if application == "metrics" or BACKGROUND_SECONDS <= 0:
+        return []
+    profile = manifest["scenario"].get("provisioning", {}).get("seeded_events", {})
+    noise_count = int(profile.get("noise_count", 72))
+    if noise_count <= 0:
+        return []
+    anchor = _seed_anchor(manifest)
+    # The pack's own background spreads from an hour before the anchor to 90 s before it.
+    newest, oldest = 90, 3600
+    interval = (oldest - newest) / noise_count
+    noise_cycles = _substitute(_cycles(profile, "noise_cycle", "noise_cycles"), manifest)
+    distractors = [_substitute(item, manifest) for item in profile.get("distractors", [])]
+    excluded_services = set(_substitute(profile.get("noise_exclude_services", []), manifest))
+    noise_endpoints = [endpoint for endpoint in _NOISE_ENDPOINTS if endpoint["service"] not in excluded_services] or _NOISE_ENDPOINTS
+    generator = random.Random(f"{manifest['seed']}:background")
+    # Seconds before the anchor: the hours before the pack's hour, then on from its newest request.
+    before = [oldest + interval * (step + 0.5) for step in range(int(BACKGROUND_SECONDS / interval))]
+    after = [newest - interval * (step + 0.5) for step in range(int((BACKGROUND_SECONDS + newest) / interval))]
+    requests = []
+    for sequence, offset in enumerate(before + after):
+        timestamp = anchor - timedelta(seconds=offset + generator.uniform(-interval / 3, interval / 3))
+        trace_id = hashlib.md5(f"{manifest['run_id']}:background:{sequence}".encode()).hexdigest()
+        event = _event_template(manifest, timestamp, trace_id, sequence)
+        endpoint = generator.choice(noise_endpoints)
+        event = _deep_merge(event, {"service": {"name": endpoint["service"]}, "http": {"request": {"method": endpoint["method"]}}, "url": {"path": endpoint["path"]}, "message": generator.choice(["request completed", "cache refreshed", "token accepted", "background reconciliation completed"])})
+        event = _cycled(event, noise_cycles, sequence)
+        if distractors and sequence % 5 == 0:
+            event = _deep_merge(event, distractors[sequence % len(distractors)])
+        prepared = _prepare_application_event(event, application)
+        _apply_realism(prepared, generator)
+        requests.append(prepared)
+    return requests
+
+
+def seed_background(manifest, stop):
+    """Index the run's background requests (_background_requests) without holding up the run.
+
+    It runs on its own thread once the incident's records are in: readiness only counts those, so a
+    learner's Start never waits for this, and nothing it adds lies in the hour the coach works in. It
+    doesn't wait for Elasticsearch's refresh either; the records are searchable within a second, long
+    before anyone opens a window wide enough to hold them. Cleanup waits for it before deleting the
+    run's data, so a run reclaimed meanwhile isn't recreated. A failure only leaves less history.
+    """
+    run_id = manifest["run_id"]
+    if stop.is_set():
+        return
+    try:
+        documents = _background_requests(manifest)
+        if not documents:
+            return
+        index = f"lab-{run_id}"
+        application = manifest["scenario"].get("starting_view", {}).get("app")
+        lines, data_streams = [], set()
+        for document in documents:
+            lines.append(json.dumps({"index": {"_index": index}}))
+            lines.append(json.dumps(document, separators=(",", ":")))
+            application_index, application_document = _application_document(document, application, manifest)
+            if application_index:
+                data_streams.add(application_index)
+                lines.append(json.dumps({"create": {"_index": application_index}}))
+                lines.append(json.dumps(application_document, separators=(",", ":")))
+        # Recorded first, so cleanup also removes a stream this request creates.
+        run = get_run(run_id)
+        if data_streams and run:
+            update_run(run_id, data_streams=sorted(set(run.get("data_streams", [])) | data_streams))
+        if stop.is_set():
+            return
+        request = Request(f"{ELASTICSEARCH_URL}/_bulk", data=("\n".join(lines) + "\n").encode(), method="POST", headers={"Content-Type": "application/x-ndjson"})
+        with urlopen(request, timeout=60) as response:
+            result = json.loads(response.read())
+        failed = sum(1 for item in result.get("items", []) if any(operation.get("error") for operation in item.values()))
+        emit("background requests seeded", "WARN" if failed else "INFO", run_id, action="background_seeded", documents=len(documents), failed=failed)
+    except (OSError, URLError, ValueError) as error:
+        emit("background requests not seeded", "WARN", run_id, action="background_seeded", error={"type": type(error).__name__, "message": str(error)})
+
+
 def _metric_tail(manifest, documents, application, now):
     """Readings that keep every host and pod reporting for the life of the run.
 
@@ -1260,6 +1354,10 @@ def cleanup_run(run, delete_data=True):
     traffic_thread = run.get("traffic_thread")
     if traffic_thread and traffic_thread.is_alive() and traffic_thread is not threading.current_thread():
         traffic_thread.join(timeout=30)
+    # Background requests still being indexed would recreate the run's index after it is deleted.
+    background_thread = run.get("background_thread")
+    if background_thread and background_thread.is_alive() and background_thread is not threading.current_thread():
+        background_thread.join(timeout=30)
     if manifest["scenario"].get("cleanup", {}).get("delete_space", True):
         delete_space(manifest["space_id"])
     if delete_data and manifest["scenario"].get("cleanup", {}).get("delete_run_data", True):
@@ -1346,6 +1444,10 @@ def lifecycle(manifest, stop):
             advance()
             indexed = bulk_seed(manifest)
             update_run(run_id, indexed_documents=indexed["documents"], data_streams=indexed["data_streams"])
+            # The hours of ordinary traffic around the incident go in alongside, off the path to READY.
+            background_thread = threading.Thread(target=seed_background, args=(manifest, stop), daemon=True, name=f"background-{run_id}")
+            advance(background_thread=background_thread)
+            background_thread.start()
         if "live-traffic" in strategies:
             advance()
             activate_fault(manifest)

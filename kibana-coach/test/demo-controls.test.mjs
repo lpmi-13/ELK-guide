@@ -126,8 +126,9 @@ test('the coach keeps off every ringed result column, and off any flyout, not ju
   assert.equal(panel.findFlyout().left, 720);
   panel.pos = {left: 954, top: 400};
   panel.placeAwayFrom(null);
-  // Off the flyout, and right beside it: what the step is about is in there.
-  assert.ok(panel.pos.left + 468 <= 720 && panel.pos.left + 468 >= 690, `card at ${panel.pos.left}`);
+  // Off the flyout, and right beside it: what the step is about is in there. It leaves the lead ring
+  // (64px) clear at the flyout's edge, where its own controls (a document's pins) are used next.
+  assert.ok(panel.pos.left + 468 <= 720 - 64 && panel.pos.left + 468 >= 720 - 64 - 30, `card at ${panel.pos.left}`);
 });
 
 test('a field the card or its step names keeps its result column clear, though only the evidence is ringed', () => {
@@ -251,7 +252,7 @@ test('hints stay with their step and Advance moves through a success card', () =
   assert.equal(panel.advanceCelebration(), false);
 });
 
-test('a demonstration\'s opening card spotlights nothing; the control lights up as the action starts', () => {
+test('a demonstration\'s opening card spotlights nothing; the control lights up as the action starts', async () => {
   const Panel = loadClass('../src/ui/coach-panel.js', 'IncidentCoachPanel',
     ['requestAnimationFrame'], [callback => callback()]);
   const panel = Object.create(Panel.prototype);
@@ -275,7 +276,9 @@ test('a demonstration\'s opening card spotlights nothing; the control lights up 
   assert.deepEqual(placedAwayFrom, [addFilter]); // but the card keeps clear of the control
   assert.equal(panel.spotlightRevealed, false); // so a scroll or mutation re-placing the card doesn't light it either
 
-  panel.showTarget(addFilter, 'Open Add filter.'); // the action: the cursor sets off for the control
+  // The action: the card settles first (nothing is moving in this stub), then the control lights up and
+  // the cursor sets off for it.
+  await panel.showTarget(addFilter, 'Open Add filter.');
   assert.deepEqual(spotlit, [addFilter]);
 
   // Guided Show me after a Hint lit the control: the walkthrough starts dark, like a demonstration.

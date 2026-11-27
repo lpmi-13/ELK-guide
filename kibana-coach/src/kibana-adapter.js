@@ -364,15 +364,18 @@ class KibanaAdapter {
     }
   }
 
-  async pointAt(target, coach, timingScale, signal, activity, {activate = false, showClick = true, hold = true, targetName = null} = {}) {
+  async pointAt(target, coach, timingScale, signal, activity, {activate = false, showClick = true, hold = true, targetName = null, arrive = true} = {}) {
     // Every application adapter uses this path. Reveal controls inside scrollable panels before
     // placing the spotlight or cursor, so the visible pointer lands on the control we act on.
     const informationOnly = !activate && !showClick;
     // Caption the action before that scroll, so the card says what is happening while the list moves.
     if (!informationOnly && activity) coach.showTarget(null, activity);
     await coach.cursor.reveal(target, {timingScale, signal});
-    if (informationOnly) coach.showInfo(target, activity);
-    else coach.showTarget(target, activity);
+    // The card moves out of the way (and its text changes) first; the control lights up and the cursor
+    // sets off only once it has settled, so two things never move at once.
+    if (informationOnly) await coach.showInfo(target, activity);
+    else await coach.showTarget(target, activity, {arrive});
+    if (signal?.aborted) throw new DOMException('Demonstration stopped', 'AbortError');
     // A pointer with no click is an explanation, not an action. Use the same timed reading beat
     // as the other cards so the note shows a countdown and advances automatically. Advance can
     // still finish the beat early, and the cursor must land before the action can continue.
@@ -389,7 +392,7 @@ class KibanaAdapter {
       if (!targetName || attempts >= 3) throw new Error(`Kibana target disappeared before click: ${targetName || activity}`);
       target = await this.waitFor(targetName, 3000, signal);
       await coach.cursor.reveal(target, {timingScale, signal});
-      coach.showTarget(target, activity);
+      await coach.showTarget(target, activity);
       await coach.cursor.moveTo(target, {timingScale, signal});
     }
     if (showClick) coach.cursor.click();
@@ -1008,6 +1011,10 @@ class KibanaAdapter {
   async pinFieldsVisibly(fields, coach, timingScale, signal) {
     const {viewer, row, scroller} = await this.documentTable(signal);
     const pinFor = field => document.querySelector(`[data-test-subj='docViewerFlyout'] [data-test-subj='unifiedDocViewer_pinControlButton_${String(field).replace(/['\\]/g, '\\$&')}']`);
+    // The pins go one after another without a pause between them: the cursor and the highlight move
+    // straight on to the next row, quicker than an ordinary move, and only the last pin is held.
+    const quick = Math.min(timingScale, 0.7);
+    const wanted = fields.filter(field => !/unpin/i.test(pinFor(field)?.getAttribute('aria-label') || ''));
     let shown = 0;
     for (const field of fields) {
       if (scroller) {
@@ -1025,14 +1032,16 @@ class KibanaAdapter {
       shows?.style.setProperty('opacity', '1');
       // The cursor and spotlight show how it's done, so the card keeps its caption rather than
       // describing the pin.
+      const last = field === wanted[wanted.length - 1];
       try {
-        await this.pointAt(pin, coach, timingScale, signal, '', {activate: true});
+        await this.pointAt(pin, coach, quick, signal, '', {activate: true, hold: last, arrive: shown === 0});
       } finally {
         shows?.style.removeProperty('opacity');
       }
       shown += 1;
-      await this.wait(250, signal);
+      if (!last) await this.wait(120, signal);
     }
+    if (shown) coach.clearActionTarget?.();
     if (scroller) scroller.scrollTop = 0;
     return true;
   }

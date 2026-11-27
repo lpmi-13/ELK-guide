@@ -75,6 +75,31 @@ for (const key of [
   localStorage.setItem(key, JSON.stringify(true));
 }
 
+// Kibana remembers recent searches in this browser's localStorage (verified 9.5.2: the query bar's
+// suggestions list them from `typeahead:<app>-<language>`, the date picker's Recent tab from
+// `kibana.timepicker.timeHistory`, ES|QL's history from `QUERY_HISTORY_ITEM_KEY`). Every run shares this
+// origin, so what a demonstration typed (the query that finds the failures, the window that holds the
+// incident) would be offered back in a later guided run or challenge as a ready answer. Forget them as
+// Kibana starts, and never write them again. (Kibana's `history:limit` can't do this: a limit of 0
+// leaves add() untrimmed, and its settings API is off in this build.)
+(function forgetSearchHistory() {
+  const remembered = key => /^typeahead:/.test(key) || key === 'kibana.timepicker.timeHistory' || key === 'QUERY_HISTORY_ITEM_KEY';
+  try {
+    for (const key of Object.keys(localStorage)) if (remembered(key)) localStorage.removeItem(key);
+  } catch (_error) { return; /* storage unavailable */ }
+  const store = Storage.prototype;
+  const setItem = store.setItem;
+  const getItem = store.getItem;
+  store.setItem = function (key, value) {
+    if (this === localStorage && remembered(String(key))) return undefined;
+    return setItem.call(this, key, value);
+  };
+  store.getItem = function (key) {
+    if (this === localStorage && remembered(String(key))) return null;
+    return getItem.call(this, key);
+  };
+})();
+
 // Kibana surfaces a "Help us improve Elastic" feedback survey in the lower corner
 // on its own schedule. It exposes no reliable configuration or storage switch, so
 // hide its portal the moment it mounts — the same net effect as a learner clicking

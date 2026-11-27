@@ -59,7 +59,7 @@
       "impact": "Some customer API calls are failing. Releases are paused until the on-call engineer finds where the errors are and a typical error.",
       "signals": [
         {"label": "Rule", "value": "More than 5% of responses were 5xx errors in 3 checks in a row"},
-        {"label": "Change context", "value": "A production rollout finished recently"},
+        {"label": "On-call notes", "value": "A production rollout finished recently. The on-call engineer's first guess is the ${param.incident.where} ${param.incident.decoy}"},
         {"label": "Triage request", "value": "Find ${param.incident.ask}, and the error behind it"}
       ]
     },
@@ -87,11 +87,11 @@
       "timed_facts": [{"at": "rollout", "text": "The change began rolling out at {time} ({ago})."}],
       "channels": ["release", "monitoring", "pager"],
       "headline": "Some requests started failing during a change",
-      "summary": "Errors went up for one service while a change rolled out: a new release and a configuration update, server by server. Some of its requests fail while others succeed, and the overall health numbers hide what sets them apart.",
+      "summary": "Errors went up for the ${param.incident.service} service while a change rolled out to it: a new release and a configuration update, server by server. Some of its requests fail while others succeed, and the overall health numbers hide what sets them apart.",
       "impact": "Some customer requests fail and others succeed. The change is paused until the evidence shows what the failing requests have in common.",
       "signals": [
         {"label": "Service health", "value": "Requests to the same service give different results"},
-        {"label": "Change context", "value": "A new release and a configuration update rolled out during the incident"},
+        {"label": "Change context", "value": "A new release and a configuration update rolled out to ${param.incident.service} during the incident"},
         {"label": "Triage request", "value": "Find what the failing requests have in common"}
       ]
     },

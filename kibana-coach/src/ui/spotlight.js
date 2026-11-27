@@ -13,12 +13,14 @@ class IncidentSpotlight {
 
   // The ring arrives on a control with the same entrance as the evidence rings (`.entering`): when it
   // appears, or moves on to another control. Following its control as the page scrolls, or onto the
-  // same control re-rendered in place, is not an arrival, so it doesn't replay.
-  show(target) {
+  // same control re-rendered in place, is not an arrival, so it doesn't replay; nor is a ring that is
+  // already up moving straight on to the next of several controls in one action (`arrive: false`).
+  show(target, {arrive = true} = {}) {
     if (!target) return this.hide();
     const rect = target.getBoundingClientRect();
     const box = {left: rect.left - 6, top: rect.top - 6, width: rect.width + 12, height: rect.height + 12};
-    const arriving = this.element.style.display !== 'block' || (target !== this.target && !IncidentSpotlight.sameBox(box, this.box));
+    const shown = this.element.style.display === 'block';
+    const arriving = !shown || (arrive && target !== this.target && !IncidentSpotlight.sameBox(box, this.box));
     this.target = target;
     this.box = box;
     this.element.style.cssText = `display:block;left:${box.left}px;top:${box.top}px;width:${box.width}px;height:${box.height}px`;

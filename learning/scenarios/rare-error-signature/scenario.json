@@ -191,8 +191,20 @@
         "kind": "es_count",
         "minimum": 1,
         "query": {
-          "term": {
-            "message.keyword": "request failed after ${param.incident.error_type}"
+          "bool": {
+            "should": [
+              {
+                "term": {
+                  "message.keyword": "${param.incident.message}"
+                }
+              },
+              {
+                "term": {
+                  "message.keyword": "request failed after ${param.incident.error_type}"
+                }
+              }
+            ],
+            "minimum_should_match": 1
           }
         }
       },

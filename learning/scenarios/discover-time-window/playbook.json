@@ -32,7 +32,7 @@
     "isolate": {
       "title": "Filter to the failing status code",
       "concept": "Filter on a value you actually saw in the data, not one you guessed. That leaves just the failing records.",
-      "narration": "Filter for the status code that stood out in its Top values. Click the + next to it, or use Add filter. Only the failing requests should remain.",
+      "narration": "Keep only the failing requests: filter for the server error status code (a 5xx code), whatever its share of the window. Click the + next to it in its Top values, or use Add filter.",
       "reasoning": "This value comes from the Top values you just read, so the filter rests on evidence, not a guess. As its own filter pill, it is also easy to remove with one click, without editing any query text.",
       "evidence": "After you filter, the table and histogram show only the failing requests behind the incident.",
       "demonstration": {
@@ -47,17 +47,18 @@
         {"action": ["query_submitted"], "validators": [{"kind": "query_contains", "fields": ["${var.status_field}"], "value": "${param.incident.status}"}, {"kind": "result_assertion", "assertion": "signal"}]}
       ],
       "hints": [
-        "Filter for the status code you just saw stand out, not one you assumed.",
-        "Click the + next to that value in the field's top values, or use Add filter (field, operator ‘is’, value).",
+        "Filter for the failing status code, the server error, whatever its share of the window.",
+        "Server errors are the 5xx codes. Click the + next to that code in http.response.status_code's Top values, or use Add filter (field, operator ‘is’, value).",
         "Filter http.response.status_code for ${param.incident.status}; Show me can add the reference filter."
       ],
       "drifts": [
-        {"action": ["filter_added", "filter_changed"], "validators": [{"kind": "filter_field", "field": "${var.status_field}"}, {"kind": "value_not", "value": "${param.incident.status}"}, {"kind": "detail_equals", "field": "negate", "value": false}], "note": "You filtered on a status code, but not the one that stood out in the top values."},
+        {"action": ["filter_added", "filter_changed"], "validators": [{"kind": "filter_field", "field": "${var.status_field}"}, {"kind": "value_not", "value": "${param.incident.status}"}, {"kind": "detail_equals", "field": "negate", "value": false}], "note": "You filtered on a status code the failing requests don't return. Filter on the server error they do return."},
         {"action": ["filter_added", "filter_changed"], "validators": [{"kind": "detail_not", "field": "field", "value": "${var.status_field}"}], "note": "You filtered on ${action.field}; this step narrows the view by status code."},
         {"action": ["field_statistics_opened"], "validators": [{"kind": "detail_not", "field": "field", "value": "${var.status_field}"}], "note": "You opened ${action.field}; this step is about the status codes."}
       ]
     },
     "inspect": {
+      "narration": "Open one of the failing requests. Pin the two fields that make the case, its status code and its URL path, so they sit side by side at the top. To pin a field, point at its row and click the pin icon at its left.",
       "demonstration": {
         "narration": "I'll open one filtered request to check whether the unusual status and endpoint occur together.",
         "reasoning": "A total can look convincing even when it includes other records. Opening one typical event shows the key values together, which a count alone can't do.",
@@ -73,9 +74,9 @@
         {"action": ["column_added"], "validators": [{"kind": "detail_not", "field": "field", "values": ["${var.status_field}", "${var.route_field}"]}], "note": "You added ${action.field} as a column; this step checks ${var.status_field} and ${var.route_field} on the same rows, or one whole event."}
       ],
       "hints": [
-        "Check one typical record instead of relying only on the count.",
-        "Expand a row to read all of its fields. Or add ${var.status_field} and ${var.route_field} as columns to read them on the same rows.",
-        "Open the first result; Show me can do it for you."
+        "Check one failing request yourself instead of relying only on the counts.",
+        "Expand a row (the ⤢ at its left). In the document on the right, pin http.response.status_code and url.path. To pin one, point at its row and click the pin icon at its left.",
+        "Open the first result and pin http.response.status_code and url.path; Show me can do it for you."
       ]
     }
   },
@@ -86,7 +87,7 @@
         "id": "survey",
         "title": "Look at the status codes in the window",
         "concept": "A field's Top values count every record in the window. So they show which value is unusual, which a few rows can't.",
-        "narration": "The table only shows a few requests at a time. Open the http.response.status_code field in the sidebar and read its Top values. They count the whole window, so they show which status code is unusual.",
+        "narration": "The table only shows a few requests at a time. In the sidebar, find the field with each request's HTTP status code and read its Top values. They count the whole window, so they show which status code is unusual.",
         "reasoning": "The report never named a status code, and the newest rows are only a sample. Reading the Top values keeps us honest instead of guessing.",
         "evidence": "The field's top values show the unusual status code standing out from the healthy 200s.",
         "demonstration": {
@@ -118,7 +119,7 @@
         "id": "endpoints",
         "title": "Find the affected endpoint",
         "concept": "Inside the failing requests, a second field's top values show where the failures are happening.",
-        "narration": "The failing status code is now filtered. Open the url.path field and read its Top values to see which endpoint the errors hit.",
+        "narration": "Only the failing requests are left. Read the Top values of the field with each request's URL path, to see which endpoint the errors hit.",
         "reasoning": "Knowing the status code isn't the same as knowing where it happens. The url.path top values show whether one route is behind most of them.",
         "evidence": "The url.path top values show the endpoint behind all of the failures.",
         "demonstration": {

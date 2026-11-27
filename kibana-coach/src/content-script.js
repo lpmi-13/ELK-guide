@@ -278,10 +278,12 @@ function startIncidentCoach() {
         const target = await adapter.resolveAnchor(command.target, controller.signal, command);
         // The opening card spotlights nothing: the control lights up when the action starts and the
         // cursor sets off for it. The card keeps clear of the control meanwhile. A step that starts by
-        // reading the page (where the histogram rises) rings that instead.
-        coach.showCommand(command, command.goal_focus ? null : target);
+        // reading the page (where the histogram rises) rings that instead; it is found before the card
+        // shows, so the card is placed clear of it once and the rings arrive after it has settled.
+        const focus = command.goal_focus && !advanced
+          ? await adapter.findEvidence({...command, evidence_focus: command.goal_focus}, controller.signal, command.narration) : null;
+        coach.showCommand(command, command.goal_focus ? null : target, {focus});
         if (!advanced) {
-          if (command.goal_focus) coach.showGoalFocus(await adapter.findEvidence({...command, evidence_focus: command.goal_focus}, controller.signal, command.narration));
           // A chart-reading goal needs time to explain the visible pattern before the controls take over.
           const pause = command.goal_focus ? chartPause(command.narration) : goalPause(command.narration);
           coach.startCountdown(pause);
@@ -302,6 +304,7 @@ function startIncidentCoach() {
       if (walkthrough) {
         walkthroughController = controller;
         coach.beginWalkthrough(walkthrough);
+        if (strayFromEarnedSearch(command)) await resetSearchForShowMe(command, controller.signal);
       }
       const action = await adapter.perform(command, coach, {timingScale, signal: controller.signal, readBeat, holdAction});
       const leaving = Boolean(action?.navigate);
@@ -326,7 +329,17 @@ function startIncidentCoach() {
       }
     } catch (error) {
       if (error.name === 'AbortError') return;
-      coach.toast(error.message, true);
+      // A guided Show me that could not finish hands the step back: its own card again (not a "Doing it
+      // now" card that never ends), with the reason under it, so the learner can do it or ask again.
+      if (explicitlyRequested && command.mode === 'guided' && currentCommand?.command_id === command.command_id) {
+        coach.showCommand(command, adapter.resolve(command.target));
+        // A control that never appeared is named by its selector, which means nothing to a learner.
+        const reason = /^Kibana target (not found|disappeared)/.test(error.message)
+          ? 'a control it needs isn’t on the page right now. Do this step yourself, or press Show me again.' : error.message;
+        coach.toast(`Show me couldn't finish: ${reason}`, true);
+      } else {
+        coach.toast(error.message, true);
+      }
       client.acknowledge(command, 'failed', {error: error.message});
     } finally {
       if (advanceAfterAction === controller.signal) advanceAfterAction = null;
@@ -335,6 +348,36 @@ function startIncidentCoach() {
         executionController = null;
       }
       if (walkthroughController === controller) walkthroughController = null;
+    }
+  }
+
+  // Show me on a guided step that shapes the search starts from the search the earlier steps established
+  // (restore_state): a pill or query the learner added on the way would otherwise stay applied, and the
+  // step's result card would describe records that aren't the ones on screen.
+  const SEARCH_COMMANDS = new Set(['enter_kql', 'add_filter', 'filter_top_value', 'set_filter_inclusion', 'filter_field_present']);
+  function strayFromEarnedSearch(command) {
+    const state = command.restore_state;
+    if (!state || !SEARCH_COMMANDS.has(command.type) || !adapter.readDiscoverUrlState?.()) return false;
+    const view = adapter.currentView() || {};
+    const pills = (view.filters || []).filter(filter => !filter.disabled);
+    const same = filter => pills.some(pill => String(pill.field || '').replace(/\.(keyword|text)$/, '') === filter.field
+      && Boolean(pill.negate) === Boolean(filter.negate)
+      && JSON.stringify(Array.isArray(pill.value) ? pill.value.map(String).sort() : String(pill.type === 'exists' ? 'exists' : pill.value ?? ''))
+        === JSON.stringify(Array.isArray(filter.value) ? filter.value.map(String).sort() : String(filter.value ?? '')));
+    const expected = state.filters || [];
+    return !((view.query || '').trim() === (state.query || '').trim() && pills.length === expected.length && expected.every(same));
+  }
+
+  async function resetSearchForShowMe(command, signal) {
+    const state = command.restore_state;
+    coach.showTarget(null, 'Putting the search back to where this step starts…');
+    adapter.performing = true;
+    try {
+      adapter.restoreDiscoverState(state);
+      await adapter.resultsSettled(signal, {grace: 1200});
+    } finally {
+      adapter.performing = false;
+      observer?.rebaseline();
     }
   }
 
@@ -465,6 +508,30 @@ function startIncidentCoach() {
         detail: 'I’ll put it back and keep the rest of your search. Or add it again yourself, and I’ll stop.',
         stillBroken: () => lost.some(filter => !holdsFilter(filter)),
         restore: async () => adapter.restoreDiscoverState(state, {merge: true}),
+      };
+    }
+    if (reason?.reason_code === 'window_too_wide') {
+      // Far wider than the investigation needs: the coach types the recommended start back, and steps
+      // aside if the learner narrows it themselves.
+      const time = reason.restore_time || state?.time;
+      // The service calls a window far too wide an hour or more before the recommended start.
+      const limit = Date.parse(time?.from || '') - 60 * 60_000;
+      return {
+        eyebrow: 'The window is far too wide',
+        headline: reason.headline || 'This window reaches far further back than the incident.',
+        detail: reason.detail || 'I’ll put the window back. Or narrow it yourself, and I’ll stop.',
+        working: 'Typing a fixed start into the date box, so the window stays put…',
+        restoredToast: 'The window is back. Continue with this step.',
+        stillBroken: () => {
+          const range = observer.readTimeRange();
+          const minutes = observer.timeRangeMinutes(range.from, range.to);
+          return !Number.isNaN(limit) && minutes != null && Date.now() - minutes * 60_000 < limit;
+        },
+        restore: async signal => {
+          if (!time?.from) return false;
+          await adapter.perform({type: 'set_time_range', target: 'kibana.time_picker', value: {from: time.from, to: time.to || 'now'}}, coach, {signal});
+          return true;
+        },
       };
     }
     if (reason?.reason_code === 'window_excludes_incident' || reason?.reason_code === 'window_slid_past_incident') {
@@ -624,10 +691,11 @@ function startIncidentCoach() {
     recoveryController = controller;
     checkIn = null;
     try { client.reportRecovery(command.step_id, reason.reason_code); } catch (_error) { /* offline */ }
+    const tooWide = reason.reason_code === 'window_too_wide';
     coach.showRecovery({
-      eyebrow: 'Outside the window — choose again',
-      headline: reason.headline || 'That window doesn’t reach back to the incident.',
-      detail: reason.detail || 'Choose a window that starts earlier.',
+      eyebrow: tooWide ? 'Window too wide — choose again' : 'Outside the window — choose again',
+      headline: reason.headline || (tooWide ? 'That window reaches far further back than the incident.' : 'That window doesn’t reach back to the incident.'),
+      detail: reason.detail || (tooWide ? 'Choose a window that starts a little before the incident.' : 'Choose a window that starts earlier.'),
       choices: [{id: 'retry', label: 'Choose again', primary: true, onSelect: () => {
         dismissWindowMiss();
         if (currentCommand) coach.showCommand(currentCommand, adapter.resolve(currentCommand.target));
@@ -726,7 +794,8 @@ function startIncidentCoach() {
       drift: drift[drift.length - 1] || '',
       choices: [
         {id: 'keep_going', label: 'Keep going', primary: true, onSelect: () => answer('keep_going')},
-        {id: 'hint', label: 'Give me a hint', onSelect: () => answer('hint')},
+        // Once every hint is out, only Show me is left to offer.
+        ...(coach.hintsLeft?.() !== false ? [{id: 'hint', label: 'Give me a hint', onSelect: () => answer('hint')}] : []),
         {id: 'show_me', label: 'Show me', onSelect: () => answer('show_me')},
       ],
     });
@@ -847,7 +916,7 @@ function startIncidentCoach() {
       if (client.mode === 'guided' && evaluation.outcome === 'dead_end') {
         const code = evaluation.reason_code;
         if (code === 'empty_result') deadEndSince = 1;
-        else if (code === 'window_misses_incident') { if (recoveryEligible()) explainWindowMiss(currentCommand, evaluation); }
+        else if (code === 'window_misses_incident' || (code === 'window_too_wide' && evaluation.on_scope_step)) { if (recoveryEligible()) explainWindowMiss(currentCommand, evaluation); }
         else if (recoveryEligible()) recoverFromDeadEnd(currentCommand, evaluation);
       }
       if (evaluation.outcome === 'accepted') {

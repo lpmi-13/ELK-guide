@@ -227,3 +227,81 @@ def datetime_from_iso(value):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BackgroundRequestTests(unittest.TestCase):
+    """A run's ordinary background traffic reaches hours before its own seeded hour and hours after it
+    was created, so a wide window shows a system that was already running and an investigation picked
+    up later still shows requests arriving. It is indexed off the path to READY."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.controller = load_module("scenario_controller_background", ROOT / "scenario-controller/controller.py")
+
+    def manifests(self):
+        catalog = json.loads((ROOT / "learning/catalog.json").read_text())["scenarios"]
+        for entry in [item for item in catalog if item.get("track") == "mvp"]:
+            template = json.loads((ROOT / "learning" / entry["pack"] / "scenario.json").read_text())
+            yield entry["id"], self.controller.materialize(template, 3, run_id="run-000000000003")
+
+    def test_background_requests_reach_hours_either_side_and_never_repeat_the_incident(self):
+        from datetime import datetime, timedelta
+        for pack, manifest in self.manifests():
+            anchor = datetime.fromisoformat(manifest["created_at"])
+            background = self.controller._background_requests(manifest)
+            seeded = self.controller.generate_seeded_events(manifest)
+            # The incident's own lines: logged by failures and never by a request that succeeded (a
+            # background warning shows up on both).
+            messages = lambda outcome: {self.controller._lookup_nested(document, "message") for document in seeded
+                                        if self.controller._lookup_nested(document, "event.outcome") == outcome}
+            signal_messages = messages("failure") - messages("success")
+            moments = sorted(datetime.fromisoformat(document["@timestamp"]) for document in background)
+            hour = [moment for moment in moments if anchor - timedelta(hours=1) < moment < anchor - timedelta(seconds=90)]
+            with self.subTest(pack=pack):
+                # Six hours before the pack's own hour, and six after the run was created,
+                self.assertLess(moments[0], anchor - timedelta(hours=6.9))
+                self.assertGreater(moments[-1], anchor + timedelta(hours=5.9))
+                # leaving the pack's own hour (the one the coach works in) as the pack seeded it,
+                self.assertLessEqual(len(hour), 2)
+                # with no gap a histogram would show as traffic stopping, either side of that hour,
+                outside = [moment for moment in moments if not anchor - timedelta(hours=1) < moment < anchor - timedelta(seconds=90)]
+                gaps = [(later - earlier).total_seconds() for earlier, later in zip(outside, outside[1:]) if later < anchor - timedelta(hours=1) or earlier > anchor - timedelta(seconds=90)]
+                self.assertLess(max(gaps), 300)
+                # and never the incident: no failed request, none of its messages.
+                self.assertFalse([document for document in background if self.controller._lookup_nested(document, "event.outcome") == "failure"])
+                self.assertFalse({self.controller._lookup_nested(document, "message") for document in background} & signal_messages)
+
+    def test_the_incident_is_seeded_without_the_background_which_follows_on_its_own(self):
+        import io
+        import threading
+        bodies = []
+
+        class Response(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *_): return False
+
+        def fake_urlopen(request, timeout=None):
+            bodies.append((request.full_url, request.data.decode()))
+            return Response(json.dumps({"errors": False, "items": []}).encode())
+
+        controller = self.controller
+        original = controller.urlopen, controller.update_run, controller.get_run, controller.emit
+        controller.urlopen, controller.update_run = fake_urlopen, lambda *_args, **_kwargs: True
+        controller.get_run, controller.emit = (lambda _run_id: {"data_streams": []}), (lambda *_args, **_kwargs: None)
+        try:
+            _pack, manifest = next(iter(self.manifests()))
+            controller.bulk_seed(manifest)
+            seeded = sum(1 for line in bodies[0][1].splitlines() if line.startswith('{"index"'))
+            self.assertEqual(seeded, len(controller.generate_seeded_events(manifest)))
+            self.assertIn("refresh=wait_for", bodies[0][0])
+            controller.seed_background(manifest, threading.Event())
+            background = sum(1 for line in bodies[1][1].splitlines() if line.startswith('{"index"'))
+            self.assertEqual(background, len(controller._background_requests(manifest)))
+            # Nobody waits for it, so it doesn't wait for Elasticsearch's refresh.
+            self.assertNotIn("refresh", bodies[1][0])
+            stopped = threading.Event()
+            stopped.set()
+            controller.seed_background(manifest, stopped)
+            self.assertEqual(len(bodies), 2)
+        finally:
+            controller.urlopen, controller.update_run, controller.get_run, controller.emit = original

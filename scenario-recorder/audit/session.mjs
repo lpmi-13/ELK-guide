@@ -50,7 +50,7 @@ export class LearnerTab {
     await launcher.goto(config.launcher, {waitUntil: 'domcontentloaded'});
     const instructions = launcher.locator('#dismiss-instructions');
     if (await instructions.isVisible().catch(() => false)) await instructions.click();
-    await launcher.locator('#coach-runtime.online').waitFor({timeout: 30000});
+    await launcher.waitForFunction(() => document.documentElement.dataset.coachRuntime === 'ready', null, {timeout: 30000});
     const card = launcher.locator('.scenario-card', {has: launcher.locator('strong', {hasText: entry.title})}).first();
     await card.click();
     const cardText = await card.innerText();

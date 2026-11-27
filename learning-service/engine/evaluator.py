@@ -22,6 +22,21 @@ IGNORED_ACTIONS = {"hint_requested", "command_acknowledged", "step_demonstrated"
 # complete a step while Discover shows "No results".
 SEARCH_ACTIONS = {"query_submitted", "esql_submitted", "filter_added", "filter_changed"}
 
+# A step that shapes the search (a query, or a filter pill) is judged on what it leaves on screen: the
+# learner's search, in their own window, must hold exactly the records the step's reference search holds
+# there. A pill, a query or Add filter all count when they keep the same records, and a search that
+# keeps more (``status_code >= 450`` where 4xx responses exist) or fewer does not, whatever its wording.
+# The service measures both (``evidence["outcome"]``); removing a pill can finish such a step too.
+OUTCOME_COMMANDS = {"enter_kql", "add_filter", "filter_top_value", "set_filter_inclusion", "filter_field_present"}
+OUTCOME_ACTIONS = {"query_submitted", "filter_added", "filter_changed", "filter_removed", "filter_disabled"}
+
+# How far before the coach's recommended start a window may begin before it is far too wide: it then
+# holds so much older, normal traffic that the incident is a sliver of it (the last day, the last week).
+WINDOW_TOO_WIDE_MINUTES = 60
+
+# Opening an event and pinning fields: the actions that show one event's evidence.
+DOCUMENT_ACTIONS = ("document_expanded", "trace_opened", "surrounding_documents_opened", "field_pinned")
+
 # A window is accepted when its start is no more than this many minutes after the incident's moment —
 # when it was first noticed, when a rollout began, or when the failures began if the pack seeds a
 # visible onset — so a window starting 14:01 still covers a report at 14:02:30 but not one at 14:00.
@@ -235,6 +250,15 @@ def validate_filter_exists(_session, action, _evidence, validator):
     return False
 
 
+def validate_pinned_fields(_session, action, _evidence, validator):
+    """The open event has these fields pinned (side by side at the top of the document), as the
+    demonstration leaves them. The coach's own Show me pins them itself and is trusted."""
+    if action.get("actor") == "tutorial":
+        return True
+    pinned = {_base_field(item) for item in (_details(action).get("pinned") or _after(action).get("pinned") or []) if isinstance(item, str)}
+    return all(_base_field(field) in pinned for field in validator.get("fields", []))
+
+
 def validate_result_assertion(_session, _action, evidence, validator):
     return _assertion(evidence, validator.get("assertion"))
 
@@ -377,6 +401,7 @@ VALIDATORS = {
     "selected_value": validate_selected_value,
     "result_contains": validate_result_contains,
     "app_is": validate_app,
+    "pinned_fields": validate_pinned_fields,
     "answer_submitted": validate_answer_submitted,
     "resource_isolated": validate_result_assertion,
 }
@@ -438,6 +463,30 @@ def playbook_goals(session):
     ]
 
 
+def with_pinned_evidence(playbook):
+    """Guided practice asks for one event's evidence the way the demonstration leaves it: the event open
+    and the fields that make the case pinned side by side. A step whose demonstration pins fields
+    (``evidence_focus`` kind ``document``) is then finished by pinning them in an open event, not by
+    opening any event, and not by adding columns instead."""
+    for goal in playbook.get("goals", []):
+        focus = (goal.get("demonstration") or {}).get("evidence_focus") or {}
+        command = goal.get("reference_action", {}).get("command")
+        fields = [field for field in focus.get("fields") or [] if isinstance(field, str) and field]
+        if focus.get("kind") != "document" or not fields or command not in {"expand_document", "open_surrounding_documents"}:
+            continue
+        routes = []
+        for route in goal.get("accepts", []):
+            actions = route.get("action") if isinstance(route.get("action"), list) else [route.get("action")]
+            kept = [action for action in actions if action in DOCUMENT_ACTIONS]
+            if not kept:
+                continue
+            routes.append({**route, "action": [*kept, "field_pinned"],
+                           "validators": [*route.get("validators", []), {"kind": "pinned_fields", "fields": fields}]})
+        goal["accepts"] = routes
+        goal["pinned_fields"] = fields
+    return playbook
+
+
 def _route_matches(session, action, evidence, route):
     accepted_action = route.get("action")
     action_matches = action.get("type") in accepted_action if isinstance(accepted_action, list) else action.get("type") == accepted_action
@@ -475,14 +524,24 @@ def _holds_filter(filters, query, earned):
         and str(earned.get("value", "")).casefold().replace(" ", "") in compact
 
 
-def lost_earned_filters(action, earned_state):
+def lost_earned_filters(action, earned_state, changing=None):
     """Earned filters (restore_state) the search no longer holds. Only judged when the browser
-    reported the pills applied after the action; a report without them says nothing about pills."""
+    reported the pills applied after the action; a report without them says nothing about pills.
+    ``changing`` is the filter the current step itself turns around (a NOT pill to include its value):
+    taking it away on the way to its new form is part of the step, not a loss."""
     after = _after(action)
     if not earned_state or "filters" not in after:
         return []
     filters, query = after.get("filters") or [], after.get("query", "")
-    return [earned for earned in earned_state.get("filters") or [] if not _holds_filter(filters, query, earned)]
+    return [earned for earned in earned_state.get("filters") or []
+            if not _holds_filter(filters, query, earned)
+            and not (changing and _same(_base_field(earned.get("field")), _base_field(changing.get("field"))) and _same(earned.get("value"), changing.get("value")))]
+
+
+def _changing_filter(goal):
+    reference = (goal or {}).get("reference_action", {})
+    arguments = reference.get("arguments")
+    return arguments if reference.get("command") == "set_filter_inclusion" and isinstance(arguments, dict) else None
 
 
 def scope_step(goal):
@@ -510,7 +569,7 @@ def dead_end(session, action, earned_state=None):
         return {"reason_code": "empty_result", "reason": "That search returned no results, so it can't complete a step."}
     if action.get("actor") == "tutorial":
         return None
-    lost = lost_earned_filters(action, earned_state)
+    lost = lost_earned_filters(action, earned_state, _changing_filter(current_goal(session)))
     if lost:
         names = ", ".join(f"{item['field']}: {item['value']}" for item in lost)
         return {"reason_code": "lost_earned_state", "lost": lost,
@@ -521,7 +580,23 @@ def dead_end(session, action, earned_state=None):
             return window_miss("window_excludes_incident", action, "The window no longer reaches back to the incident.")
         if scope_step(current_goal(session)):
             return window_miss("window_misses_incident", action, "The window does not reach back to the incident.")
+    if action.get("type") == "time_range_changed" and window_too_wide(session, _details(action)):
+        # Far older than the incident: on the scope step the learner chooses again, after it the
+        # recommended window comes back.
+        on_scope = not scope_complete(session) and scope_step(current_goal(session))
+        if on_scope or scope_complete(session):
+            return {**window_miss("window_too_wide", action, "The window reaches far further back than the incident."), "on_scope_step": on_scope}
     return None
+
+
+def window_too_wide(session, details):
+    """Whether a window starts so long before the coach's recommended start (``WINDOW_TOO_WIDE_MINUTES``
+    or more) that older, normal traffic swamps the incident."""
+    start = parse_instant(details.get("window_start_at"))
+    recommended = recommended_window_start(incident_moments(session.get("manifest", {}), session.get("detected_offset_minutes")))
+    if start is None or recommended is None:
+        return False
+    return (recommended - start).total_seconds() / 60 > WINDOW_TOO_WIDE_MINUTES
 
 
 def window_miss(reason_code, action, reason):
@@ -557,6 +632,40 @@ def drift_note(session, action):
     return None
 
 
+def outcome_drift(session, action, outcome):
+    """A search that holds other records than the step needs, said in counts: too few, too many, or
+    different ones. None when the outcome wasn't measured or matched."""
+    if action.get("type") not in OUTCOME_ACTIONS or not outcome or outcome.get("match") is not False or outcome.get("expected") is None:
+        return None
+    learner, expected, both = outcome.get("learner"), outcome.get("expected"), outcome.get("both")
+    if None in (learner, expected, both):
+        return None
+    if both == learner < expected:
+        note = f"Your search keeps {learner} of the {expected} records this step needs: something in it narrows them further than the step asks."
+    elif both == expected < learner:
+        extra = learner - expected
+        note = f"Your search still holds {extra} record{'' if extra == 1 else 's'} this step should leave out."
+    else:
+        note = "Your search holds different records from the ones this step needs."
+    return outcome["goal"], note
+
+
+def document_drift(session, action, evidence):
+    """Why an opened (or pinned) event didn't finish a step that asks for one: fields still to pin, or
+    an event that isn't one of those the step is about. None for other actions and steps."""
+    goal = current_goal(session)
+    if not goal or action.get("type") not in DOCUMENT_ACTIONS or action.get("actor") == "tutorial":
+        return None
+    routes = [route for route in goal.get("accepts", [])
+              if action.get("type") in (route.get("action") if isinstance(route.get("action"), list) else [route.get("action")])]
+    if not routes:
+        return None
+    pins = next((validator for route in routes for validator in route.get("validators", []) if validator.get("kind") == "pinned_fields"), None)
+    if pins and not validate_pinned_fields(session, action, evidence, pins):
+        return goal["id"], "The event is open. Pin the fields that back up the finding, so they sit side by side at the top."
+    return goal["id"], "Nothing in your current search backs up the finding yet. Open one of the failing requests your search keeps, after the earlier steps' filters."
+
+
 def _advances_a_goal(session, action, evidence, needs=None):
     """Some unfinished goal whose requirements are met accepts this observation (through a route with a
     ``needs`` validator, when given)."""
@@ -576,7 +685,7 @@ def evaluate_action(session, action, evidence=None, earned_state=None):
     evidence = evidence or {}
     ignored = action.get("type") in IGNORED_ACTIONS
     blocked = None if ignored else dead_end(session, action, earned_state)
-    if blocked and blocked["reason_code"] == "lost_earned_state" and _advances_a_goal(session, action, evidence):
+    if blocked and blocked["reason_code"] == "lost_earned_state" and (_advances_a_goal(session, action, evidence) or (evidence.get("outcome") or {}).get("match")):
         # The step itself changes that filter (turning an excluding pill to include its value, say):
         # what an earlier step earned is meant to change here, so it is not lost.
         blocked = None
@@ -598,15 +707,22 @@ def evaluate_action(session, action, evidence=None, earned_state=None):
     # A single observation may establish multiple independent outcomes, but it
     # cannot satisfy a dependent goal by using a prerequisite completed by that
     # same observation. This preserves meaningful interpretation pauses.
+    outcome = evidence.get("outcome") or {}
     for goal in playbook_goals(session):
         goal_id = goal["id"]
         if goal_id in completed or not set(goal.get("requires", [])).issubset(completed):
+            continue
+        if outcome.get("goal") == goal_id and action.get("type") in OUTCOME_ACTIONS:
+            # The records on screen decide a search step, whatever form the search took.
+            if outcome.get("match"):
+                progressed.append(goal_id)
+                matching_titles.append(goal.get("title", goal_id))
             continue
         if any(_route_matches(session, action, evidence, route) for route in goal.get("accepts", [])):
             progressed.append(goal_id)
             matching_titles.append(goal.get("title", goal_id))
     if not progressed and not ignored and session.get("mode") in {"guided", "challenge"}:
-        drift = drift_note(session, action)
+        drift = drift_note(session, action) or outcome_drift(session, action, outcome) or document_drift(session, action, evidence)
         if drift:
             return {"outcome": "drift", "goals_progressed": [], "meaningful": False, "step_id": drift[0], "note": drift[1],
                     "reason": "The action was recorded, but it moves away from what this step needs."}
@@ -1055,6 +1171,7 @@ DEAD_END_LABELS = {
     "window_excludes_incident": "window missed the incident",
     "window_misses_incident": "window missed the incident",
     "window_slid_past_incident": "window moved past the incident",
+    "window_too_wide": "window far too wide",
 }
 
 
@@ -1147,9 +1264,11 @@ def guided_feedback(session):
         steps.append(step)
     return {
         "scored": True,
+        # The debrief is headed with the scenario's name, as the launcher card shows it.
+        "title": str((session.get("manifest", {}).get("scenario") or {}).get("title") or "Guided practice"),
         "total": total,
         "completion": round(100 * len(completed_ids) / max(1, step_count), 1),
-        "summary": "Your score reflects the help you used in each phase.",
+        "summary": "",
         "assistance": {
             "hints": assistance.get("hints", 0),
             "demonstrated_steps": assistance.get("demonstrated_steps", 0),

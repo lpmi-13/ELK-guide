@@ -9,15 +9,15 @@
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <style>
     :root { color-scheme: dark; font: 17px/1.5 system-ui, sans-serif; background: #0d1721; color: #eef5fb; }
-    body { max-width: 1040px; margin: 0 auto; padding: 42px 24px 80px; }
-    header { display:flex;align-items:center;gap:18px;margin-bottom:34px; } header h1 { font-size:24px;margin:0;flex:1; }
-    .connection-statuses { display:flex;align-items:center;gap:12px; }
-    .connection-status { font-size:15px; }
-    #coach-runtime { color:#f5b342; } #coach-runtime.online { color:#43d7a0; } #coach-runtime.error { color:#ff8878; }
-    #telemetry { color:#f5b342; } #telemetry.online { color:#43d7a0; }
-    main { display:grid;grid-template-columns:minmax(0,700px);justify-content:center;gap:24px; }
-    main > section { background:#142331;border:1px solid #2e4559;border-radius:12px;padding:24px;box-shadow:0 14px 40px #0003; }
-    h2 { margin-top:0;font-size:22px; } p { line-height:1.55;color:#c6d4df; } label { display:block;font-weight:650;margin-top:14px; }
+    /* The page is one screen tall at every size: the header and the scenario section share the viewport,
+       and only the list of scenario cards scrolls (inside its own box). Very short screens fall back to a
+       page that scrolls (see the max-height query at the end). */
+    html, body { height: 100%; }
+    body { box-sizing: border-box; display: flex; flex-direction: column; height: 100vh; height: 100dvh; max-width: 1640px; margin: 0 auto; padding: clamp(14px, 3vh, 32px) clamp(14px, 3vw, 32px); overflow: hidden; }
+    header { flex: none; margin-bottom: clamp(10px, 2.2vh, 22px); } header h1 { font-size: clamp(20px, 2.4vh + 6px, 26px); line-height: 1.2; margin: 0; }
+    main { flex: 1 1 auto; min-height: 0; display: flex; }
+    main > section { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; box-sizing: border-box; background:#142331;border:1px solid #2e4559;border-radius:12px;padding:clamp(14px, 2.4vh, 24px) clamp(14px, 2vw, 26px);box-shadow:0 14px 40px #0003; }
+    h2 { margin-top:0;font-size:clamp(19px, 1.6vh + 8px, 22px); } p { line-height:1.55;color:#c6d4df; } label { display:block;font-weight:650;margin-top:14px; }
     input,select { width:100%;box-sizing:border-box;margin-top:5px;padding:9px;border:1px solid #668096;border-radius:5px;background:#0c1822;color:#fff;font:inherit; }
     .select-control { display:block;position:relative;margin-top:5px; }
     .select-control select { appearance:none;-webkit-appearance:none;margin-top:0;padding-right:42px; }
@@ -39,11 +39,15 @@
     #launch-status { margin:14px 0 0;color:#c6d4df; }
     #launch-status[hidden] { display:none; }
     #launch-status a { color:#78c7ff; }
-    .section-heading { display:flex;align-items:center;justify-content:space-between;gap:18px; }
+    .section-heading { flex:none;display:flex;align-items:center;justify-content:space-between;gap:18px; }
     .section-heading h2 { margin-bottom:0; }
     .visually-hidden { position:absolute!important;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0; }
-    /* Fixed height (not min/max) so the form below never jumps while the catalog loads. */
-    .scenario-catalog { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;height:clamp(380px,56vh,560px);margin:16px 0;overflow:auto;padding:3px 6px 3px 3px; }
+    .intro { flex: none; margin: 8px 0 0; max-width: 72ch; }
+    /* The form takes the height the heading leaves; the catalog takes what the form's controls leave and
+       scrolls on its own, so the controls (and Start) are always on screen. Its height comes from the
+       layout, not its content, so the form never jumps while the catalog loads. */
+    .launch-layout { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(150px, 1fr) auto; gap: clamp(12px, 2vh, 20px); margin-top: clamp(10px, 1.8vh, 16px); }
+    .scenario-catalog { display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%, 300px),1fr));grid-auto-rows:min-content;align-content:start;gap:12px;min-height:0;margin:0;overflow:auto;overscroll-behavior:contain;padding:3px 6px 3px 3px; }
     .scenario-catalog .catalog-msg { grid-column:1/-1;align-self:center;margin:0;text-align:center;color:#9fb2c1; }
     /* Keep descriptions level even when neighboring titles wrap differently. */
     .scenario-card { position:relative;display:flex;flex-direction:column;gap:6px;box-sizing:border-box;margin:0;padding:15px 16px;border:1px solid #3d566b;border-radius:8px;background:#10202e;color:#eef5fb;font-weight:400;cursor:pointer; }
@@ -55,38 +59,56 @@
     .scenario-card .meta { margin-top:auto;padding-top:6px;color:#76cdb0;font-size:15px;line-height:1.4; }
     .scenario-card .unavailable { color:#ffad9f;font-size:15px;line-height:1.4; }
     .launch-controls #start { width:100%; }
-    /* Desktop: the cards take the width, with the mode, key and Start beside them, so starting a scenario
-       never needs a scroll. The catalog fills the height left under the heading and scrolls on its own. */
-    @media(min-width:1100px){
-      body{max-width:1640px;padding:24px 32px}
-      header{margin-bottom:18px}
-      main{grid-template-columns:minmax(0,1fr)}
-      main > section{padding:22px 26px}
-      .intro{margin:8px 0 0;max-width:72ch}
-      .launch-layout{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:28px;align-items:start;margin-top:16px}
-      .scenario-catalog{grid-template-columns:repeat(auto-fill,minmax(300px,1fr));height:max(420px,calc(100vh - 252px));margin:0}
-      .launch-controls{padding:2px 0 0 28px;border-left:1px solid #2e4559}
-      .launch-controls > label:first-child{margin-top:0}
+    /* Under the cards: the mode and key side by side, then Start across the full width. */
+    .launch-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); column-gap: 18px; align-items: start; }
+    .launch-controls > * { min-width: 0; }
+    .launch-controls .control-group { display: flex; flex-direction: column; }
+    .launch-controls .control-group > label:first-child { margin-top: 0; }
+    .launch-controls #start, .launch-controls #launch-status, .launch-controls .muted { grid-column: 1 / -1; }
+    .launch-controls #start { margin-top: 14px; }
+    .launch-controls .muted { margin: 10px 0 0; }
+    .field-help { font-size: 14px; line-height: 1.4; }
+    /* Desktop: the cards take the width, with the mode, key and Start in a column beside them. */
+    @media (min-width: 1100px) {
+      .launch-layout { grid-template-columns: minmax(0, 1fr) 380px; grid-template-rows: minmax(0, 1fr); gap: 28px; }
+      .launch-controls { display: flex; flex-direction: column; align-items: stretch; min-height: 0; overflow: auto; padding: 2px 4px 4px 28px; border-left: 1px solid #2e4559; }
+      .launch-controls .control-group + .control-group { margin-top: 14px; }
+      .launch-controls #start { margin-top: 18px; }
+      .launch-controls .muted { margin-top: 16px; }
     }
-    @media(max-width:760px){
-      body{padding:22px 14px}
-      header{display:block;margin-bottom:24px}
-      header h1{font-size:21px}
-      .connection-statuses{align-items:flex-start;flex-wrap:wrap;gap:6px 14px;margin-top:10px}
-      .connection-status{white-space:normal}
-      main{grid-template-columns:1fr;justify-content:stretch}
-      .scenario-catalog{grid-template-columns:1fr}
-      .field-row{grid-template-columns:1fr}
+    @media (max-width: 760px) {
+      .intro { font-size: 15px; line-height: 1.45; }
+      .launch-layout { grid-template-rows: minmax(200px, 1fr) auto; }
+      .launch-controls .muted { display: none; }
+      .field-help { font-size: 13px; }
+      .launch-controls { grid-template-columns: minmax(0, 1fr); }
+      .launch-controls .control-group + .control-group { margin-top: 10px; }
+      .scenario-card { padding: 12px 14px; }
+      .scenario-card strong { min-height: 0; font-size: 17px; }
+      .scenario-card .brief { font-size: 15px; }
+      .scenario-card .meta { font-size: 14px; }
+      .field-row { grid-template-columns: minmax(0, 1fr) auto; }
+    }
+    /* Tight heights: drop the secondary lines first, so the cards keep their room. */
+    @media (max-height: 760px) {
+      .launch-controls .muted { display: none; }
+      .field-help { font-size: 13px; }
+    }
+    @media (max-height: 640px) {
+      .intro { display: none; }
+      .field-help { display: none; }
+    }
+    /* Too short for one screen (a phone on its side): the page scrolls, and the catalog keeps a usable height. */
+    @media (max-height: 520px) {
+      body { height: auto; min-height: 100%; overflow: visible; }
+      .launch-layout { grid-template-rows: 300px auto; }
+      @media (min-width: 1100px) { .launch-layout { grid-template-rows: 340px; } }
     }
   </style>
 </head>
 <body>
   <header>
     <h1>Adaptive Kibana incident lab</h1>
-    <div class="connection-statuses">
-      <span id="coach-runtime" class="connection-status">checking Kibana coach…</span>
-      <span id="telemetry" class="connection-status">connecting telemetry…</span>
-    </div>
   </header>
   <main>
     <section>
@@ -97,16 +119,20 @@
       <form id="start-form" class="launch-layout">
         <div id="scenario-catalog" class="scenario-catalog" role="radiogroup" aria-label="Available scenarios"><p class="catalog-msg" role="status">Loading scenarios…</p></div>
         <div class="launch-controls">
-          <label id="mode-label" for="mode">Assistance mode</label>
-          <span class="select-control">
-            <select id="mode"><option value="demonstration" selected>Demonstration</option><option value="guided">Guided practice</option><option value="challenge">Challenge</option></select>
-          </span>
-          <label for="scenario-key">Scenario key</label>
-          <div class="field-row">
-            <input id="scenario-key" type="text" value="quiet-river-signal" minlength="10" maxlength="40" title="Use 10 to 40 characters." autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="scenario-key-help" required>
-            <button id="new-key" type="button">New key</button>
+          <div class="control-group">
+            <label id="mode-label" for="mode">Assistance mode</label>
+            <span class="select-control">
+              <select id="mode"><option value="demonstration" selected>Demonstration</option><option value="guided">Guided practice</option><option value="challenge">Challenge</option></select>
+            </span>
           </div>
-          <p class="field-help" id="scenario-key-help">Each start gets a new key, so you get a fresh incident. Type a key you used before to get its incident again.</p>
+          <div class="control-group">
+            <label for="scenario-key">Scenario key</label>
+            <div class="field-row">
+              <input id="scenario-key" type="text" value="quiet-river-signal" minlength="10" maxlength="40" title="Use 10 to 40 characters." autocomplete="off" autocapitalize="none" spellcheck="false" aria-describedby="scenario-key-help" required>
+              <button id="new-key" type="button">New key</button>
+            </div>
+            <p class="field-help" id="scenario-key-help">Each start gets a new key, so you get a fresh incident. Type a key you used before to get its incident again.</p>
+          </div>
           <button id="start" type="submit" disabled>Start selected scenario</button>
           <p id="launch-status" role="status" aria-live="polite" hidden></p>
           <p class="muted">Some scenarios need Kibana features that this installation may not have. Those scenarios are turned off, and the reason is shown.</p>
@@ -117,8 +143,6 @@
   <script>
     const kibanaUrl = __KIBANA_URL__ === 'same-origin' ? location.origin : __KIBANA_URL__;
     const learningUrl = __LEARNING_URL__ === 'same-origin' ? `${location.origin}/incident-coach/learning` : __LEARNING_URL__;
-    const coachRuntime = document.querySelector('#coach-runtime');
-    const telemetry = document.querySelector('#telemetry');
     const form = document.querySelector('#start-form');
     const modeSelect = document.querySelector('#mode');
     const modeControl = modeSelect.closest('.select-control');
@@ -443,12 +467,11 @@
         const runtime = await response.json();
         coachRuntimeReady = runtime.delivery === 'built-in';
         if (!coachRuntimeReady) throw new Error('unexpected runtime');
-        coachRuntime.textContent = `built-in Kibana coach ${runtime.version} ready`;
-        coachRuntime.className = 'connection-status online';
+        // Nothing on the page says so (it was clutter); the state is kept on the root element for tests.
+        document.documentElement.dataset.coachRuntime = 'ready';
       } catch (error) {
-        coachRuntime.textContent = 'built-in Kibana coach not available';
-        coachRuntime.className = 'connection-status error';
-        coachRuntime.title = error.message;
+        document.documentElement.dataset.coachRuntime = 'error';
+        console.warn(`The built-in Kibana coach is not available: ${error.message}`);
       } finally {
         coachRuntimeResolved = true;
         launchWhenReady();
@@ -578,8 +601,8 @@
     }
     function connectTelemetry() {
       socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-      socket.onopen = () => { telemetry.textContent = 'telemetry connected'; telemetry.className = 'connection-status online'; send('launcher_opened'); };
-      socket.onclose = () => { telemetry.textContent = 'telemetry reconnecting…';telemetry.className='connection-status';setTimeout(connectTelemetry,1500); };
+      socket.onopen = () => send('launcher_opened');
+      socket.onclose = () => setTimeout(connectTelemetry, 1500);
     }
     async function poll(runId) {
       // Check at once (a run prepared ahead is often ready already), then every second.

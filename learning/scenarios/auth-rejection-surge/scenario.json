@@ -61,18 +61,18 @@
     },
     "countries": {
       "sample": [
-        "BR",
-        "IN",
-        "DE",
-        "JP",
-        "AU",
-        "ZA",
-        "MX",
-        "KR",
-        "FR",
-        "NG",
-        "CA",
-        "ES"
+        {"code": "BR", "name": "Brazil"},
+        {"code": "IN", "name": "India"},
+        {"code": "DE", "name": "Germany"},
+        {"code": "JP", "name": "Japan"},
+        {"code": "AU", "name": "Australia"},
+        {"code": "ZA", "name": "South Africa"},
+        {"code": "MX", "name": "Mexico"},
+        {"code": "KR", "name": "South Korea"},
+        {"code": "FR", "name": "France"},
+        {"code": "NG", "name": "Nigeria"},
+        {"code": "CA", "name": "Canada"},
+        {"code": "ES", "name": "Spain"}
       ],
       "count": 4
     },
@@ -130,20 +130,23 @@
           "noun": "client",
           "others": "client.geo.country_iso_code and user_agent.version",
           "value": "${param.clients.0}",
+          "label": "${param.clients.0}",
           "who": "the ${param.clients.0} client"
         },
         {
           "field": "client.geo.country_iso_code",
           "noun": "country",
           "others": "client.application.name and user_agent.version",
-          "value": "${param.countries.0}",
-          "who": "one country, ${param.countries.0}"
+          "value": "${param.countries.0.code}",
+          "label": "${param.countries.0.name}",
+          "who": "one country, ${param.countries.0.name}"
         },
         {
           "field": "user_agent.version",
           "noun": "app version",
           "others": "client.application.name and client.geo.country_iso_code",
           "value": "${param.app.new}",
+          "label": "${param.app.new}",
           "who": "app version ${param.app.new}"
         }
       ]
@@ -262,28 +265,28 @@
               {
                 "client": {
                   "geo": {
-                    "country_iso_code": "${param.countries.0}"
+                    "country_iso_code": "${param.countries.0.code}"
                   }
                 }
               },
               {
                 "client": {
                   "geo": {
-                    "country_iso_code": "${param.countries.1}"
+                    "country_iso_code": "${param.countries.1.code}"
                   }
                 }
               },
               {
                 "client": {
                   "geo": {
-                    "country_iso_code": "${param.countries.2}"
+                    "country_iso_code": "${param.countries.2.code}"
                   }
                 }
               },
               {
                 "client": {
                   "geo": {
-                    "country_iso_code": "${param.countries.3}"
+                    "country_iso_code": "${param.countries.3.code}"
                   }
                 }
               }
@@ -370,28 +373,28 @@
               {
                 "client": {
                   "geo": {
-                    "country_iso_code": "${param.countries.0}"
+                    "country_iso_code": "${param.countries.0.code}"
                   }
                 }
               },
               {
                 "client": {
                   "geo": {
-                    "country_iso_code": "${param.countries.1}"
+                    "country_iso_code": "${param.countries.1.code}"
                   }
                 }
               },
               {
                 "client": {
                   "geo": {
-                    "country_iso_code": "${param.countries.2}"
+                    "country_iso_code": "${param.countries.2.code}"
                   }
                 }
               },
               {
                 "client": {
                   "geo": {
-                    "country_iso_code": "${param.countries.3}"
+                    "country_iso_code": "${param.countries.3.code}"
                   }
                 }
               }
@@ -427,21 +430,21 @@
           {
             "client": {
               "geo": {
-                "country_iso_code": "${param.countries.0}"
+                "country_iso_code": "${param.countries.0.code}"
               }
             }
           },
           {
             "client": {
               "geo": {
-                "country_iso_code": "${param.countries.1}"
+                "country_iso_code": "${param.countries.1.code}"
               }
             }
           },
           {
             "client": {
               "geo": {
-                "country_iso_code": "${param.countries.2}"
+                "country_iso_code": "${param.countries.2.code}"
               }
             }
           }
@@ -557,7 +560,8 @@
     ],
     "accept": {
       "scope": [
-        "${param.facet.value}"
+        "${param.facet.value}",
+        "${param.facet.label}"
       ]
     }
   },

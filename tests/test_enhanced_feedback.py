@@ -183,8 +183,19 @@ class IncludeExcludeTests(unittest.TestCase):
         result = evaluator.evaluate_action(s, turned, {}, earned_state=earned)
         self.assertEqual((result["outcome"], result["goals_progressed"]), ("accepted", ["isolate"]))
 
-    def test_deleting_the_earned_pill_is_still_a_dead_end(self):
+    def test_deleting_the_pill_the_step_turns_around_is_part_of_the_step(self):
+        """The hint offers deleting the NOT pill and adding the reason with its + instead of turning the
+        pill around: the delete is the first half of that, not a lost filter to put back."""
         s = include_exclude_session(completed={"scope", "baseline"})
+        earned = server.restore_state(s)
+        removed = {"type": "filter_removed", "actor": "learner", "details": {}, "state_after": {"filters": [], "query": ""}}
+        result = evaluator.evaluate_action(s, removed, {}, earned_state=earned)
+        self.assertNotEqual(result["outcome"], "dead_end")
+        self.assertEqual(result["goals_progressed"], [])
+
+    def test_deleting_an_earned_pill_the_step_keeps_is_still_a_dead_end(self):
+        s = include_exclude_session(completed={"scope", "baseline", "isolate"})
+        s["playbook"]["goals"].append({"id": "after", "title": "After", "requires": ["isolate"], "accepts": [], "reference_action": {"command": "open_field_statistics", "arguments": {"field": "service.name"}}})
         earned = server.restore_state(s)
         removed = {"type": "filter_removed", "actor": "learner", "details": {}, "state_after": {"filters": [], "query": ""}}
         result = evaluator.evaluate_action(s, removed, {}, earned_state=earned)
@@ -443,7 +454,7 @@ class DriftTests(unittest.TestCase):
         s = session(completed={"scope", "survey"})
         s["playbook"] = playbook
         wrong = {"type": "filter_added", "details": {"field": STATUS, "value": "500", "negate": False}}
-        self.assertEqual(evaluator.drift_note(s, wrong), ("isolate", "You filtered on a status code, but not the one that stood out in the top values."))
+        self.assertEqual(evaluator.drift_note(s, wrong), ("isolate", "You filtered on a status code the failing requests don't return. Filter on the server error they do return."))
         opened = {"type": "field_statistics_opened", "details": {"field": "url.path"}}
         self.assertEqual(evaluator.drift_note(s, opened)[1], "You opened url.path; this step is about the status codes.")
 

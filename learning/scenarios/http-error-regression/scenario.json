@@ -1080,6 +1080,54 @@
               "name": "Chrome"
             }
           }
+        },
+        {
+          "count": 6,
+          "offset_seconds": 40,
+          "interval_seconds": 70,
+          "jitter_seconds": 20,
+          "trace": "own",
+          "event": {
+            "service": {
+              "name": "inventory"
+            },
+            "event": {
+              "outcome": "success"
+            },
+            "http": {
+              "request": {
+                "method": "POST"
+              },
+              "response": {
+                "status_code": 404
+              }
+            },
+            "url": {
+              "path": "/api/inventory/reservations"
+            },
+            "message": "inventory item not found",
+            "user_agent": {
+              "name": "Opera"
+            }
+          },
+          "cycle": [
+            {
+              "http": {
+                "response": {
+                  "status_code": 404
+                }
+              },
+              "message": "inventory item not found"
+            },
+            {
+              "http": {
+                "response": {
+                  "status_code": 499
+                }
+              },
+              "message": "client closed the request before the response"
+            }
+          ]
         }
       ],
       "signal_cycles": [
@@ -1207,8 +1255,20 @@
         "kind": "es_count",
         "minimum": 1,
         "query": {
-          "term": {
-            "message.keyword": "representative ${param.incident.error_type} request failed"
+          "bool": {
+            "should": [
+              {
+                "term": {
+                  "message.keyword": "${param.incident.message}"
+                }
+              },
+              {
+                "term": {
+                  "message.keyword": "representative ${param.incident.error_type} request failed"
+                }
+              }
+            ],
+            "minimum_should_match": 1
           }
         }
       },

@@ -7,6 +7,7 @@ something checks what was picked, and answers are graded on the facts they state
 import copy
 import importlib.util
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -34,7 +35,7 @@ VALUE_FREE_ACTIONS = {
     "alert_history_inspected", "alert_source_opened", "answer_submitted", "auto_refresh_changed",
 }
 VALUE_CHECKS = {"query_contains", "filter_contains", "filter_excludes", "filter_exists", "filter_values", "filter_field", "selected_value", "detail_equals", "result_contains",
-                "time_range_contains", "query_language", "state_equals"}
+                "time_range_contains", "query_language", "state_equals", "pinned_fields"}
 
 
 class PackRuleTests(unittest.TestCase):
@@ -119,10 +120,11 @@ class PackRuleTests(unittest.TestCase):
     def test_a_column_checks_the_evidence_only_on_the_field_the_step_names(self):
         """Adding any column used to count as checking the evidence (url.path passed the deployment
         pack's "add the version field"). Now only the pack's key field does; another column is drift
-        that names what was added."""
+        that names what was added. (A challenge, which keeps the column route; guided practice asks for the
+        fields pinned in an open event instead, see test_guided_one_event_steps_need_the_evidence_pinned.)"""
         checked = 0
         for entry in CATALOG:
-            session = self.session(entry, 5)
+            session = self.session(entry, 5, mode="challenge")
             goals = session["playbook"]["goals"]
             index = next((i for i, goal in enumerate(goals) if goal["id"] == "inspect"), None)
             routes = [route for route in goals[index]["accepts"] if "column_added" in route["action"]] if index is not None else []
@@ -148,6 +150,66 @@ class PackRuleTests(unittest.TestCase):
         # The packs that find which field the failures share check it with a scan of every field, not a
         # column, so they have no column route to check here.
         self.assertGreaterEqual(checked, 5)
+
+    def test_guided_one_event_steps_need_the_evidence_pinned(self):
+        """Where the demonstration pins an event's fields, guided practice is finished by pinning those
+        fields in an open event: opening one, or adding a column, isn't enough."""
+        checked = 0
+        for entry in CATALOG:
+            session = self.session(entry, 5)
+            goals = session["playbook"]["goals"]
+            for index, goal in enumerate(goals):
+                fields = goal.get("pinned_fields")
+                if not fields:
+                    continue
+                evidence = {"assertions": {item["id"]: True for item in session["manifest"]["scenario"]["truth"]["assertions"]}}
+                trial = lambda: {**session, "completed_goals": {item["id"] for item in goals[:index]}}
+                opened = {"type": "document_expanded", "actor": "learner", "details": {"pinned": []}}
+                some = {"type": "field_pinned", "actor": "learner", "details": {"field": fields[0], "pinned": fields[:1]}}
+                every = {"type": "field_pinned", "actor": "learner", "details": {"field": fields[-1], "pinned": [*fields, "agent.name"]}}
+                with self.subTest(pack=entry["id"], goal=goal["id"]):
+                    self.assertNotIn(goal["id"], self.server.evaluate_action(trial(), opened, evidence)["goals_progressed"])
+                    if len(fields) > 1:
+                        self.assertNotIn(goal["id"], self.server.evaluate_action(trial(), some, evidence)["goals_progressed"])
+                    self.assertIn(goal["id"], self.server.evaluate_action(trial(), every, evidence)["goals_progressed"])
+                    self.assertFalse(any("column_added" in route["action"] for route in goal["accepts"]))
+                    # The coach's own Show me pins them itself and is trusted.
+                    shown = {"type": "document_expanded", "actor": "tutorial", "details": {}}
+                    if goal["reference_action"]["command"] == "expand_document":
+                        self.assertIn(goal["id"], self.server.evaluate_action(trial(), shown, evidence)["goals_progressed"])
+                checked += 1
+        self.assertGreaterEqual(checked, 5)
+
+    def test_guided_prompts_say_what_to_look_for_not_which_field(self):
+        """A guided step's opening prompt describes what to look for ("the field that gives the reason for
+        each rejection"); the field's name is for a hint the learner asks for."""
+        field_names = set()
+        for entry in [item for item in CATALOG if item.get("track") == "mvp"]:
+            for seed in range(1, 6):
+                session = self.session(entry, seed)
+                manifest = session["manifest"]
+                for document in self.controller.generate_seeded_events(manifest)[:400]:
+                    field_names.update(path for path in self.controller._leaves(document) if "." in path and not path[0].isdigit())
+                for goal in session["playbook"]["goals"]:
+                    narration = self.server.substitute(goal.get("narration", ""), session)
+                    named = sorted(name for name in field_names | set(goal.get("pinned_fields") or [])
+                                   if re.search(rf"(?<![\w.]){re.escape(name)}(?![\w])", narration))
+                    with self.subTest(pack=entry["id"], seed=seed, goal=goal["id"]):
+                        self.assertEqual(named, [], narration)
+
+    def test_no_step_asks_for_the_busiest_value(self):
+        """A ranking over all traffic depends on the window: background traffic keeps arriving, so the
+        busiest value in a window that runs to now can change while a learner is away, and a step whose
+        answer was the busiest value would then point at something else. Steps name their lead instead
+        (a value from the briefing), or rank only failures, which background traffic never adds to."""
+        ranking = re.compile(r"\b(busiest|with the most requests|most of the (window|requests)|most traffic|less traffic|more traffic)\b", re.IGNORECASE)
+        for entry in CATALOG:
+            session = self.session(entry, 2)
+            for goal in session["playbook"]["goals"]:
+                texts = [goal.get(key) for key in ("title", "concept", "narration", "reasoning", "evidence")] + list(goal.get("hints") or [])
+                texts += [(goal.get("demonstration") or {}).get(key) for key in ("narration", "reasoning", "evidence")]
+                with self.subTest(pack=entry["id"], goal=goal["id"]):
+                    self.assertEqual([text for text in texts if text and ranking.search(text)], [])
 
     def test_no_pack_asks_for_internal_evidence_ids(self):
         for path in [*(ROOT / "learning/scenarios").glob("*/*.json"), *(ROOT / "learning/templates").glob("*/*.json")]:

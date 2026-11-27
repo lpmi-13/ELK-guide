@@ -205,7 +205,7 @@ test('typing clears its target after the value is committed and before the hold'
   assert.deepEqual(calls, ['keydown', 'keyup', 'change', 'clear highlight', 'hold']);
 });
 
-test('clearing an action target prevents the old highlight from reappearing', () => {
+test('clearing an action target prevents the old highlight from reappearing', async () => {
   const Panel = loadClass('../src/ui/coach-panel.js', 'IncidentCoachPanel');
   const panel = Object.create(Panel.prototype);
   const calls = [];
@@ -219,7 +219,7 @@ test('clearing an action target prevents the old highlight from reappearing', ()
   panel.clearActionTarget();
   assert.equal(panel.activeTarget, null);
   assert.equal(panel.spotlightRevealed, false);
-  panel.showTarget(nextTarget);
+  await panel.showTarget(nextTarget);
   assert.equal(panel.activeTarget, nextTarget);
   assert.equal(panel.spotlightRevealed, true);
   assert.deepEqual(calls, ['hide spotlight', 'hide cursor', 'show next']);

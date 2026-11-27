@@ -208,7 +208,7 @@ export async function replayCase(context, record, spec) {
   await launcher.goto(config.launcher, {waitUntil: 'domcontentloaded'});
   const instructions = launcher.locator('#dismiss-instructions');
   if (await instructions.isVisible().catch(() => false)) await instructions.click();
-  await launcher.locator('#coach-runtime.online').waitFor({timeout: 30000});
+  await launcher.waitForFunction(() => document.documentElement.dataset.coachRuntime === 'ready', null, {timeout: 30000});
   const entry = (await api('/api/catalog')).body.scenarios.find(item => item.id === spec.scenario);
   const keyA = `${spec.key}-a`.slice(0, 40);
   const keyB = `${spec.key}-b`.slice(0, 40);

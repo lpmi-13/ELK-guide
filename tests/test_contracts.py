@@ -142,10 +142,12 @@ class ContractTests(unittest.TestCase):
         # A goal that starts by reading the page (where the histogram rises) rings that while its line
         # is up, instead of dimming it behind the control's spotlight; the action phase clears the ring.
         self.assertIn('"goal_focus": substitute(explanation.get("goal_focus"), session)', learning_service)
-        self.assertIn("coach.showCommand(command, command.goal_focus ? null : target);", content)
+        self.assertIn("coach.showCommand(command, command.goal_focus ? null : target, {focus});", content)
         # The goal card is judged by its own line (whether it mentions the hit count), not the result card's.
-        self.assertIn("coach.showGoalFocus(await adapter.findEvidence({...command, evidence_focus: command.goal_focus}, controller.signal, command.narration));", content)
-        self.assertLess(content.index("coach.showGoalFocus("), content.index("const pause = command.goal_focus ? chartPause(command.narration) : goalPause(command.narration);"))
+        # It is found before the card shows, so the card is placed clear of it once and the rings follow.
+        self.assertIn("? await adapter.findEvidence({...command, evidence_focus: command.goal_focus}, controller.signal, command.narration) : null;", content)
+        self.assertLess(content.index("await adapter.findEvidence({...command, evidence_focus: command.goal_focus}"), content.index("coach.showCommand(command, command.goal_focus ? null : target, {focus});"))
+        self.assertLess(content.index("coach.showCommand(command, command.goal_focus ? null : target, {focus});"), content.index("const pause = command.goal_focus ? chartPause(command.narration) : goalPause(command.narration);"))
         self.assertIn("if (phase !== 'learning') this.clearEvidenceHighlights();", coach)
 
     def test_challenge_mode_shows_no_route_and_no_live_feedback(self):

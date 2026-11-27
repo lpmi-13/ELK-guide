@@ -158,6 +158,33 @@ class KibanaActionObserver {
     return viewer && viewer.getClientRects().length ? viewer : null;
   }
 
+  // The fields pinned in the document viewer. Kibana keeps them per data view in localStorage
+  // (verified 9.5.2: `discover:pinnedFields` = {<data view id>: [fields]}); that is the record to read,
+  // because the table is virtualized and a pinned row, moved to the top, is often scrolled out of the
+  // DOM. The buttons on screen (`unifiedDocViewer_pinControlButton_<field>` reading "Unpin field") are
+  // read too, for a build that keeps pins elsewhere.
+  static pinnedFields() {
+    const prefix = 'unifiedDocViewer_pinControlButton_';
+    const onScreen = [...document.querySelectorAll(`[data-test-subj='docViewerFlyout'] [data-test-subj^='${prefix}']`)]
+      .filter(button => /unpin/i.test(button.getAttribute('aria-label') || button.getAttribute('title') || ''))
+      .map(button => button.getAttribute('data-test-subj').slice(prefix.length));
+    let stored = [];
+    try {
+      const all = JSON.parse(localStorage.getItem('discover:pinnedFields') || '{}') || {};
+      const id = KibanaActionObserver.dataViewId();
+      const lists = Object.values(all).filter(Array.isArray);
+      stored = id && Array.isArray(all[id]) ? all[id] : lists.length === 1 ? lists[0] : [];
+    } catch (_error) { stored = []; }
+    return [...new Set([...stored.filter(field => typeof field === 'string'), ...onScreen])];
+  }
+
+  // The data view Discover shows: its app state's dataSource (or index), or the context view's route.
+  static dataViewId() {
+    let hash = location.hash || '';
+    try { hash = decodeURIComponent(hash); } catch (_error) { /* keep it encoded */ }
+    return hash.match(/dataViewId:'?([\w-]+)/)?.[1] || hash.match(/[(,]index:'?([\w-]+)/)?.[1] || hash.match(/#\/context\/([\w-]+)/)?.[1] || null;
+  }
+
   // A field's open preview popover (its header), or null.
   fieldPopover() {
     const header = document.querySelector("[data-popover-panel] [data-test-subj='fieldPopoverHeader_fieldDisplayName']");
@@ -559,6 +586,21 @@ class KibanaActionObserver {
       for (const action of alerts) this.report(action);
       return;
     }
+    if (subject.startsWith('unifiedDocViewer_pinControlButton_')) {
+      // A row of the open document pinned (or unpinned): report every field now pinned, once Kibana has
+      // moved the row, so a step can ask for the evidence side by side as the demonstration leaves it.
+      const field = subject.slice('unifiedDocViewer_pinControlButton_'.length);
+      // Kibana re-draws the table with the row moved (verified 9.5.2: its button then reads "Unpin
+      // field"); in a busy document that takes a moment, so wait for the row to change before reading.
+      const wasPinned = KibanaActionObserver.pinnedFields().includes(field);
+      this.waitUntil(() => KibanaActionObserver.pinnedFields().includes(field) !== wasPinned, KibanaActionObserver.UI_WAIT_MS).then(() => {
+        if (this.stopped || !KibanaActionObserver.documentViewer()) return;
+        const pinned = KibanaActionObserver.pinnedFields();
+        const trace = this.adapter.resolve('kibana.trace_field')?.matches?.("[data-test-subj='tableDocViewRow-trace.id-value']") ? this.adapter.resolve('kibana.trace_field').textContent.trim() : '';
+        this.report({type: 'field_pinned', details: {field, pinned, now_pinned: pinned.includes(field), trace_id: trace}, state_after: {pinned}});
+      });
+      return;
+    }
     if (subject === 'querySubmitButton' || /esql.*(submit|run)/i.test(subject)) {
       setTimeout(() => this.reportSearch(), 50);
     } else if (/queryLanguage|select-text-based-language/i.test(subject)) {
@@ -661,7 +703,8 @@ class KibanaActionObserver {
         const expanded = this.adapter.resolve('kibana.trace_field');
         const inViewer = expanded?.matches?.("[data-test-subj='tableDocViewRow-trace.id-value']") ? expanded.textContent.trim() : '';
         const trace = inViewer || visibleTrace;
-        this.report({type: trace ? 'trace_opened' : 'document_expanded', details: {trace_id: trace}, state_after: {trace_id: trace}});
+        const pinned = KibanaActionObserver.pinnedFields();
+        this.report({type: trace ? 'trace_opened' : 'document_expanded', details: {trace_id: trace, pinned}, state_after: {trace_id: trace, pinned}});
       });
     } else if (/control-frame|controlGroup|optionsListControl/i.test(subject)) {
       this.report({type: 'dashboard_control_changed', details: {subject}, state_after: {app: 'dashboard'}});

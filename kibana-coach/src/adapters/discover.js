@@ -26,6 +26,18 @@ async function waitForSelector(selectors, timeout, signal) {
   throw new Error(`Kibana target not found: ${list.join(', ')}`);
 }
 
+// Text in the sidebar's field search (verified 9.5.2: `fieldListFiltersFieldSearch`) hides every field
+// that doesn't match it, so a field the coach needs can be missing from the list only because the learner
+// searched for another one. Clear it, as a learner would, when that field isn't listed. True if cleared.
+function showAllFields(host, field) {
+  const search = document.querySelector("[data-test-subj='fieldListFiltersFieldSearch']");
+  if (!search?.value || !field) return false;
+  const escaped = cssEscape(field);
+  if (document.querySelector(`[data-test-subj='field-${escaped}-showDetails'], [data-test-subj='dscFieldListPanelField-${escaped}'], [data-test-subj='fieldToggle-${escaped}']`)) return false;
+  host.setNativeValue(search, '');
+  return true;
+}
+
 globalThis.KibanaApplicationAdapters.push({
   name: 'discover',
   commands: new Set(['select_data_view', 'enter_kql', 'switch_query_language', 'enter_esql', 'edit_filter', 'remove_filter', 'disable_filter', 'add_column', 'remove_column', 'sort_column', 'expand_document', 'inspect_field', 'open_field_statistics', 'open_surrounding_documents',
@@ -100,7 +112,7 @@ globalThis.KibanaApplicationAdapters.push({
     await host.waitFor('kibana.doc_viewer', 10000, signal);
     const focus = command.evidence_focus || command.walkthrough?.evidence_focus;
     if (focus?.kind === 'document' && focus.fields?.length) await host.pinFieldsVisibly(focus.fields, coach, timingScale, signal);
-    return {type: 'surrounding_documents_opened', details: {anchor_row: anchorRow}, state_after: {}};
+    return {type: 'surrounding_documents_opened', details: {anchor_row: anchorRow, pinned: KibanaActionObserver.pinnedFields?.() || focus?.fields || []}, state_after: {}};
   },
 
   // A field's popover from the sidebar, opened unless it already is (verified 9.5.2: the field row's
@@ -111,6 +123,7 @@ globalThis.KibanaApplicationAdapters.push({
       && panel.querySelector("[data-test-subj='fieldPopoverHeader_fieldDisplayName']")?.textContent?.trim() === field);
     if (open()) return open();
     const escaped = cssEscape(field);
+    showAllFields(host, field);
     const button = await waitForSelector([`[data-test-subj='field-${escaped}-showDetails']`, `[data-test-subj='dscFieldListPanelField-${escaped}'] button`], 20000, signal);
     await host.pointAt(button, coach, timingScale, signal, activity, {activate: true, hold: false, targetName: null});
     const deadline = Date.now() + 5000;
@@ -284,6 +297,7 @@ globalThis.KibanaApplicationAdapters.push({
     // The field name comes from the command; fall back to the registry target otherwise.
     if (command.type === 'add_column' || command.type === 'remove_column') {
       const field = command.value?.field;
+      showAllFields(host, field);
       const toggle = field ? await waitForSelector(`[data-test-subj='fieldToggle-${cssEscape(field)}']`, 20000, signal) : null;
       const target = toggle || await host.waitFor(command.target, 20000, signal);
       const verb = command.type === 'add_column' ? 'Add' : 'Remove';
@@ -300,6 +314,7 @@ globalThis.KibanaApplicationAdapters.push({
     if ((command.type === 'open_field_statistics' || command.type === 'inspect_field') && command.value?.field) {
       const field = command.value.field;
       const escaped = cssEscape(field);
+      showAllFields(host, field);
       const target = await waitForSelector([
         `[data-test-subj='field-${escaped}-showDetails']`,
         `[data-test-subj='dscFieldListPanelField-${escaped}'] button`,
@@ -309,13 +324,18 @@ globalThis.KibanaApplicationAdapters.push({
       const type = command.type === 'open_field_statistics' ? 'field_statistics_opened' : 'field_inspected';
       return {type, details: {...command.value}, state_after: {...command.value}};
     }
-    const fallback = await host.waitFor(command.target, 20000, signal);
-    const target = (command.type === 'expand_document' && command.value?.service && this.expandToggleFor(command.value.service)) || fallback;
     const focus = command.evidence_focus || command.walkthrough?.evidence_focus;
     const compared = command.type === 'expand_document' && focus?.kind === 'document' ? focus.fields || [] : [];
-    const activity = command.type !== 'expand_document' ? command.narration || 'Use the highlighted Discover control.'
-      : `Expand ${command.value?.service ? `this ${command.value.service} result` : 'the first result'} to read all of its fields${compared.length ? ' in the document panel on the right' : ''}.`;
-    await host.pointAt(target, coach, timingScale, signal, activity, {activate: true});
+    // A document that is already open (the learner opened one before asking Show me) is the one to read:
+    // its row's toggle would close it again, and the step would wait for a viewer that never opened.
+    const alreadyOpen = command.type === 'expand_document' && !command.value?.service && host.resolve('kibana.doc_viewer');
+    if (!alreadyOpen) {
+      const fallback = await host.waitFor(command.target, 20000, signal);
+      const target = (command.type === 'expand_document' && command.value?.service && this.expandToggleFor(command.value.service)) || fallback;
+      const activity = command.type !== 'expand_document' ? command.narration || 'Use the highlighted Discover control.'
+        : `Expand ${command.value?.service ? `this ${command.value.service} result` : 'the first result'} to read all of its fields${compared.length ? ' in the document panel on the right' : ''}.`;
+      await host.pointAt(target, coach, timingScale, signal, activity, {activate: true});
+    }
     // Report the step only once the document is actually open, so a click that opened nothing is
     // never recorded (and debriefed) as a checked event.
     if (command.type === 'expand_document') {
@@ -333,6 +353,8 @@ globalThis.KibanaApplicationAdapters.push({
     };
     const details = {...(command.value || {})};
     if (command.type === 'switch_query_language') details.language ||= 'esql';
+    // The fields now pinned in the open document, as the observer reports a learner's pins.
+    if (command.type === 'expand_document') details.pinned = KibanaActionObserver.pinnedFields?.() || compared;
     return {type: observations[command.type], details, state_after: command.value || {}};
   }
 });

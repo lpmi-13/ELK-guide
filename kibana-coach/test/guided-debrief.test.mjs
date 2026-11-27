@@ -42,11 +42,12 @@ function renderGuided(feedback) {
 
 const assistance = {step_count: 5, independent_steps: 3, hints: 1, hinted_steps: 1, demonstrated_steps: 1, shown_steps: 1};
 
-test('guided debrief shows the scored percentage, phase credit, and marked gradient bar', () => {
-  const {Debrief, dialog} = renderGuided({scored: true, total: 70, summary: 'Complete.', assistance});
+test('guided debrief is headed with the scenario, shows the scored percentage and the marked gradient bar', () => {
+  const {Debrief, dialog} = renderGuided({scored: true, title: 'Find the log pattern that matters', total: 70, summary: '', assistance});
+  assert.equal(dialog.parts['.gd-hero h2'].textContent, 'Find the log pattern that matters');
+  assert.doesNotMatch(dialog.innerHTML, /Guided investigation complete|Your score reflects|Per phase/);
   assert.match(dialog.innerHTML, /Guided practice score<\/strong><strong>70%/);
   assert.match(dialog.innerHTML, /role="progressbar"[^>]*aria-valuenow="70"[^>]*--score:70%/);
-  assert.match(dialog.innerHTML, /Per phase: 20% without help · 10% with hints that leave the answer to you · 0% once a hint or Show me gives it/);
   assert.equal((dialog.innerHTML.match(/<i><\/i>/g) || []).length, 6);
   assert.match(dialog.innerHTML, /<span>0%<\/span>.*<span>100%<\/span>/s);
   assert.match(Debrief.styles, /guided-score-unearned[^}]*animation/);

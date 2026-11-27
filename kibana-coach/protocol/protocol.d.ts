@@ -194,6 +194,9 @@ interface CommandBase {
   answer_schema: AnswerSchema;
   /** The step's answer is an empty search (a boolean check for what must not exist). */
   empty_result_expected?: true;
+  /** The instant behind each clock time the copy names ("12:18" → ISO), so the coach can keep its
+   * "N minutes ago" current. */
+  moments?: Record<string, string>;
 }
 
 export interface DemonstrationStepCommand extends CommandBase {
@@ -226,6 +229,9 @@ export interface GuidedStepCommand extends CommandBase {
   restore_state: RestoreState;
   /** Active seconds before the coach checks in; never under 45. */
   pace_seconds: number;
+  /** How many hints the step has, and how many the learner has already seen. */
+  hint_count: number;
+  hints_used: number;
 }
 
 export interface GuidedAnswerCommand extends CommandBase {
@@ -288,7 +294,7 @@ export interface LostEarnedStateEvaluation extends DeadEndBase {
 }
 
 export interface WindowMissEvaluation extends DeadEndBase {
-  reason_code: 'window_misses_incident' | 'window_excludes_incident' | 'window_slid_past_incident';
+  reason_code: 'window_misses_incident' | 'window_excludes_incident' | 'window_slid_past_incident' | 'window_too_wide';
   from: string | null;
   relative: boolean;
   from_minutes: number | null;
@@ -302,6 +308,8 @@ export interface WindowMissEvaluation extends DeadEndBase {
   detail?: string;
   /** The challenge debrief's line. */
   note?: string;
+  /** window_too_wide: whether it happened on the scope step (choose again) rather than later (put back). */
+  on_scope_step?: boolean;
   /** The fixed start the coach types back in (not on the scope step itself). */
   restore_time?: TimeWindow;
 }
@@ -329,6 +337,8 @@ export interface Hint {
   step_id: string | null;
   /** 0 when there is no hint to give. */
   level: number;
+  /** How many hints the step has (0 when none). */
+  total: number;
   text: string;
 }
 
@@ -473,6 +483,8 @@ export interface GuidedStepFeedback {
 
 export interface GuidedFeedback {
   scored: true;
+  /** The scenario's name, the debrief's heading. */
+  title: string;
   total: number;
   completion: number;
   summary: string;

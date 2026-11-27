@@ -60,6 +60,17 @@ class IncidentCoachPanel {
     this.celebrating = false;
     this.advanceRequested = false;
     this.pendingCommand = null;
+    // One thing moves at a time: the card (its text and its place) first, then what it points at. These
+    // are when the card's current glide and text entrance end (performance.now() ms), and the tokens that
+    // let a later beat cancel a highlight still waiting for the card to settle.
+    this.moveEndsAt = 0;
+    this.textEndsAt = 0;
+    this.targetToken = 0;
+    this.presentToken = 0;
+    // Evidence rings wait (hidden) until the card has settled beside them; then they arrive.
+    this.ringsRevealed = true;
+    // The current step's hints: how many there are and how many the learner has seen.
+    this.hintState = {used: 0, total: 0};
     // A learner who opens or closes a result card's reasoning has decided: the coach leaves it that way
     // from then on. Null until they do. The card stays where it is until its next beat, so the control
     // doesn't jump away from the pointer that just used it.
@@ -77,12 +88,18 @@ class IncidentCoachPanel {
     dragHandle.addEventListener('pointercancel', event => this.endDrag(event));
     this.updatePlacement = event => {
       if (this.panel.hidden || this.dragging) return;
+      // A result card is being put in place (scroll, one placement, then its rings): it isn't moved again
+      // meanwhile, so it travels once, to where it ends up.
+      if (this.presenting) {
+        this.refreshEvidenceHighlights();
+        return;
+      }
       const target = this.activeTarget?.isConnected ? this.activeTarget : null;
       // Nothing to dodge — no highlighted control and no open doc-viewer flyout — so leave the
       // card where it rests rather than nudging it for every stray scroll or mutation.
       if (!target && !this.findFlyout() && !this.findPopovers().length && !this.watchingColumns() && !this.evidenceTargets.length && !this.coversQueryBar() && event?.type !== 'resize') return;
       // Highlights follow the page at once, whatever the card does.
-      if (target && this.spotlightRevealed) this.spotlight.show(target);
+      if (target && this.spotlightRevealed && !this.spotlightHeld) this.spotlight.show(target, {arrive: false});
       this.refreshEvidenceHighlights();
       // A popover or flyout that is opening grows over several frames (EUI animates both). Placing the
       // card against a half-drawn one makes it hop twice, so wait until its size holds still for a
@@ -214,16 +231,19 @@ class IncidentCoachPanel {
     return this.briefing.show(briefing);
   }
 
-  showCommand(command, target) {
+  showCommand(command, target, {focus = null} = {}) {
     // Hold the next step behind an in-progress confirmation so the learner sees the success land
     // before the card flips to the next task; finishCelebrate() replays this once it settles.
     if (this.celebrating) {
-      this.pendingCommand = {command, target};
+      this.pendingCommand = {command, target, focus};
       if (this.advanceRequested) this.finishCelebrate();
       return;
     }
     this.clearHint();
     this.host.hidden = false;
+    // A card coming back between steps appears where it will stay, rather than gliding there from where
+    // the last step left it.
+    if (this.panel.hidden) this.appearInPlace();
     this.panel.hidden = false;
     this.root.querySelector('#stage').classList.remove('success', 'celebrate-in', 'recovery', 'checkin');
     this.activeCommandId = command.command_id;
@@ -273,8 +293,38 @@ class IncidentCoachPanel {
     // a hint. `activeTarget` is still stored above: the card keeps clear of the control, and a later
     // hint knows what to point at.
     this.spotlightRevealed = false;
+    this.spotlightHeld = false;
+    this.targetToken = (this.targetToken || 0) + 1;
     this.spotlight.hide();
+    // The same step shown again (after a check-in or a recovery) keeps the hints already seen.
+    const used = Number(command.hints_used) || 0;
+    this.hintState = {used: this.hintStepId === command.step_id ? Math.max(used, this.hintState?.used || 0) : used, total: Number(command.hint_count) || 0};
+    this.hintStepId = command.step_id;
+    this.renderHintButton();
+    this.liveMoments = command.moments || null;
+    // A goal that starts by reading the page (where the histogram rises) rings that: the card is placed
+    // clear of the rings before they are drawn, and they arrive once it has settled.
+    if (focus) {
+      this.showEvidenceHighlights(focus.columns || [], focus.targets || [], focus.fields || [], focus.primaryTargetIndex, {reveal: false});
+      requestAnimationFrame(() => this.presentEvidence());
+      return;
+    }
     requestAnimationFrame(() => this.placeAwayFrom(target));
+  }
+
+  // The panel is about to be shown after being hidden: keep it invisible until its first placement, which
+  // lands without a glide.
+  appearInPlace() {
+    this.snapNext = true;
+    if (this.panel.style) this.panel.style.visibility = 'hidden';
+  }
+
+  // Resolves once the card has finished moving and its text has arrived. A highlight waits for this, so
+  // the card and what it points at never move at the same time.
+  settled(extra = 40) {
+    const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const wait = reduced ? 0 : Math.max(0, Math.max(this.moveEndsAt || 0, this.textEndsAt || 0) - performance.now());
+    return wait ? new Promise(resolve => setTimeout(resolve, wait + extra)) : Promise.resolve();
   }
 
   // The card is about what its rings show, so when one isn't all on screen the page scrolls. Rings that
@@ -286,7 +336,7 @@ class IncidentCoachPanel {
       const rect = element.getBoundingClientRect();
       return !this.cursor.isVisible(element) || (rect.height < innerHeight * 0.7 && (rect.top < 96 || rect.bottom > innerHeight - 8));
     });
-    if (!clipped) return;
+    if (!clipped) return false;
     const rects = elements.map(element => element.getBoundingClientRect());
     const fits = Math.max(...rects.map(rect => rect.bottom)) - Math.min(...rects.map(rect => rect.top)) < innerHeight - 140;
     const lowest = elements[rects.reduce((best, rect, index) => rect.bottom > rects[best].bottom ? index : best, 0)];
@@ -297,6 +347,47 @@ class IncidentCoachPanel {
     } else {
       clipped.scrollIntoView({block: 'center', inline: 'nearest', behavior});
     }
+    return true;
+  }
+
+  // Wait for a scroll revealEvidence started to come to rest: the rings' elements hold still for a moment
+  // (at most about 1.5 s).
+  async evidenceAtRest() {
+    const deadline = performance.now() + 1500;
+    let previous = '';
+    let stillSince = 0;
+    while (performance.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 32));
+      const now = this.evidenceTargets.map(target => target()?.getBoundingClientRect()).map(rect => rect ? `${Math.round(rect.left)},${Math.round(rect.top)}` : '-').join(';');
+      if (now === previous) {
+        stillSince ||= performance.now();
+        if (performance.now() - stillSince >= 96) return;
+      } else {
+        stillSince = 0;
+        previous = now;
+      }
+    }
+  }
+
+  // Put a card about evidence in place, once, and only then draw its rings: scroll the evidence into view
+  // if it isn't, wait for that to stop, choose the card's spot (next to the data when `seek`), let the card
+  // glide there, then let the rings arrive. Nothing else re-places the card meanwhile. A later beat
+  // (another card, another step) cancels what is left.
+  async presentEvidence({seek = false} = {}) {
+    const token = this.presentToken = (this.presentToken || 0) + 1;
+    this.presenting = true;
+    try {
+      if (this.evidenceScrolling) await this.evidenceAtRest();
+      this.evidenceScrolling = false;
+      if (token !== this.presentToken || this.panel.hidden) return;
+      this.seekFocus = seek;
+      try { this.placeAwayFrom(null); } finally { this.seekFocus = false; }
+    } finally {
+      if (token === this.presentToken) this.presenting = false;
+    }
+    await this.settled();
+    if (token !== this.presentToken || this.panel.hidden) return;
+    this.revealEvidenceRings();
   }
 
   updateCommandTarget(command, target) {
@@ -565,14 +656,15 @@ class IncidentCoachPanel {
     requestAnimationFrame(() => this.placeAwayFrom(null));
   }
 
-  // A hint in guided mode dims the page and highlights the control the step is about — the first
-  // time the learner needs a nudge — in addition to requesting the worded hint from the service.
+  // A hint in guided mode asks the service for the next worded hint and, once that is on the card and
+  // the card has settled, dims the page and highlights the control the step is about. The highlight goes
+  // as soon as the learner does something on the page: it was a pointer, and they have followed it.
   revealHint() {
-    if (this.activeTarget?.isConnected) {
-      this.spotlightRevealed = true;
-      this.spotlight.show(this.activeTarget);
-      this.placeAwayFrom(this.activeTarget);
-    }
+    if (this.hintState.total && this.hintState.used >= this.hintState.total) return;
+    this.hintSpotlightWanted = true;
+    clearTimeout(this.hintSpotlightTimer);
+    // Should the reply not come, light the control anyway after a moment.
+    this.hintSpotlightTimer = setTimeout(() => this.lightHintTarget(), 1500);
     this.onHint?.();
   }
 
@@ -581,17 +673,88 @@ class IncidentCoachPanel {
     if (this.panel.hidden || this.phase ||
         !['guided', 'challenge'].includes(this.currentCommand?.mode) ||
         hint.step_id !== this.currentCommand.step_id) return;
-    this.root.querySelector('#hint-label').textContent = hint.level > 0 ? `Hint ${hint.level}` : 'Hint';
-    this.root.querySelector('#hint-text').textContent = hint.text;
+    const total = Number(hint.total) || this.hintState.total;
+    this.hintState = {used: Math.max(this.hintState.used, Number(hint.level) || 0), total};
+    this.renderHintButton();
+    this.root.querySelector('#hint-label').textContent = hint.level > 0 ? (total ? `Hint ${hint.level} of ${total}` : `Hint ${hint.level}`) : 'Hint';
+    this.setLiveText(this.root.querySelector('#hint-text'), hint.text);
     this.root.querySelector('#hint-card').hidden = false;
+    this.textEndsAt = performance.now() + 320;
     this.refit();
     this.placeAwayFrom(this.activeTarget?.isConnected ? this.activeTarget : null);
+    clearTimeout(this.hintSpotlightTimer);
+    this.settled().then(() => this.lightHintTarget());
+  }
+
+  // The hint's highlight on the step's control, once the card has settled. One press or key on the page
+  // (not on the coach) puts it out.
+  lightHintTarget() {
+    clearTimeout(this.hintSpotlightTimer);
+    if (!this.hintSpotlightWanted) return;
+    this.hintSpotlightWanted = false;
+    if (this.panel.hidden || this.phase || !this.activeTarget?.isConnected) return;
+    this.spotlightRevealed = true;
+    this.spotlightHeld = false;
+    this.spotlight.show(this.activeTarget);
+    this.watchHintDismissal();
+  }
+
+  watchHintDismissal() {
+    this.stopHintDismissal();
+    const dismiss = event => {
+      if (event.composedPath?.().includes(this.host)) return;
+      this.stopHintDismissal();
+      if (!this.spotlightRevealed || this.phase) return;
+      this.spotlightRevealed = false;
+      this.spotlight.hide();
+    };
+    this.hintDismissal = dismiss;
+    for (const type of ['pointerdown', 'keydown']) document.addEventListener(type, dismiss, true);
+  }
+
+  stopHintDismissal() {
+    if (!this.hintDismissal) return;
+    for (const type of ['pointerdown', 'keydown']) document.removeEventListener(type, this.hintDismissal, true);
+    this.hintDismissal = null;
+  }
+
+  // The Hint button shows how many of the step's hints are used (filled dots) and how many are left, and
+  // turns off once all of them have been shown.
+  renderHintButton() {
+    const button = this.root.querySelector('#hint');
+    if (!button) return;
+    const {used, total} = this.hintState || {used: 0, total: 0};
+    const left = Math.max(0, total - used);
+    const exhausted = total > 0 && left === 0;
+    button.disabled = exhausted;
+    button.title = !total ? 'Get a hint for this step' : exhausted ? 'No hints left for this step' : `${left} hint${left === 1 ? '' : 's'} left for this step`;
+    button.setAttribute?.('aria-label', total ? `Hint, ${used} of ${total} used` : 'Hint');
+    if (typeof button.replaceChildren !== 'function') return;
+    const label = document.createElement('span');
+    label.textContent = 'Hint';
+    const pips = document.createElement('span');
+    pips.className = 'hint-pips';
+    pips.setAttribute('aria-hidden', 'true');
+    for (let index = 0; index < total; index += 1) {
+      const pip = document.createElement('i');
+      if (index < used) pip.className = 'used';
+      pips.append(pip);
+    }
+    button.replaceChildren(label, ...(total ? [pips] : []));
+  }
+
+  hintsLeft() {
+    const {used, total} = this.hintState || {used: 0, total: 0};
+    return !total || used < total;
   }
 
   clearHint() {
     this.root.querySelector('#hint-card').hidden = true;
     this.root.querySelector('#hint-label').textContent = '';
     this.root.querySelector('#hint-text').textContent = '';
+    this.hintSpotlightWanted = false;
+    clearTimeout(this.hintSpotlightTimer);
+    this.stopHintDismissal?.();
   }
 
   // The demonstration shows a one-line goal, performs the action, then says what the result shows
@@ -625,8 +788,9 @@ class IncidentCoachPanel {
       const [finding, support] = IncidentCoachPanel.splitFinding(command?.evidence || 'Step complete.');
       this.renderPhase({eyebrow: 'What this shows', headline: finding, detail: support, why: command?.mode === 'guided' ? command.reasoning : ''});
       this.resetCountdown();
-      this.showEvidenceHighlights(evidence?.columns ?? command?.learning_focus ?? [], evidence?.targets || [], evidence?.fields || [], evidence?.primaryTargetIndex);
-      this.revealEvidence();
+      // The rings arrive only once the card has settled beside them (presentEvidence).
+      this.showEvidenceHighlights(evidence?.columns ?? command?.learning_focus ?? [], evidence?.targets || [], evidence?.fields || [], evidence?.primaryTargetIndex, {reveal: false});
+      this.evidenceScrolling = this.revealEvidence();
     }
   }
 
@@ -647,6 +811,8 @@ class IncidentCoachPanel {
     // As in a demonstration, a control lights up only as the cursor sets off for it (showTarget), so
     // a hint's spotlight goes out until then.
     this.spotlightRevealed = false;
+    this.targetToken = (this.targetToken || 0) + 1;
+    this.stopHintDismissal();
     this.spotlight.hide();
     this.enterPhase('action', command);
     requestAnimationFrame(() => this.placeAwayFrom(this.activeTarget));
@@ -657,8 +823,8 @@ class IncidentCoachPanel {
   // A goal that starts by reading the page rings what to read while its one line is on screen. The
   // action phase clears the rings when the coach starts acting.
   showGoalFocus(evidence) {
-    this.showEvidenceHighlights(evidence?.columns || [], evidence?.targets || [], evidence?.fields || [], evidence?.primaryTargetIndex);
-    requestAnimationFrame(() => this.placeAwayFrom(null));
+    this.showEvidenceHighlights(evidence?.columns || [], evidence?.targets || [], evidence?.fields || [], evidence?.primaryTargetIndex, {reveal: false});
+    requestAnimationFrame(() => this.presentEvidence());
   }
 
   // A step's result, in a demonstration or a guided "Show me": what the action revealed, with that
@@ -673,20 +839,11 @@ class IncidentCoachPanel {
     advance.textContent = 'Continue';
     advance.title = 'Continue to the next step';
     advance.classList.add('primary');
-    requestAnimationFrame(() => this.placeAwayFrom(null));
-    this.seekEvidence();
-  }
-
-  // Reading a result means looking from the card to its rings and back, so once the page has settled
-  // (the rings scrolled into view) the card moves next to them when it sits far away. It moves only for
-  // a long look across the screen: a card that hops for every few pixels takes the Continue button with it.
-  seekEvidence(delay = 450) {
-    clearTimeout(this.seekTimer);
-    this.seekTimer = setTimeout(() => {
-      if (this.phase !== 'learning' || this.panel.hidden) return;
-      this.seekFocus = true;
-      try { this.placeAwayFrom(null); } finally { this.seekFocus = false; }
-    }, delay);
+    // Reading a result means looking from the card to its rings and back, so once the page has settled
+    // (the rings scrolled into view) the card goes next to them when it sits far away, in the same single
+    // move that clears them. It moves only for a long look across the screen: a card that hops for every
+    // few pixels takes the Continue button with it.
+    requestAnimationFrame(() => this.presentEvidence({seek: true}));
   }
 
   setPaused(paused, notify = true) {
@@ -764,10 +921,11 @@ class IncidentCoachPanel {
     const eyebrowEl = this.root.querySelector('#phase-eyebrow');
     eyebrowEl.textContent = eyebrow;
     eyebrowEl.hidden = !eyebrow;
-    this.root.querySelector('#phase-headline').textContent = headline;
+    this.setLiveText(this.root.querySelector('#phase-headline'), headline);
     const detailEl = this.root.querySelector('#phase-detail');
-    detailEl.textContent = detail;
+    this.setLiveText(detailEl, detail);
     detailEl.hidden = !detail;
+    this.textEndsAt = performance.now() + 320;
     this.setReasoning(why);
     this.renderChoices(choices);
     if (this.phase !== 'recovery') stage.classList.remove('recovery');
@@ -778,6 +936,57 @@ class IncidentCoachPanel {
     void stage.offsetWidth;
     stage.classList.add('phase-in');
     this.refit();
+  }
+
+  // Text that says how long ago a moment was ("noticed at 12:18 (13 minutes ago)") goes stale while the
+  // card stays up, and a learner can come back to an investigation hours later. Such text is kept as
+  // written and shown with each "N minutes ago" worked out afresh, now and every 15 s after.
+  setLiveText(element, text = '') {
+    if (!element) return;
+    const source = String(text ?? '');
+    const live = IncidentCoachPanel.LIVE_AGO.test(source);
+    IncidentCoachPanel.LIVE_AGO.lastIndex = 0;
+    element.textContent = live ? IncidentCoachPanel.liveAgo(source, this.liveMoments) : source;
+    if (!this.liveElements) this.liveElements = new Map();
+    if (live) this.liveElements.set(element, source);
+    else this.liveElements.delete(element);
+    if (this.liveElements.size && !this.liveTimer) {
+      this.liveTimer = setInterval(() => this.refreshLiveText(), 15000);
+    } else if (!this.liveElements.size && this.liveTimer) {
+      clearInterval(this.liveTimer);
+      this.liveTimer = null;
+    }
+  }
+
+  refreshLiveText() {
+    for (const [element, source] of this.liveElements || []) {
+      if (element.isConnected === false) continue;
+      const text = IncidentCoachPanel.liveAgo(source, this.liveMoments);
+      if (element.textContent !== text) element.textContent = text;
+    }
+  }
+
+  // A clock time followed by how long ago it was ("12:18 (13 minutes ago)", "12:18 UTC (just now)").
+  static LIVE_AGO = /\b([01]?\d|2[0-3]):([0-5]\d)( UTC)? \((?:\d+ minutes? ago|just now)\)/g;
+
+  // `text` with each such "N minutes ago" counted to `now`. The service sends the exact instant behind
+  // each clock time it wrote (`moments`: {"12:18": ISO}); without one, the clock time is read as the
+  // latest such time today (yesterday's, when that is still ahead).
+  static liveAgo(text, moments = null, now = Date.now()) {
+    return String(text ?? '').replace(IncidentCoachPanel.LIVE_AGO, (match, hours, minutes, utc) => {
+      const clock = `${hours.padStart(2, '0')}:${minutes}${utc || ''}`;
+      let at = Date.parse(moments?.[clock] ?? moments?.[`${hours}:${minutes}${utc || ''}`] ?? '');
+      if (Number.isNaN(at)) {
+        const day = new Date(now);
+        if (utc) day.setUTCHours(Number(hours), Number(minutes), 0, 0);
+        else day.setHours(Number(hours), Number(minutes), 0, 0);
+        at = day.getTime();
+        if (at - now > 60_000) at -= 86_400_000;
+      }
+      const elapsed = Math.round((now - at) / 60_000);
+      const ago = elapsed < 1 ? 'just now' : elapsed === 1 ? '1 minute ago' : `${elapsed} minutes ago`;
+      return `${hours}:${minutes}${utc || ''} (${ago})`;
+    });
   }
 
   // Why the step is done, under its finding. Open unless the learner closed it or it doesn't fit.
@@ -814,7 +1023,11 @@ class IncidentCoachPanel {
     container.hidden = !choices.length;
   }
 
-  showTarget(target, activity = '') {
+  // The coach is about to act on `target`. The card says so and gets out of the way first; only once it
+  // has settled does the control light up (and the caller's cursor set off), so the card and the highlight
+  // never move at once. Resolves when the control is lit. `arrive: false` moves a highlight that is already
+  // up straight to the next control without replaying its entrance (one pin after another).
+  showTarget(target, activity = '', {arrive = true} = {}) {
     this.activeTarget = target;
     // The caption may already be up (set before the control was scrolled into view); re-rendering
     // it would replay the card's entrance for the same words.
@@ -823,17 +1036,26 @@ class IncidentCoachPanel {
       this.renderPhase({eyebrow: 'Doing it now', headline: activity});
       if (!this.root.querySelector('#countdown').classList.contains('working')) this.startWorking();
     }
-    if (target) {
-      // The coach is acting on this control (a demonstration or a "Show me"), so the spotlight is
-      // shown and stays revealed for repositioning on scroll/resize.
-      this.spotlightRevealed = true;
-      this.spotlight.show(target);
-      this.placeAwayFrom(target);
-    }
+    const token = this.targetToken = (this.targetToken || 0) + 1;
+    if (!target) return Promise.resolve();
+    // The coach is acting on this control (a demonstration or a "Show me"), so the spotlight is shown
+    // and stays revealed for repositioning on scroll/resize. A highlight on another control goes now.
+    const gliding = !arrive && this.spotlight.target && this.spotlight.target !== target;
+    if (this.spotlight.target && this.spotlight.target !== target && !gliding) this.spotlight.hide();
+    this.spotlightRevealed = true;
+    this.spotlightHeld = true;
+    this.placeAwayFrom(target);
+    return this.settled().then(() => {
+      if (token !== this.targetToken || this.activeTarget !== target || !this.spotlightRevealed) return;
+      this.spotlightHeld = false;
+      this.spotlight.show(target, {arrive: !gliding});
+    });
   }
 
   clearActionTarget() {
+    this.targetToken = (this.targetToken || 0) + 1;
     this.spotlightRevealed = false;
+    this.spotlightHeld = false;
     this.spotlight.hide();
     this.cursor.hide();
     this.activeTarget = null;
@@ -843,8 +1065,8 @@ class IncidentCoachPanel {
     this.phase = 'info';
     this.resetCountdown();
     this.renderPhase({eyebrow: 'Note', headline: activity});
-    this.showTarget(target);
     this.root.querySelector('#advance').title = 'Continue after reading this note';
+    return this.showTarget(target);
   }
 
   waitForAdvance(signal) {
@@ -939,8 +1161,9 @@ class IncidentCoachPanel {
   // Ring the evidence a result card talks about: result-table columns (`fields`, drawn down to the
   // bottom of the view) and page elements (`targets`, functions returning the live element). `named`
   // are the fields the card talks about, whose columns the card keeps clear of without ringing them.
-  showEvidenceHighlights(fields, targets = [], named = [], primaryTargetIndex = -1) {
+  showEvidenceHighlights(fields, targets = [], named = [], primaryTargetIndex = -1, {reveal = true} = {}) {
     this.clearEvidenceHighlights();
+    this.ringsRevealed = reveal;
     this.evidenceFields = Array.isArray(fields) ? fields : [];
     this.evidenceTargets = targets.filter(Boolean);
     this.evidencePrimaryIndex = primaryTargetIndex;
@@ -950,7 +1173,8 @@ class IncidentCoachPanel {
       // On a busy page the eye needs a cue to find the ring, so each one arrives once (`.entering`):
       // wide, closing in on its evidence, then a single pulse. Rings follow one another in the order
       // given. A ring whose element is off screen plays its entrance when it is scrolled into view.
-      highlight.className = `incident-evidence-highlight entering${index === this.evidenceFields.length + primaryTargetIndex && primaryTargetIndex >= 0 ? ' primary' : ''}`;
+      highlight.className = `incident-evidence-highlight${reveal ? ' entering' : ''}${index === this.evidenceFields.length + primaryTargetIndex && primaryTargetIndex >= 0 ? ' primary' : ''}`;
+      highlight.hidden = !reveal;
       highlight.style.setProperty('--ring-delay', `${index * 110}ms`);
       highlight.addEventListener('animationend', event => {
         if (event.animationName === 'ring-pulse' || event.animationName === 'ring-fade') highlight.classList.remove('entering');
@@ -959,6 +1183,14 @@ class IncidentCoachPanel {
       this.root.append(highlight);
       this.evidenceHighlights.push(highlight);
     }
+    this.refreshEvidenceHighlights();
+  }
+
+  // The rings registered hidden (showEvidenceHighlights with reveal false) arrive now, one after another.
+  revealEvidenceRings() {
+    if (this.ringsRevealed) return;
+    this.ringsRevealed = true;
+    for (const highlight of this.evidenceHighlights || []) highlight.classList.add('entering');
     this.refreshEvidenceHighlights();
   }
 
@@ -980,13 +1212,13 @@ class IncidentCoachPanel {
       const left = Math.max(0, rect?.left ?? 0);
       const right = Math.min(innerWidth, rect?.right ?? 0);
       const top = Math.max(0, rect?.top ?? 0);
-      highlight.hidden = !rect || right <= left || top >= innerHeight - 48;
+      highlight.hidden = !this.ringsRevealed || !rect || right <= left || top >= innerHeight - 48;
       if (!highlight.hidden) IncidentCoachPanel.placeHighlight(highlight, left, top, right - left, innerHeight - top - 48);
     }
     const kinds = this.evidenceTargets.map((_, index) => (index === this.evidencePrimaryIndex ? 'primary' : ''));
     for (const [index, box] of IncidentCoachPanel.ringBoxes(this.evidenceTargetRects(), undefined, undefined, kinds).entries()) {
       const highlight = this.evidenceHighlights[this.evidenceFields.length + index];
-      highlight.hidden = !box;
+      highlight.hidden = !box || !this.ringsRevealed;
       if (box) IncidentCoachPanel.placeHighlight(highlight, box.left, box.top, box.right - box.left, box.bottom - box.top);
     }
   }
@@ -1105,10 +1337,25 @@ class IncidentCoachPanel {
   // corner, or a spot right beside what the step is about, nearest first, so the learner reads the card
   // and the page without looking across the whole screen. Needless hops are jarring.
   placeAwayFrom(target) {
+    // A card coming back between steps (appearInPlace) stays invisible until this first placement has
+    // put it where it belongs, then shows there without a glide, whichever way the placement ends.
+    const appearing = Boolean(this.snapNext);
+    try {
+      this.placeCard(target);
+    } finally {
+      if (appearing && !this.panel.hidden) {
+        this.snapNext = false;
+        this.panel.style.visibility = '';
+      }
+    }
+  }
+
+  placeCard(target) {
     if (this.panel.hidden || this.dragging || this.keepPlace) return;
     // A null pos means the panel was just revealed: snap to the resting spot instead of gliding
-    // there from the CSS default corner (the load-time jerk/reflow). Later moves stay animated.
-    const firstPlacement = !this.pos;
+    // there from the CSS default corner (the load-time jerk/reflow). So does a card coming back between
+    // steps (appearInPlace). Later moves stay animated.
+    const firstPlacement = !this.pos || Boolean(this.snapNext);
     const margin = 18;
     const topMargin = 72;
     const panelRect = this.panel.getBoundingClientRect();
@@ -1158,7 +1405,10 @@ class IncidentCoachPanel {
     if (queryBar) guards.push({left: queryBar.left, right: queryBar.right, top: queryBar.top, bottom: queryBar.bottom, yields: true});
     const flyoutRect = this.findFlyout();
     if (flyoutRect) {
-      guards.push({left: flyoutRect.left, right: flyoutRect.right, top: flyoutRect.top, bottom: flyoutRect.bottom});
+      // The flyout's own controls (a document's pin buttons) sit at its left edge, and the coach keeps a
+      // lead ring around a control it is about to use; leaving that much room beside the flyout now saves
+      // a second hop when the first pin lights up.
+      guards.push({left: flyoutRect.left - lead, right: flyoutRect.right, top: flyoutRect.top, bottom: flyoutRect.bottom});
     }
     guards.push(...this.evidenceColumnRects());
     for (const column of this.evidenceColumnRects(this.ringedFields())) {
@@ -1296,9 +1546,11 @@ class IncidentCoachPanel {
     } else {
       const from = this.appliedPos || this.pos;
       const distance = Math.hypot(this.pos.left - from.left, this.pos.top - from.top);
-      this.panel.style.setProperty('--panel-move', `${Math.round(Math.min(longest, Math.max(shortest, distance * 0.8)))}ms`);
+      const duration = Math.round(Math.min(longest, Math.max(shortest, distance * 0.8)));
+      this.panel.style.setProperty('--panel-move', `${duration}ms`);
       if (ease) this.panel.style.setProperty('--panel-ease', ease);
       else this.panel.style.removeProperty('--panel-ease');
+      if (distance >= 1) this.moveEndsAt = performance.now() + duration;
     }
     this.panel.style.transform = `translate(${this.pos.left}px, ${this.pos.top}px)`;
     // Bound the card to the viewport from wherever its top now sits, so a phase that grows
@@ -1338,6 +1590,9 @@ class IncidentCoachPanel {
 
   finishCommand(command) {
     if (command?.command_id !== this.activeCommandId) return;
+    this.targetToken = (this.targetToken || 0) + 1;
+    this.presentToken = (this.presentToken || 0) + 1;
+    this.presenting = false;
     this.clearHint();
     this.clearEvidenceHighlights();
     this.spotlight.hide();
@@ -1413,9 +1668,9 @@ class IncidentCoachPanel {
     this.celebrating = false;
     this.advanceRequested = false;
     if (!this.pendingCommand) return;
-    const {command, target} = this.pendingCommand;
+    const {command, target, focus} = this.pendingCommand;
     this.pendingCommand = null;
-    this.showCommand(command, target);
+    this.showCommand(command, target, {focus});
   }
 
   advanceCelebration() {
@@ -1426,7 +1681,9 @@ class IncidentCoachPanel {
   }
 
   stop() {
-    clearTimeout(this.seekTimer);
+    this.targetToken = (this.targetToken || 0) + 1;
+    this.presentToken = (this.presentToken || 0) + 1;
+    this.presenting = false;
     clearTimeout(this.layerTimer);
     this.stopObserving();
     this.clearHint();
@@ -1476,6 +1733,8 @@ class IncidentCoachPanel {
     .panel.collapsed { width:auto;padding:10px 12px 10px 16px; } .panel.collapsed > :not(header) { display:none!important; }
     #fold { display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;color:#536170; } #fold:hover { color:#17212b;background:#eef3f7; } #fold svg { width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round; }
     #stop { color:#a32b1c;border-color:#d77d72; } #advance { margin-left:auto;min-width:7.5em; } #advance.primary { background:#006bb4;border-color:#006bb4;color:#fff;font-weight:600;padding:6px 14px; } #advance:disabled { opacity:.7;cursor:wait; } .actions { display:flex; gap:7px; margin-top:12px; } .actions:not(:has(> :not([hidden]))) { display:none; }
+    #hint { display:inline-flex;align-items:center;gap:7px; } #hint:disabled { opacity:.5;cursor:not-allowed;outline:none; }
+    .hint-pips { display:inline-flex;gap:3px; } .hint-pips i { display:block;width:7px;height:7px;box-sizing:border-box;border:1.5px solid #0874a8;border-radius:50%; } .hint-pips i.used { background:#0874a8; }
     #hint-card { margin-top:14px;padding:13px 16px 14px;border:1px solid #b8dcea;border-left:4px solid #0874a8;border-radius:9px;background:#f0f8fc;box-shadow:0 4px 14px #0874a812; }
     #hint-label { display:block;color:#08638d;font:700 11px/1.3 system-ui,sans-serif;letter-spacing:.09em;text-transform:uppercase; }
     #hint-text { margin:6px 0 0;color:#173d53;font:500 15px/1.5 'Segoe UI',system-ui,sans-serif;letter-spacing:-.005em;white-space:pre-line; }
@@ -1512,16 +1771,17 @@ class IncidentCoachPanel {
     .incident-cursor.visible { opacity:1; }.incident-cursor:before { content:'➤';display:block;color:#ffb000;font-size:28px;filter:drop-shadow(0 2px 2px #0008);transform:rotate(-25deg); }
     .incident-cursor span { position:absolute;inset:0;border:2px solid #ffb000;border-radius:50%;opacity:0; }.incident-cursor.clicked span { animation:click-ring .5s; }
     @keyframes click-ring { from{opacity:1;transform:scale(.3)}to{opacity:0;transform:scale(2)} }
-    dialog.incident-debrief { pointer-events:auto;width:min(720px,calc(100vw - 48px));max-width:none;max-height:calc(100vh - 48px);overflow:auto;box-sizing:border-box;border:0;border-radius:10px;padding:24px;box-shadow:0 14px 50px #0006;color:#17212b; }.incident-debrief::backdrop{background:#101820aa}.dialog-close{float:right;border:0;font-size:22px}.incident-debrief li{display:flex;justify-content:space-between;padding:5px 0}.incident-debrief .total{font-size:20px;font-weight:750}.incident-debrief .demo-checks{padding-left:20px}.incident-debrief .demo-checks li{display:list-item;padding:5px 0}.incident-debrief .demo-checks p{margin:3px 0}.incident-problem{margin:12px 0 18px;padding:14px 16px;border-left:5px solid #d64a3a;background:#fff3f1;border-radius:6px}.incident-problem strong{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:#8c2418}.incident-problem p{margin:5px 0 0;font-size:17px;font-weight:750;line-height:1.4}.incident-conclusion{padding:12px 14px;border-left:4px solid #1aa87a;background:#eef9f5;border-radius:6px}
+    /* Debriefs are read over a busy Kibana screen at desktop distance: a 17px base (1.55 leading), the
+       problem statement at 21px, titles at 26px, and a width that keeps lines near 75 characters. */
+    dialog.incident-debrief { pointer-events:auto;width:min(800px,calc(100vw - 48px));max-width:none;max-height:calc(100vh - 48px);overflow:auto;box-sizing:border-box;border:0;border-radius:12px;padding:30px 36px;box-shadow:0 14px 50px #0006;color:#17212b;font-size:17px;line-height:1.55; }.incident-debrief::backdrop{background:#101820aa}.dialog-close{float:right;border:0;font-size:26px;line-height:1}.incident-debrief h2{margin:0 0 4px;font-size:26px;line-height:1.25;letter-spacing:-.015em;text-transform:none}.incident-debrief li{display:flex;justify-content:space-between;padding:6px 0}.incident-debrief .total{font-size:23px;font-weight:750}.incident-debrief .demo-checks{margin:4px 0 0;padding-left:24px}.incident-debrief .demo-checks li{display:list-item;padding:5px 0 5px 4px;line-height:1.55}.incident-debrief .demo-checks li::marker{color:#536170}.incident-debrief .demo-checks p{margin:3px 0}.incident-problem{margin:16px 0 22px;padding:16px 20px;border-left:6px solid #d64a3a;background:#fff3f1;border-radius:8px}.incident-problem strong{display:block;font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#8c2418}.incident-problem p{margin:6px 0 0;font-size:21px;font-weight:750;line-height:1.38;text-wrap:pretty}.incident-conclusion{padding:12px 14px;border-left:4px solid #1aa87a;background:#eef9f5;border-radius:6px}
     .guided-score { margin:18px 0 16px; }
-    .guided-score-heading { display:flex;justify-content:space-between;align-items:baseline;margin-bottom:9px;font-size:16px; }
-    .guided-score-heading strong:last-child { font-size:24px;font-variant-numeric:tabular-nums; }
+    .guided-score-heading { display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;font-size:18px; }
+    .guided-score-heading strong:last-child { font-size:28px;font-variant-numeric:tabular-nums; }
     .guided-score-track { position:relative;height:20px;overflow:hidden;border-radius:6px;background:linear-gradient(90deg,#b42318 0%,#d84227 14%,#eb7330 29%,#f2aa38 42%,#e7cf49 53%,#aacc50 67%,#63b65a 82%,#148d61 100%); }
     .guided-score-unearned { position:absolute;top:0;bottom:0;left:var(--score);right:0;background:#e4e9ed; }
     .guided-score-ticks { position:absolute;inset:0;display:flex;justify-content:space-between;pointer-events:none; }
     .guided-score-ticks i { display:block;width:1px;height:100%;background:#fff;box-shadow:0 0 0 1px #17212b66; }
-    .guided-score-labels { display:flex;justify-content:space-between;margin-top:5px;color:#536170;font-size:11px;font-variant-numeric:tabular-nums; }
-    .incident-debrief .guided-score-rule { margin:10px 0 0;color:#3f5060;font-size:12px; }
+    .guided-score-labels { display:flex;justify-content:space-between;margin-top:6px;color:#536170;font-size:13px;font-variant-numeric:tabular-nums; }
     @media (prefers-reduced-motion: reduce) { *, .incident-cursor, .progress span { transition:none!important;animation:none!important; } .stage-tick { transform:none!important; } }
   `;
 }
