@@ -1,13 +1,13 @@
 {
   "schema_version": 2,
   "id": "deployment-version-regression",
-  "version": 6,
-  "title": "Failures after a rolling deployment",
+  "version": 7,
+  "title": "Failures after a change",
   "type": "investigation",
   "classification": "core",
   "difficulty": 2,
   "estimated_minutes": 20,
-  "brief": "After a rolling deployment, some of a service's requests fail while others succeed. Find what the failing requests have in common, and when the first failure happened.",
+  "brief": "A change is rolling out to one service, and some of its requests now fail while others succeed. Find what the failing requests have in common, and when the first failure happened.",
   "skills": [
     "top-values",
     "field-statistics",
@@ -24,16 +24,96 @@
       "merge": [
         {
           "choose": [
-            {"service": "orders", "route_a": "/api/orders", "route_b": "/api/orders/search", "route_c": "/api/orders/history"},
-            {"service": "payments", "route_a": "/api/payments/authorize", "route_b": "/api/payments/capture", "route_c": "/api/payments/refund"},
-            {"service": "catalog", "route_a": "/api/catalog/search", "route_b": "/api/catalog/items", "route_c": "/api/catalog/categories"},
-            {"service": "auth", "route_a": "/api/auth/token", "route_b": "/api/auth/refresh", "route_c": "/api/auth/session"},
-            {"service": "checkout", "route_a": "/checkout", "route_b": "/checkout/cart", "route_c": "/checkout/confirm"}
+            {
+              "service": "orders",
+              "route_a": "/api/orders",
+              "route_b": "/api/orders/search",
+              "route_c": "/api/orders/history"
+            },
+            {
+              "service": "payments",
+              "route_a": "/api/payments/authorize",
+              "route_b": "/api/payments/capture",
+              "route_c": "/api/payments/refund"
+            },
+            {
+              "service": "catalog",
+              "route_a": "/api/catalog/search",
+              "route_b": "/api/catalog/items",
+              "route_c": "/api/catalog/categories"
+            },
+            {
+              "service": "auth",
+              "route_a": "/api/auth/token",
+              "route_b": "/api/auth/refresh",
+              "route_c": "/api/auth/session"
+            },
+            {
+              "service": "checkout",
+              "route_a": "/checkout",
+              "route_b": "/checkout/cart",
+              "route_c": "/checkout/confirm"
+            }
           ]
         },
-        {"release": {"major": [1, 6], "minor": [2, 9], "patch": [1, 9], "as": {"new": "bad_version", "current": "good_version", "legacy": "legacy_version"}}},
-        {"choose": [{"status": 500}, {"status": 502}, {"status": 503}, {"status": 504}]}
+        {
+          "release": {
+            "major": [
+              1,
+              6
+            ],
+            "minor": [
+              2,
+              9
+            ],
+            "patch": [
+              1,
+              9
+            ],
+            "as": {
+              "new": "new_version",
+              "current": "current_version",
+              "legacy": "legacy_version"
+            }
+          }
+        },
+        {
+          "choose": [
+            {
+              "status": 500
+            },
+            {
+              "status": 502
+            },
+            {
+              "status": 503
+            },
+            {
+              "status": 504
+            }
+          ]
+        }
       ]
+    },
+    "nodes": {
+      "sample": [
+        "03",
+        "07",
+        "11",
+        "14",
+        "18",
+        "22",
+        "25",
+        "29",
+        "31",
+        "36",
+        "42",
+        "47",
+        "53",
+        "58",
+        "64"
+      ],
+      "count": 5
     },
     "timing": {
       "choose": [
@@ -62,6 +142,85 @@
           "before_rollout_seconds": 1110
         }
       ]
+    },
+    "facet": {
+      "choose": [
+        {
+          "field": "service.version",
+          "twin": "service.version",
+          "noun": "version",
+          "others": "host.name and url.path",
+          "value": "${param.incident.new_version}",
+          "alias": "v${param.incident.new_version}",
+          "cause": "so the new release is causing them",
+          "mixed": "Hosts and endpoints",
+          "ok_versions": [
+            "${param.incident.current_version}",
+            "${param.incident.current_version}"
+          ],
+          "ok_hosts": [
+            "${param.incident.service}-${param.nodes.0}",
+            "${param.incident.service}-${param.nodes.1}",
+            "${param.incident.service}-${param.nodes.2}",
+            "${param.incident.service}-${param.nodes.3}"
+          ],
+          "ok_routes": [
+            "${param.incident.route_a}",
+            "${param.incident.route_b}",
+            "${param.incident.route_c}"
+          ]
+        },
+        {
+          "field": "host.name",
+          "twin": "service.node.name",
+          "noun": "host",
+          "others": "service.version and url.path",
+          "value": "${param.incident.service}-${param.nodes.0}",
+          "alias": "${param.incident.service}-${param.nodes.0}",
+          "cause": "so that host is causing them",
+          "mixed": "Versions and endpoints",
+          "ok_versions": [
+            "${param.incident.new_version}",
+            "${param.incident.current_version}"
+          ],
+          "ok_hosts": [
+            "${param.incident.service}-${param.nodes.1}",
+            "${param.incident.service}-${param.nodes.2}",
+            "${param.incident.service}-${param.nodes.3}",
+            "${param.incident.service}-${param.nodes.4}"
+          ],
+          "ok_routes": [
+            "${param.incident.route_a}",
+            "${param.incident.route_b}",
+            "${param.incident.route_c}"
+          ]
+        },
+        {
+          "field": "url.path",
+          "twin": "url.path",
+          "noun": "endpoint",
+          "others": "service.version and host.name",
+          "value": "${param.incident.route_a}",
+          "alias": "${param.incident.route_a}",
+          "cause": "so that endpoint is failing",
+          "mixed": "Versions and hosts",
+          "ok_versions": [
+            "${param.incident.new_version}",
+            "${param.incident.current_version}"
+          ],
+          "ok_hosts": [
+            "${param.incident.service}-${param.nodes.0}",
+            "${param.incident.service}-${param.nodes.1}",
+            "${param.incident.service}-${param.nodes.2}",
+            "${param.incident.service}-${param.nodes.3}"
+          ],
+          "ok_routes": [
+            "${param.incident.route_b}",
+            "${param.incident.route_c}",
+            "${param.incident.route_b}"
+          ]
+        }
+      ]
     }
   },
   "provisioning": {
@@ -81,8 +240,7 @@
       ],
       "signal": {
         "service": {
-          "name": "${param.incident.service}",
-          "version": "${param.incident.bad_version}"
+          "name": "${param.incident.service}"
         },
         "event": {
           "outcome": "failure"
@@ -95,30 +253,13 @@
         "transaction": {
           "result": "HTTP 5xx"
         },
-        "message": "${param.incident.service} request failed with HTTP ${param.incident.status}"
-      },
-      "distractors": [
-        {
-          "service": {
-            "name": "${param.incident.service}",
-            "version": "${param.incident.good_version}"
-          },
-          "event": {
-            "outcome": "success"
-          },
-          "http": {
-            "response": {
-              "status_code": 200
-            },
-            "request": {
-              "method": "GET"
-            }
-          },
-          "url": {
-            "path": "${param.incident.route_b}"
-          }
+        "message": "${param.incident.service} request failed with HTTP ${param.incident.status}",
+        "set": {
+          "${param.facet.field}": "${param.facet.value}",
+          "${param.facet.twin}": "${param.facet.value}"
         }
-      ],
+      },
+      "distractors": [],
       "companions": [
         {
           "count": 38,
@@ -127,8 +268,7 @@
           "trace": "own",
           "event": {
             "service": {
-              "name": "${param.incident.service}",
-              "version": "${param.incident.good_version}"
+              "name": "${param.incident.service}"
             },
             "event": {
               "outcome": "success"
@@ -140,22 +280,78 @@
             },
             "message": "request completed"
           },
-          "cycle": [
-            {
-              "url": {
-                "path": "${param.incident.route_a}"
+          "cycles": [
+            [
+              {
+                "url": {
+                  "path": "${param.facet.ok_routes.0}"
+                }
+              },
+              {
+                "url": {
+                  "path": "${param.facet.ok_routes.1}"
+                }
+              },
+              {
+                "url": {
+                  "path": "${param.facet.ok_routes.2}"
+                }
               }
-            },
-            {
-              "url": {
-                "path": "${param.incident.route_b}"
+            ],
+            [
+              {
+                "host": {
+                  "name": "${param.facet.ok_hosts.0}"
+                },
+                "service": {
+                  "node": {
+                    "name": "${param.facet.ok_hosts.0}"
+                  }
+                }
+              },
+              {
+                "host": {
+                  "name": "${param.facet.ok_hosts.1}"
+                },
+                "service": {
+                  "node": {
+                    "name": "${param.facet.ok_hosts.1}"
+                  }
+                }
+              },
+              {
+                "host": {
+                  "name": "${param.facet.ok_hosts.2}"
+                },
+                "service": {
+                  "node": {
+                    "name": "${param.facet.ok_hosts.2}"
+                  }
+                }
+              },
+              {
+                "host": {
+                  "name": "${param.facet.ok_hosts.3}"
+                },
+                "service": {
+                  "node": {
+                    "name": "${param.facet.ok_hosts.3}"
+                  }
+                }
               }
-            },
-            {
-              "url": {
-                "path": "${param.incident.route_c}"
+            ],
+            [
+              {
+                "service": {
+                  "version": "${param.facet.ok_versions.0}"
+                }
+              },
+              {
+                "service": {
+                  "version": "${param.facet.ok_versions.1}"
+                }
               }
-            }
+            ]
           ]
         },
         {
@@ -166,7 +362,7 @@
           "event": {
             "service": {
               "name": "${param.incident.service}",
-              "version": "${param.incident.good_version}"
+              "version": "${param.incident.current_version}"
             },
             "event": {
               "outcome": "success"
@@ -178,22 +374,66 @@
             },
             "message": "request completed"
           },
-          "cycle": [
-            {
-              "url": {
-                "path": "${param.incident.route_a}"
+          "cycles": [
+            [
+              {
+                "url": {
+                  "path": "${param.facet.ok_routes.0}"
+                }
+              },
+              {
+                "url": {
+                  "path": "${param.facet.ok_routes.1}"
+                }
+              },
+              {
+                "url": {
+                  "path": "${param.facet.ok_routes.2}"
+                }
               }
-            },
-            {
-              "url": {
-                "path": "${param.incident.route_b}"
+            ],
+            [
+              {
+                "host": {
+                  "name": "${param.facet.ok_hosts.0}"
+                },
+                "service": {
+                  "node": {
+                    "name": "${param.facet.ok_hosts.0}"
+                  }
+                }
+              },
+              {
+                "host": {
+                  "name": "${param.facet.ok_hosts.1}"
+                },
+                "service": {
+                  "node": {
+                    "name": "${param.facet.ok_hosts.1}"
+                  }
+                }
+              },
+              {
+                "host": {
+                  "name": "${param.facet.ok_hosts.2}"
+                },
+                "service": {
+                  "node": {
+                    "name": "${param.facet.ok_hosts.2}"
+                  }
+                }
+              },
+              {
+                "host": {
+                  "name": "${param.facet.ok_hosts.3}"
+                },
+                "service": {
+                  "node": {
+                    "name": "${param.facet.ok_hosts.3}"
+                  }
+                }
               }
-            },
-            {
-              "url": {
-                "path": "${param.incident.route_c}"
-              }
-            }
+            ]
           ]
         },
         {
@@ -202,8 +442,7 @@
           "trace": "own",
           "event": {
             "service": {
-              "name": "${param.incident.service}",
-              "version": "${param.incident.bad_version}"
+              "name": "${param.incident.service}"
             },
             "event": {
               "outcome": "failure"
@@ -216,24 +455,84 @@
             "transaction": {
               "result": "HTTP 5xx"
             },
-            "message": "${param.incident.service} request failed with HTTP ${param.incident.status}"
-          },
-          "cycle": [
-            {
-              "url": {
-                "path": "${param.incident.route_a}"
-              }
-            },
-            {
-              "url": {
-                "path": "${param.incident.route_b}"
-              }
-            },
-            {
-              "url": {
-                "path": "${param.incident.route_c}"
-              }
+            "message": "${param.incident.service} request failed with HTTP ${param.incident.status}",
+            "set": {
+              "${param.facet.field}": "${param.facet.value}",
+              "${param.facet.twin}": "${param.facet.value}"
             }
+          },
+          "cycles": [
+            [
+              {
+                "url": {
+                  "path": "${param.incident.route_a}"
+                }
+              },
+              {
+                "url": {
+                  "path": "${param.incident.route_b}"
+                }
+              },
+              {
+                "url": {
+                  "path": "${param.incident.route_c}"
+                }
+              }
+            ],
+            [
+              {
+                "host": {
+                  "name": "${param.incident.service}-${param.nodes.0}"
+                },
+                "service": {
+                  "node": {
+                    "name": "${param.incident.service}-${param.nodes.0}"
+                  }
+                }
+              },
+              {
+                "host": {
+                  "name": "${param.incident.service}-${param.nodes.1}"
+                },
+                "service": {
+                  "node": {
+                    "name": "${param.incident.service}-${param.nodes.1}"
+                  }
+                }
+              },
+              {
+                "host": {
+                  "name": "${param.incident.service}-${param.nodes.2}"
+                },
+                "service": {
+                  "node": {
+                    "name": "${param.incident.service}-${param.nodes.2}"
+                  }
+                }
+              },
+              {
+                "host": {
+                  "name": "${param.incident.service}-${param.nodes.3}"
+                },
+                "service": {
+                  "node": {
+                    "name": "${param.incident.service}-${param.nodes.3}"
+                  }
+                }
+              }
+            ],
+            [
+              {
+                "service": {
+                  "version": "${param.incident.new_version}"
+                }
+              },
+              {
+                "service": {
+                  "version": "${param.incident.current_version}"
+                }
+              }
+            ]
           ]
         },
         {
@@ -244,7 +543,13 @@
           "event": {
             "service": {
               "name": "${param.incident.service}",
-              "version": "${param.incident.legacy_version}"
+              "version": "${param.incident.legacy_version}",
+              "node": {
+                "name": "${param.incident.service}-${param.nodes.4}"
+              }
+            },
+            "host": {
+              "name": "${param.incident.service}-${param.nodes.4}"
             },
             "event": {
               "outcome": "success"
@@ -256,41 +561,99 @@
             },
             "message": "request completed"
           },
-          "cycle": [
-            {
-              "url": {
-                "path": "${param.incident.route_a}"
+          "cycles": [
+            [
+              {
+                "url": {
+                  "path": "${param.facet.ok_routes.0}"
+                }
+              },
+              {
+                "url": {
+                  "path": "${param.facet.ok_routes.1}"
+                }
+              },
+              {
+                "url": {
+                  "path": "${param.facet.ok_routes.2}"
+                }
               }
-            },
-            {
-              "url": {
-                "path": "${param.incident.route_b}"
-              }
-            },
-            {
-              "url": {
-                "path": "${param.incident.route_c}"
-              }
-            }
+            ]
           ]
         }
       ],
-      "signal_cycle": [
-        {
-          "url": {
-            "path": "${param.incident.route_a}"
+      "signal_cycles": [
+        [
+          {
+            "url": {
+              "path": "${param.incident.route_a}"
+            }
+          },
+          {
+            "url": {
+              "path": "${param.incident.route_b}"
+            }
+          },
+          {
+            "url": {
+              "path": "${param.incident.route_c}"
+            }
           }
-        },
-        {
-          "url": {
-            "path": "${param.incident.route_b}"
+        ],
+        [
+          {
+            "host": {
+              "name": "${param.incident.service}-${param.nodes.0}"
+            },
+            "service": {
+              "node": {
+                "name": "${param.incident.service}-${param.nodes.0}"
+              }
+            }
+          },
+          {
+            "host": {
+              "name": "${param.incident.service}-${param.nodes.1}"
+            },
+            "service": {
+              "node": {
+                "name": "${param.incident.service}-${param.nodes.1}"
+              }
+            }
+          },
+          {
+            "host": {
+              "name": "${param.incident.service}-${param.nodes.2}"
+            },
+            "service": {
+              "node": {
+                "name": "${param.incident.service}-${param.nodes.2}"
+              }
+            }
+          },
+          {
+            "host": {
+              "name": "${param.incident.service}-${param.nodes.3}"
+            },
+            "service": {
+              "node": {
+                "name": "${param.incident.service}-${param.nodes.3}"
+              }
+            }
           }
-        },
-        {
-          "url": {
-            "path": "${param.incident.route_c}"
+        ],
+        [
+          {
+            "service": {
+              "version": "${param.incident.new_version}"
+            }
+          },
+          {
+            "service": {
+              "version": "${param.incident.current_version}"
+            }
           }
-        }
+        ]
       ]
     },
     "readiness_validators": [
@@ -313,14 +676,15 @@
   },
   "truth": {
     "answers": {
-      "finding": "${param.incident.bad_version}",
+      "finding": "${param.facet.field}: ${param.facet.value}",
       "scope": "${param.incident.service}",
-      "conclusion": "In ${param.incident.service}, every failed request ran version ${param.incident.bad_version} and no successful one did, so the new version is causing the failures.",
+      "conclusion": "In ${param.incident.service}, every failed request had ${param.facet.field} ${param.facet.value} and no successful one did, ${param.facet.cause}.",
       "first_seen": "${incident.first_clock}"
     },
     "accept": {
       "finding": [
-        "v${param.incident.bad_version}"
+        "${param.facet.value}",
+        "${param.facet.alias}"
       ]
     },
     "assertions": [
@@ -348,11 +712,6 @@
               },
               {
                 "term": {
-                  "service.version.keyword": "${param.incident.good_version}"
-                }
-              },
-              {
-                "term": {
                   "http.response.status_code": 200
                 }
               }
@@ -369,7 +728,7 @@
             "filter": [
               {
                 "term": {
-                  "service.version.keyword": "${param.incident.bad_version}"
+                  "${param.facet.field}.keyword": "${param.facet.value}"
                 }
               },
               {

@@ -113,3 +113,59 @@ class ScenarioTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SeedingMechanicsTests(unittest.TestCase):
+    """The controller pieces that let a pack draw which field holds its answer."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.controller = load_module("scenario_controller_mechanics", ROOT / "scenario-controller/controller.py")
+
+    def template(self, parameters, seeded_events):
+        return {"schema_version": 2, "id": "mechanics-probe", "title": "Probe", "type": "investigation", "brief": "Probe.",
+                "required_capabilities": [], "parameters": parameters,
+                "provisioning": {"strategies": ["seeded-events"], "seeded_events": seeded_events, "readiness_validators": []},
+                "starting_view": {"app": "discover"}, "truth": {"answers": {}, "assertions": []}, "answer_schema": {"fields": []},
+                "playbook": "playbook.json", "rubric": "rubric.json"}
+
+    def test_a_drawn_value_can_name_another_drawn_value(self):
+        parameters = {"release": {"release": {"major": [2, 2], "minor": [4, 4], "patch": [1, 1]}},
+                      "facet": {"choose": [{"field": "service.version", "value": "v${param.release.new}"}]}}
+        chosen = self.controller.choose_parameters(parameters, 7)
+        self.assertEqual(chosen["facet"]["value"], "v2.4.0")
+
+    def test_the_set_overlay_writes_the_drawn_field_last_and_keys_take_tokens(self):
+        parameters = {"facet": {"choose": [{"field": "host.name", "value": "web-7"}]}}
+        seeded = {"signal_count": 6, "noise_count": 0,
+                  "signal": {"message": "probe", "set": {"${param.facet.field}": "${param.facet.value}", "labels.drawn": "yes"}},
+                  # Two cycles of different lengths spread two fields on their own; the drawn one still has one value.
+                  "signal_cycles": [[{"host": {"name": "a"}}, {"host": {"name": "b"}}],
+                                    [{"url": {"path": "/x"}}, {"url": {"path": "/y"}}, {"url": {"path": "/z"}}]]}
+        manifest = self.controller.materialize(self.template(parameters, seeded), 3, run_id="run-000000000003")
+        documents = self.controller.generate_seeded_events(manifest)
+        self.assertEqual({document["host"]["name"] for document in documents}, {"web-7"})
+        self.assertEqual({document["url"]["path"] for document in documents}, {"/x", "/y", "/z"})
+        self.assertTrue(all(document["labels"]["drawn"] == "yes" and "set" not in document for document in documents))
+
+    def test_groups_make_each_group_equally_likely(self):
+        from collections import Counter
+        spec = {"pick": {"groups": [[{"kind": "big"}] * 9, [{"kind": "small"}]]}}
+        drawn = Counter(self.controller.choose_parameters(spec, seed)["pick"]["kind"] for seed in range(400))
+        self.assertGreater(drawn["small"], 140)
+        self.assertGreater(drawn["big"], 140)
+
+    def test_a_drawn_switch_can_leave_a_companion_out(self):
+        parameters = {"retry": {"choose": [{"attempts": 2, "third": False}, {"attempts": 3, "third": True}]}}
+        seeded = {"signal_count": 1, "noise_count": 0, "signal": {"message": "probe"},
+                  "companions": [{"count": 2, "event": {"message": "always"}},
+                                 {"enabled": "${param.retry.third}", "count": 2, "event": {"message": "third"}}]}
+        seen = set()
+        for seed in range(20):
+            manifest = self.controller.materialize(self.template(parameters, seeded), seed, run_id=f"run-{seed:012d}")
+            messages = {document["message"] for document in self.controller.generate_seeded_events(manifest)}
+            self.assertEqual("third" in messages, manifest["parameters"]["retry"]["third"])
+            seen.add(manifest["parameters"]["retry"]["attempts"])
+        self.assertEqual(seen, {2, 3})
+        # A switch is not a value a learner reads, so a fresh run need not flip it.
+        self.assertEqual(set(self.controller.drawn_values(parameters, "quiet-river-signal-11")), {"retry.attempts"})

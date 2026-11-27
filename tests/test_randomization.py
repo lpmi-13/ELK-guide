@@ -27,6 +27,13 @@ LOG_HUNT_PACKS = (
     "discover-time-window",
     "schema-drift-data-quality",
 )
+# Packs whose answer is the field the failures share, drawn per run: the field each run may draw from,
+# and the step whose result names it.
+FIELD_SCAN_PACKS = {
+    "deployment-version-regression": {"fields": ("service.version", "host.name", "url.path"), "reveal": "inspect"},
+    "auth-rejection-surge": {"fields": ("client.application.name", "client.geo.country_iso_code", "user_agent.version"), "reveal": "inspect"},
+    "schema-drift-data-quality": {"fields": ("telemetry.producer", "service.version", "host.name"), "reveal": "inspect"},
+}
 
 
 def load_module(name, path):
@@ -126,34 +133,37 @@ class RandomizationTests(unittest.TestCase):
                     self.assertEqual({document["http"]["response"]["status_code"] for document in decoy}, {200})
                     self.assertEqual({value(document) for document in errors}, {incident["finding"]})
 
-    def test_rollout_failures_share_one_version_and_nothing_else(self):
-        """The rollout pack teaches a general method: keep only the failures, scan every field for one
-        that they all share, then check that the successes don't share it. So the failures share the new
-        version and nothing about what served them (several hosts and endpoints), no successful request
-        ran that version, and the first page after the service filter shows both outcomes."""
-        for seed in range(20):
+    def test_change_failures_share_the_drawn_field_and_nothing_else(self):
+        """The change pack teaches a general method: keep only the failures, scan every field for one
+        that they all share, then check that the successes don't share it. Which field that is (the new
+        version, one host, one endpoint) is drawn per run, so the method carries over and the field
+        doesn't. The other two spread over several values the successes share, no successful request has
+        the shared value, and the first page after the service filter shows both outcomes."""
+        look = self.controller._lookup_nested
+        for seed in range(30):
             manifest = self.materialize("deployment-version-regression", seed)
-            incident = manifest["parameters"]["incident"]
+            incident, facet = manifest["parameters"]["incident"], manifest["parameters"]["facet"]
             documents = self.controller.generate_seeded_events(manifest)
             service_rows = [document for document in documents if document["service"]["name"] == incident["service"]]
             failed = [row for row in service_rows if row["event"]["outcome"] == "failure"]
             succeeded = [row for row in service_rows if row["event"]["outcome"] == "success"]
             newest_first = sorted(service_rows, key=lambda document: document["@timestamp"], reverse=True)
-            with self.subTest(seed=seed):
+            with self.subTest(seed=seed, facet=facet["field"]):
                 self.assertEqual({row["service"]["version"] for row in service_rows},
-                                 {incident["bad_version"], incident["good_version"], incident["legacy_version"]})
-                self.assertEqual({row["service"]["version"] for row in failed}, {incident["bad_version"]})
-                self.assertEqual({row["service"]["version"] for row in succeeded}, {incident["good_version"], incident["legacy_version"]})
+                                 {incident["new_version"], incident["current_version"], incident["legacy_version"]})
+                self.assertEqual({look(row, facet["field"]) for row in failed}, {facet["value"]})
+                self.assertNotIn(facet["value"], {look(row, facet["field"]) for row in succeeded})
+                for field in {"service.version", "host.name", "url.path"} - {facet["field"]}:
+                    self.assertGreaterEqual(len({look(row, field) for row in failed}), 2, field)
+                    # What the failures don't share, the successes have too.
+                    self.assertTrue({look(row, field) for row in failed} & {look(row, field) for row in succeeded}, field)
                 self.assertEqual({row["http"]["response"]["status_code"] for row in failed}, {incident["status"]})
                 self.assertEqual({row["http"]["response"]["status_code"] for row in succeeded}, {200})
                 self.assertTrue(all(row["transaction"]["result"] == "HTTP 5xx" for row in failed))
-                # What served a request doesn't set the failures apart: they span hosts and endpoints,
-                # the same endpoints the successes do.
-                self.assertGreaterEqual(len({row["host"]["name"] for row in failed}), 3)
-                self.assertEqual({row["url"]["path"] for row in failed}, {row["url"]["path"] for row in succeeded})
-                self.assertEqual(len({row["url"]["path"] for row in failed}), 3)
-                # No log line names the version: the learner finds it in the version field.
-                self.assertTrue(all(incident["bad_version"] not in row["message"] for row in service_rows))
+                # A server names itself the same way in both fields that carry it.
+                self.assertTrue(all(row["host"]["name"] == row["service"]["node"]["name"] for row in service_rows))
+                # No log line names the shared value: the learner finds it in its field.
+                self.assertTrue(all(facet["value"] not in row["message"] for row in service_rows))
                 # The first page after the service filter shows both outcomes, so failures are a question.
                 self.assertTrue({200, incident["status"]}.issubset({row["http"]["response"]["status_code"] for row in newest_first[:10]}))
 
@@ -170,20 +180,22 @@ class RandomizationTests(unittest.TestCase):
                 self.assertEqual(commands["isolate"]["learning_focus"], ["http.response.status_code"])
                 self.assertIn(str(incident["status"]), commands["isolate"]["evidence"])
                 self.assertIn("200", commands["isolate"]["evidence"])
-                # The facet scan names no version: it finds that the failures share one. The version is
-                # the new fact, so it gets the primary ring; host and endpoint are ringed to show they vary.
+                # The scan rings all three candidates, whichever the failures share, and gives the shared
+                # one the primary ring: the column set and the rings give nothing away before the result.
                 self.assertEqual(commands["inspect"]["evidence_focus"], {
                     "kind": "field_cardinality",
                     "fields": ["service.version", "host.name", "url.path"],
-                    "primary_field": "service.version",
+                    "primary_field": facet["field"],
                 })
                 # It says why the other one-value rows don't count: our own filters put them there.
                 self.assertIn("because we filtered", commands["inspect"]["evidence"])
                 self.assertIn(".keyword", commands["inspect"]["evidence"])
-                self.assertNotIn(incident["bad_version"], commands["inspect"]["narration"] + commands["inspect"]["evidence"])
-                self.assertIn(incident["bad_version"], commands["first"]["evidence"])
-                for version in (incident["good_version"], incident["legacy_version"], incident["bad_version"]):
-                    self.assertIn(version, commands["contrast"]["evidence"])
+                self.assertIn(facet["field"], commands["inspect"]["evidence"])
+                self.assertNotIn(facet["value"], commands["inspect"]["narration"] + commands["inspect"]["evidence"])
+                self.assertIn(facet["value"], commands["first"]["evidence"])
+                self.assertEqual(commands["first"]["evidence_focus"], {"kind": "table_row", "field": facet["field"], "value": facet["value"]})
+                self.assertIn(facet["value"], commands["contrast"]["evidence"])
+                self.assertEqual(commands["contrast"]["evidence_focus"], {"kind": "columns", "fields": [facet["field"]]})
 
     def test_a_scenario_started_again_is_a_new_incident_in_every_value(self):
         """The launcher asks for a key whose run differs from the learner's last run of that scenario in
@@ -191,11 +203,11 @@ class RandomizationTests(unittest.TestCase):
         status) carries over and only the method does. The key still decides its run."""
         import random
         generator = random.Random(20261126)
-        # Every scenario a learner can start (the launcher lists the MVP track), not a fixed list, so a
-        # new one that forgets to draw its values fails here.
-        visible = [entry["id"] for entry in json.loads((ROOT / "learning/catalog.json").read_text())["scenarios"] if entry.get("track") == "mvp"]
-        self.assertEqual(set(visible), set(LOG_HUNT_PACKS))
-        for pack in visible:
+        # Every scenario in the catalog, not only the ones the launcher lists today (the MVP track), so a
+        # pack that joins the launcher, or a new one that forgets to draw its values, fails here.
+        catalog = [entry["id"] for entry in json.loads((ROOT / "learning/catalog.json").read_text())["scenarios"]]
+        self.assertTrue(set(LOG_HUNT_PACKS) < set(catalog))
+        for pack in catalog:
             specs = self.template(pack).get("parameters") or {}
             for _ in range(25):
                 previous = "-".join(generator.choice(words) for words in self.controller.KEY_WORDS) + "-11"
@@ -209,22 +221,23 @@ class RandomizationTests(unittest.TestCase):
                     self.assertEqual(self.controller.drawn_values(specs, key), mine)
 
     def test_values_that_belong_apart_are_drawn_apart(self):
-        """A client is not tied to one rejection reason, nor a service to one version or status: each
-        is drawn on its own, so knowing one from an earlier run says nothing about the others."""
+        """Who an increase affects is not tied to one rejection reason, nor a service to one version or
+        status: each is drawn on its own, so knowing one from an earlier run says nothing about the others."""
         pairs = {
-            "auth-rejection-surge": ("reason", "client"),
-            "deployment-version-regression": ("service", "status"),
-            "discover-time-window": ("route", "status"),
-            "schema-drift-data-quality": ("service", "producer"),
+            "auth-rejection-surge": ("incident.reason", "facet.value"),
+            "deployment-version-regression": ("incident.service", "incident.status"),
+            "discover-time-window": ("incident.route", "incident.status"),
+            "schema-drift-data-quality": ("incident.service", "facet.value"),
         }
         for pack, (first, second) in pairs.items():
             seen = {}
             for seed in range(400):
-                incident = self.materialize(pack, seed)["parameters"]["incident"]
-                seen.setdefault(incident[first], set()).add(incident[second])
+                parameters = self.materialize(pack, seed)["parameters"]
+                value = lambda dotted: self.controller._param_lookup(parameters, dotted)
+                seen.setdefault(value(first), set()).add(value(second))
             with self.subTest(pack=pack):
                 self.assertTrue(all(len(values) > 1 for values in seen.values()), seen)
-        versions = {self.materialize("deployment-version-regression", seed)["parameters"]["incident"]["bad_version"] for seed in range(200)}
+        versions = {self.materialize("deployment-version-regression", seed)["parameters"]["incident"]["new_version"] for seed in range(200)}
         self.assertGreater(len(versions), 20)
 
     def test_specifics_and_required_filters_vary_across_seeds(self):
@@ -345,7 +358,7 @@ class RandomizationTests(unittest.TestCase):
                     else:
                         self.assertGreaterEqual(len(command["narration"].split()), 12)
                         if command["type"] == "set_time_range" or (
-                            entry["id"] == "schema-drift-data-quality" and goal["id"] in {"isolate", "inspect"}
+                            entry["id"] == "schema-drift-data-quality" and goal["id"] == "isolate"
                         ):
                             # These opening cards include the motivation directly before the action.
                             self.assertEqual(command["reasoning"], "")
@@ -580,27 +593,28 @@ class RandomizationTests(unittest.TestCase):
                 self.assertNotIn(f"spiked between {onset} and {end}", isolate["demonstration"]["evidence"])
                 self.assertIn(f"spiked between {onset} and {end}", inspect["demonstration"]["evidence"])
 
-    def test_deployment_first_appearance_is_the_first_new_version_request(self):
-        """The rollout, the new version's first (failing) request and the report happen in that order,
-        and the window the coach recommends starts before the rollout with old-version traffic in view."""
+    def test_deployment_first_appearance_is_the_first_request_with_the_shared_value(self):
+        """The change, the first request with the shared value (a failure) and the report happen in that
+        order, and the window the coach recommends starts before the change with the current release's
+        traffic in view."""
         from datetime import datetime, timedelta
-        for seed in range(12):
+        for seed in range(18):
             manifest = self.materialize("deployment-version-regression", seed)
-            incident = manifest["parameters"]["incident"]
+            incident, facet = manifest["parameters"]["incident"], manifest["parameters"]["facet"]
             moments = self.server.incident_moments(manifest, self.server.select_detected_offset(manifest))
             start = self.server.recommended_window_start(moments)
             documents = self.controller.generate_seeded_events(manifest)
             at = lambda document: datetime.fromisoformat(document["@timestamp"])
-            new = sorted((document for document in documents if document["service"].get("version") == incident["bad_version"]), key=at)
-            old = [document for document in documents if document["service"].get("version") == incident["good_version"]]
-            with self.subTest(seed=seed):
+            new = sorted((document for document in documents if self.controller._lookup_nested(document, facet["field"]) == facet["value"]), key=at)
+            old = [document for document in documents if document["service"].get("version") == incident["current_version"]]
+            with self.subTest(seed=seed, facet=facet["field"]):
                 self.assertTrue(start < moments["rollout"] < moments["first"] < moments["noticed"])
                 self.assertEqual(at(new[0]), moments["first"])
                 self.assertGreaterEqual((at(new[1]) - at(new[0])).total_seconds(), 20)
                 self.assertTrue(all(document["http"]["response"]["status_code"] == incident["status"] for document in new))
-                # The first_appearance evidence is that one request: on the new version, at its time.
+                # The first_appearance evidence is that one request: with the shared value, at its time.
                 self.assertEqual(sum(at(document) <= moments["first"] + timedelta(seconds=5) for document in new), 1)
-                # The old version was serving before the rollout, inside the window, and kept serving.
+                # The current release was serving before the change, inside the window, and kept serving.
                 self.assertTrue(any(start <= at(document) < moments["rollout"] for document in old))
                 self.assertTrue(any(at(document) > moments["first"] and document["http"]["response"]["status_code"] == 200 for document in old))
 
@@ -661,7 +675,7 @@ class RandomizationTests(unittest.TestCase):
         created = datetime.fromisoformat(manifest["created_at"])
         timing = manifest["parameters"]["timing"]
         self.assertEqual(briefing["noticed_at"], self.server.iso_instant(created - timedelta(minutes=timing["noticed"])))
-        self.assertEqual(briefing["timed_facts"], [{"text": "The rollout of the new release began at {time} ({ago}).",
+        self.assertEqual(briefing["timed_facts"], [{"text": "The change began rolling out at {time} ({ago}).",
                                                     "at": self.server.iso_instant(created - timedelta(minutes=timing["rollout"]))}])
         # The clock reads in the browser's time once it has said what that is, and says UTC until then.
         self.assertTrue(self.server.clock_text(created, {}).endswith(" UTC"))
@@ -696,6 +710,144 @@ class RandomizationTests(unittest.TestCase):
             offsets.add(varied["detected_offset_minutes"])
         self.assertGreater(len(sources), 1)
         self.assertGreater(len(offsets), 1)
+
+
+class AnswerFieldTests(unittest.TestCase):
+    """Which field holds the answer is drawn per run, so learners carry the method over, not the field.
+
+    In the packs that find what the failures share, every candidate field turns up across runs, the
+    failures share only the drawn one, nothing the coach says before the scan names it, and the
+    starting view shows every candidate as a column (Field statistics counts only the columns shown,
+    so a missing one would give the answer away)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.controller = load_module("scenario_controller_fields", ROOT / "scenario-controller/controller.py")
+        cls.server = load_module("learning_server_fields", ROOT / "learning-service/server.py")
+        cls.server.LEARNING_DIR = ROOT / "learning"
+        from contracts import expand_descriptor
+        cls.expand = staticmethod(expand_descriptor)
+
+    def materialize(self, pack, seed):
+        template = json.loads((ROOT / "learning/scenarios" / pack / "scenario.json").read_text())
+        return self.controller.materialize(template, seed, run_id=f"run-{seed:012d}")
+
+    # The records the drawn field describes, and (where the pack checks it) the ones that must not have its value.
+    RECORDS = {
+        "deployment-version-regression": (
+            lambda document, parameters: document["service"]["name"] == parameters["incident"]["service"] and document["event"]["outcome"] == "failure",
+            lambda document, parameters: document["service"]["name"] == parameters["incident"]["service"] and document["event"]["outcome"] == "success"),
+        "auth-rejection-surge": (
+            lambda document, parameters: (document.get("authentication") or {}).get("rejection_reason") == parameters["incident"]["reason"],
+            None),
+        "schema-drift-data-quality": (
+            lambda document, parameters: (document.get("schema") or {}).get("route_present") is False,
+            lambda document, parameters: (document.get("schema") or {}).get("route_present") is True),
+    }
+
+    def test_every_declared_field_holds_the_answer_in_some_run(self):
+        self.assertEqual(set(self.RECORDS), set(FIELD_SCAN_PACKS))
+        for pack, spec in FIELD_SCAN_PACKS.items():
+            drawn = {self.materialize(pack, seed)["parameters"]["facet"]["field"] for seed in range(60)}
+            with self.subTest(pack=pack):
+                self.assertEqual(drawn, set(spec["fields"]))
+        # The server-errors pack names the field it surveys (its lesson is the healthy busiest value), but
+        # which field that is changes too: endpoint, service, request method or browser.
+        fields = {self.materialize("http-error-regression", seed)["parameters"]["incident"]["signal_field"] for seed in range(80)}
+        self.assertEqual(fields, {"url.path", "service.name", "http.request.method", "user_agent.name"})
+
+    def test_the_records_share_the_drawn_field_and_no_other(self):
+        look = self.controller._lookup_nested
+        for pack, (records, other_side) in self.RECORDS.items():
+            for seed in range(24):
+                manifest = self.materialize(pack, seed)
+                parameters, facet = manifest["parameters"], manifest["parameters"]["facet"]
+                documents = self.controller.generate_seeded_events(manifest)
+                shared = [document for document in documents if records(document, parameters)]
+                with self.subTest(pack=pack, seed=seed, field=facet["field"]):
+                    self.assertGreaterEqual(len(shared), 20)
+                    self.assertEqual({look(document, facet["field"]) for document in shared}, {facet["value"]})
+                    for field in set(FIELD_SCAN_PACKS[pack]["fields"]) - {facet["field"]}:
+                        self.assertGreaterEqual(len({look(document, field) for document in shared}), 2, field)
+                    if other_side:
+                        others = [document for document in documents if other_side(document, parameters)]
+                        self.assertTrue(others)
+                        self.assertNotIn(facet["value"], {look(document, facet["field"]) for document in others})
+                    # The answer is read from its field, never from a log line that spells it out.
+                    self.assertTrue(all(facet["value"] not in document.get("message", "") for document in shared))
+                    truth = manifest["scenario"]["truth"]
+                    finding = truth["answers"]["finding"] if pack != "auth-rejection-surge" else truth["answers"]["scope"]
+                    self.assertEqual(finding, f'{facet["field"]}: {facet["value"]}')
+
+    def test_nothing_names_the_drawn_field_before_the_scan_shows_it(self):
+        """Every card, hint and drift note before the step that reveals the field is field-agnostic, as
+        are that step's own card and early hints: only its result (and the bottom-out hint, which counts
+        as being shown) names the field. Copy may list every candidate at once, never one alone."""
+        copy_keys = ("title", "concept", "narration", "reasoning", "evidence")
+        for pack, spec in FIELD_SCAN_PACKS.items():
+            raw = self.expand(ROOT / "learning", "playbook", json.loads((ROOT / "learning/scenarios" / pack / "playbook.json").read_text()))
+            order = [goal["id"] for goal in raw["goals"]]
+            reveal = order.index(spec["reveal"])
+            for index, goal in enumerate(raw["goals"][:reveal + 1]):
+                demonstration = goal.get("demonstration", {})
+                texts = [goal.get(key, "") for key in copy_keys] + [demonstration.get(key, "") for key in ("narration", "reasoning")]
+                texts += goal.get("hints", [])[:-1] if index == reveal else goal.get("hints", [])
+                texts += [drift["note"] for drift in goal.get("drifts", [])]
+                if index < reveal:
+                    texts += [demonstration.get("evidence", ""), json.dumps(demonstration.get("evidence_focus") or {})]
+                with self.subTest(pack=pack, goal=goal["id"]):
+                    for text in texts:
+                        self.assertNotIn("${param.facet.", text)
+            self.assertIn("${param.facet.field}", raw["goals"][reveal]["demonstration"]["evidence"])
+            for seed in range(12):
+                manifest = self.materialize(pack, seed)
+                field = manifest["parameters"]["facet"]["field"]
+                for mode in ("demonstration", "guided"):
+                    session = self.server.create_session({"manifest": manifest}, mode)
+                    goals = session["playbook"]["goals"][:reveal + 1]
+                    for index, goal in enumerate(goals):
+                        demonstration = goal.get("demonstration", {})
+                        hints = goal.get("hints", [])[:-1] if index == reveal else goal.get("hints", [])
+                        shown = [goal.get(key, "") for key in copy_keys] + [demonstration.get("narration", ""), demonstration.get("reasoning", ""), *hints]
+                        for text in self.server.substitute(shown, session):
+                            if field in text:
+                                with self.subTest(pack=pack, seed=seed, mode=mode, goal=goal["id"]):
+                                    self.assertTrue(all(candidate in text for candidate in spec["fields"]), text)
+
+    def test_the_debrief_shows_every_part_of_the_answer(self):
+        """The demonstration's debrief is a compact recap whose "Problem found" is the run's conclusion, so
+        the conclusion (with the debrief's lines) must show every part of the finding: a drawn field's name
+        as well as its value. The browser audit (scenario-recorder/coach-audit.mjs) checks the same facts
+        the same way: each number, clock time or name, a slashed name by its parts."""
+        import re
+        stop = {"between", "with", "from", "that", "this", "than", "only", "their"}
+
+        def missing(value, text):
+            shown = text.lower()
+            tokens = [token for token in dict.fromkeys(re.findall(r"\d+(?:[.:]\d+)*|[a-z][\w.@/-]{3,}", str(value).lower())) if token not in stop]
+            present = lambda token: token in shown or ("/" in token and all(part in shown for part in token.split("/") if len(part) > 2))
+            return [token for token in tokens if not present(token)]
+
+        for entry in json.loads((ROOT / "learning/catalog.json").read_text())["scenarios"]:
+            for seed in range(8):
+                session = self.server.create_session({"manifest": self.materialize(entry["id"], seed)}, "demonstration")
+                session["utc_offset_minutes"] = 0
+                summary = self.server.substitute(session["playbook"]["demonstration_summary"], session)
+                shown = " ".join([summary["title"], summary["answer"]["conclusion"], *(f'{check["title"]} {check["detail"]}' for check in summary["checks"])])
+                with self.subTest(pack=entry["id"], seed=seed):
+                    self.assertEqual(missing(summary["answer"]["finding"], shown), [], summary["answer"]["finding"])
+
+    def test_the_starting_view_shows_every_candidate_as_a_column(self):
+        for pack, spec in FIELD_SCAN_PACKS.items():
+            path = json.loads((ROOT / "learning/scenarios" / pack / "scenario.json").read_text())["starting_view"]["path"]
+            columns = path.split("columns:!(", 1)[1].split(")", 1)[0].replace("'", "").split(",")
+            with self.subTest(pack=pack):
+                self.assertTrue(set(spec["fields"]) <= set(columns), columns)
+                playbook = self.expand(ROOT / "learning", "playbook", json.loads((ROOT / "learning/scenarios" / pack / "playbook.json").read_text()))
+                scan = next(goal for goal in playbook["goals"] if goal["id"] == spec["reveal"])
+                self.assertEqual(scan["reference_action"]["command"], "show_field_statistics")
+                self.assertEqual(set(scan["reference_action"]["arguments"]["fields"]), set(spec["fields"]))
+                self.assertEqual(scan["demonstration"]["evidence_focus"]["primary_field"], "${param.facet.field}")
 
 
 if __name__ == "__main__":
@@ -812,13 +964,18 @@ class StepCheckTests(unittest.TestCase):
                         self.assertFalse(self.completes(session, evidence, "isolate", wrong), wrong)
 
     def test_checking_one_event_means_opening_one(self):
+        """Opening one event checks the evidence; the packs that find which field the failures share
+        check it by scanning every field at once, and only that scan completes the step."""
         for pack in LOG_HUNT_PACKS:
             session, _inspect, evidence = self.at_step(pack, 4, "inspect")
             with self.subTest(pack=pack):
                 for action_type in ("column_removed", "field_statistics_opened", "field_inspected"):
                     self.assertFalse(self.completes(session, evidence, "inspect", {"type": action_type, "details": {"field": "message"}}))
-                self.assertTrue(self.completes(session, evidence, "inspect", {"type": "document_expanded", "details": {}})
-                                or pack == "deployment-version-regression")
+                if pack in FIELD_SCAN_PACKS:
+                    self.assertTrue(self.completes(session, evidence, "inspect", {"type": "field_statistics_opened", "details": {"view": "field_statistics"}}))
+                    self.assertFalse(self.completes(session, evidence, "inspect", {"type": "document_expanded", "details": {}}))
+                else:
+                    self.assertTrue(self.completes(session, evidence, "inspect", {"type": "document_expanded", "details": {}}))
 
 
 class ChallengeModeTests(unittest.TestCase):

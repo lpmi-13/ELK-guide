@@ -56,11 +56,11 @@
       "channels": ["monitoring", "pager", "release"],
       "headline": "More server errors since the latest release",
       "summary": "HTTP 5xx errors went up soon after a new release reached production. The service's overall health is red, but we don't know yet which requests are failing.",
-      "impact": "Some customer API calls are failing. Releases are paused until the on-call engineer finds the failing endpoint and a typical error.",
+      "impact": "Some customer API calls are failing. Releases are paused until the on-call engineer finds where the errors are and a typical error.",
       "signals": [
         {"label": "Rule", "value": "More than 5% of responses were 5xx errors in 3 checks in a row"},
         {"label": "Change context", "value": "A production rollout finished recently"},
-        {"label": "Triage request", "value": "Find the failing endpoint and the error it returns"}
+        {"label": "Triage request", "value": "Find ${param.incident.ask}, and the error behind it"}
       ]
     },
     "auth-rejection-surge": {
@@ -81,17 +81,17 @@
     },
     "deployment-version-regression": {
       "severity": "SEV-2",
-      "owner": "Orders Platform",
+      "owner": "Commerce Platform",
       "environment": "Production · rolling fleet",
       "observed_minutes_ago": [8, 9, 10],
-      "timed_facts": [{"at": "rollout", "text": "The rollout of the new release began at {time} ({ago})."}],
+      "timed_facts": [{"at": "rollout", "text": "The change began rolling out at {time} ({ago})."}],
       "channels": ["release", "monitoring", "pager"],
-      "headline": "Some requests started failing during a rollout",
-      "summary": "Errors went up for one service during a rolling deployment. Some of its requests fail while others succeed, and the overall health numbers hide what sets them apart.",
-      "impact": "Some customer requests fail and others succeed. The rollout is paused until the evidence shows what the failing requests have in common.",
+      "headline": "Some requests started failing during a change",
+      "summary": "Errors went up for one service while a change rolled out: a new release and a configuration update, server by server. Some of its requests fail while others succeed, and the overall health numbers hide what sets them apart.",
+      "impact": "Some customer requests fail and others succeed. The change is paused until the evidence shows what the failing requests have in common.",
       "signals": [
         {"label": "Service health", "value": "Requests to the same service give different results"},
-        {"label": "Change context", "value": "The rolling deployment happened during the incident"},
+        {"label": "Change context", "value": "A new release and a configuration update rolled out during the incident"},
         {"label": "Triage request", "value": "Find what the failing requests have in common"}
       ]
     },
@@ -118,11 +118,11 @@
       "channels": ["monitoring", "support", "release"],
       "headline": "A dashboard's request count dropped suddenly",
       "summary": "The dashboard only counts requests that have a value in the http.route field. That count fell, but the total number of incoming requests stayed the same.",
-      "impact": "Reports that use this data may be missing requests. Before teams trust the dashboard again, they need to know which telemetry producer stopped filling in http.route.",
+      "impact": "Reports that use this data may be missing requests. Before teams trust the dashboard again, they need to know what the requests without http.route have in common.",
       "signals": [
         {"label": "Dashboard", "value": "Far fewer requests with http.route than usual"},
         {"label": "Ingress", "value": "The total number of requests is normal"},
-        {"label": "Triage request", "value": "Find the producer and version that stopped sending http.route"}
+        {"label": "Triage request", "value": "Find what the requests without http.route have in common"}
       ]
     },
     "log-pattern-noise-reduction": {
@@ -232,16 +232,16 @@
     },
     "slow-dependency-trace": {
       "severity": "SEV-2",
-      "owner": "Checkout Platform",
-      "environment": "Production · checkout",
+      "owner": "${param.incident.label} Platform",
+      "environment": "Production · ${param.incident.service}",
       "observed_minutes_ago": [6, 10, 13],
       "channels": ["synthetics", "pager", "support"],
-      "headline": "Checkout p95 latency is over the customer SLO",
-      "summary": "Checkout requests are completing slowly in production. The first service still responds, so the time is probably spent deeper in its dependencies.",
-      "impact": "Customers wait several seconds to confirm an order, and some give up. The on-call engineer needs the downstream operation that takes up the trace's critical path.",
+      "headline": "${param.incident.label} p95 latency is over the customer SLO",
+      "summary": "${param.incident.label} requests are completing slowly in production. The first service still responds, so the time is probably spent deeper in its dependencies.",
+      "impact": "Customers wait several seconds for a response, and some give up. The on-call engineer needs the downstream operation that takes up the trace's critical path.",
       "signals": [
-        {"label": "SLO", "value": "Checkout p95 above 2.5 s for 3 windows"},
-        {"label": "Probe", "value": "The order confirmation step is always slow"},
+        {"label": "SLO", "value": "${param.incident.label} p95 above 2.5 s for 3 windows"},
+        {"label": "Probe", "value": "The ${param.incident.transaction} step is always slow"},
         {"label": "Triage request", "value": "Find the slow dependency and operation"}
       ]
     },
@@ -277,15 +277,15 @@
     },
     "trace-log-correlation": {
       "severity": "SEV-2",
-      "owner": "Payments Platform",
-      "environment": "Production · payment path",
+      "owner": "${param.incident.label} Platform",
+      "environment": "Production · ${param.incident.service}",
       "observed_minutes_ago": [6, 9, 13],
       "channels": ["support", "pager", "monitoring"],
-      "headline": "A payment trace failed without the exception details",
-      "summary": "A customer payment trace ends in failure, but its span metadata doesn't include the application error needed to explain it.",
-      "impact": "The payment could not complete, and first-line support has no useful error reason. Use the trace and its time to find the exact application log.",
+      "headline": "A request trace failed without the exception details",
+      "summary": "A customer request trace ends in failure, but its span metadata doesn't include the application error needed to explain it.",
+      "impact": "The request could not complete, and first-line support has no useful error reason. Use the trace and its time to find the exact application log.",
       "signals": [
-        {"label": "Trace", "value": "The failed payment request is captured from start to end"},
+        {"label": "Trace", "value": "The failed request is captured from start to end"},
         {"label": "Evidence gap", "value": "The span metadata has no exception details"},
         {"label": "Triage request", "value": "Find the application log linked to the trace"}
       ]
@@ -352,15 +352,15 @@
     },
     "active-alert-triage": {
       "severity": "SEV-2",
-      "owner": "Fulfilment Platform",
-      "environment": "Production · shipping",
+      "owner": "${param.incident.label} Platform",
+      "environment": "Production · ${param.incident.service}",
       "observed_minutes_ago": [4, 7, 10],
       "channels": ["monitoring", "pager", "incident"],
-      "headline": "A fulfilment customer-failure alert is firing",
-      "summary": "A new alert fired for a fulfilment service you don't know well. Its reason suggests customers are affected, but check it against the current source events.",
-      "impact": "Shipment requests may be failing. Treat it as urgent only if the condition still holds and production events back up the alert's reason.",
+      "headline": "A ${param.incident.service} customer-failure alert is firing",
+      "summary": "A new alert fired for a ${param.incident.service} service you don't know well. Its reason suggests customers are affected, but check it against the current source events.",
+      "impact": "Customer ${param.incident.object} requests may be failing. Treat it as urgent only if the condition still holds and production events back up the alert's reason.",
       "signals": [
-        {"label": "Rule", "value": "Fulfilment customer failures"},
+        {"label": "Rule", "value": "${param.incident.label} customer failures"},
         {"label": "Evaluation", "value": "The alert condition was met in the latest check"},
         {"label": "Triage request", "value": "Set the priority and point to the source events"}
       ]

@@ -128,8 +128,9 @@ async function challenge(tab, deadline) {
     const after = await tab.waitFor(state => state.stage?.includes('success') || state.stage?.includes('recovery'), {timeout: 4000, label: 'no verdict'}).catch(() => null);
     if (after) record.fail('challenge_live_feedback', `the challenge showed a live verdict card: ${after.eyebrow}`);
   }
+  // A number box takes only digits, so the uninformed answer there is a count no incident has.
   for (const field of await tab.page.locator('#adaptive-incident-coach #diagnosis input, #adaptive-incident-coach #diagnosis textarea').all()) {
-    await field.fill('unknown');
+    await field.fill(await field.getAttribute('type') === 'number' ? '0' : 'unknown');
   }
   await tab.click('#diagnosis button[type="submit"]', 'Submit answer');
   return tab.waitFor(state => state.debrief, {timeout: Math.max(5000, deadline - Date.now()), label: 'the challenge debrief'});

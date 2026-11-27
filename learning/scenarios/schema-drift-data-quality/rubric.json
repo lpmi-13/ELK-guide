@@ -1,1 +1,1 @@
-{"schema_version":2,"id":"schema-drift-data-quality-rubric","extends":"analysis.json","variables":{}}
+{"schema_version":2,"id":"schema-drift-data-quality-rubric","extends":"analysis.json","variables":{},"goal_inserts":[{"after":"inspect","goal":{"id":"contrast"}}],"overrides":{"reference_action_cost":5}}

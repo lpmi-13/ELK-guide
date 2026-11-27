@@ -70,10 +70,15 @@ class ScenarioV2Tests(unittest.TestCase):
     def test_demonstration_opening_cards_do_not_reveal_answers(self):
         answer_tokens = (
             "${truth.",
-            "${param.incident.bad_version}",
-            "${param.incident.good_version}",
+            "${param.incident.new_version}",
+            "${param.incident.current_version}",
             "${param.incident.route}",
             "${param.incident.finding}",
+            # The field a run's answer is in, where it is drawn: a demonstration says what it will do
+            # (compare every field), never which field it will turn out to be.
+            "${param.facet.field}",
+            "${param.facet.value}",
+            "${param.facet.noun}",
         )
         for entry in self.catalog["scenarios"]:
             pack = ROOT / "learning" / entry["pack"]
@@ -102,43 +107,42 @@ class ScenarioV2Tests(unittest.TestCase):
                     self.assertNotIn("\n", narration)
                     self.assertLessEqual(len(narration.split()), 40)
 
-    def test_deployment_versions_are_revealed_by_the_data_not_presumed(self):
-        """The rollout pack finds the version as what the failures share (Field statistics), names it only
-        once the column shows it, and names the healthy versions only once the successes are on screen."""
+    def test_the_shared_field_is_revealed_by_the_data_not_presumed(self):
+        """The change pack finds what the failures share with Field statistics, names the field only once
+        that scan shows it, and names its value only once a column or the successes show it."""
         pack = ROOT / "learning/scenarios/deployment-version-regression"
         playbook = expand_descriptor(ROOT / "learning", "playbook", json.loads((pack / "playbook.json").read_text()))
         goals = {goal["id"]: goal for goal in playbook["goals"]}
         self.assertEqual(goals["inspect"]["reference_action"]["command"], "show_field_statistics")
-        # Field statistics counts the selected columns, so the facets to compare open as columns.
-        scenario = json.loads((pack / "scenario.json").read_text())
-        for column in ("host.name", "url.path", "service.version"):
-            self.assertIn(column, scenario["starting_view"]["path"])
         self.assertEqual(goals["contrast"]["reference_action"]["arguments"], {"field": "event.outcome", "value": "failure", "include": False})
         for goal_id in ("isolate", "failures", "inspect", "first", "contrast"):
             for phase in ("narration", "reasoning"):
-                for version in ("bad_version", "good_version", "legacy_version"):
-                    self.assertNotIn(f"${{param.incident.{version}}}", goals[goal_id]["demonstration"][phase], (goal_id, phase))
-        self.assertNotIn("${param.incident.bad_version}", goals["inspect"]["demonstration"]["evidence"])
-        self.assertIn("${param.incident.bad_version}", goals["first"]["demonstration"]["evidence"])
-        for version in ("bad_version", "good_version", "legacy_version"):
-            self.assertIn(f"${{param.incident.{version}}}", goals["contrast"]["demonstration"]["evidence"])
+                for token in ("field", "value", "noun"):
+                    self.assertNotIn(f"${{param.facet.{token}}}", goals[goal_id]["demonstration"][phase], (goal_id, phase))
+        self.assertIn("${param.facet.field}", goals["inspect"]["demonstration"]["evidence"])
+        self.assertNotIn("${param.facet.value}", goals["inspect"]["demonstration"]["evidence"])
+        self.assertIn("${param.facet.value}", goals["first"]["demonstration"]["evidence"])
+        self.assertIn("${param.facet.value}", goals["contrast"]["demonstration"]["evidence"])
 
-    def test_schema_drift_query_looks_for_missing_routes_before_identifying_producer(self):
+    def test_schema_drift_query_looks_for_missing_routes_before_comparing_them(self):
         pack = ROOT / "learning/scenarios/schema-drift-data-quality"
         scenario = json.loads((pack / "scenario.json").read_text())
         briefings = json.loads((ROOT / "learning/incident-briefings.json").read_text())
         briefing = briefings["scenarios"]["schema-drift-data-quality"]
         playbook = expand_descriptor(ROOT / "learning", "playbook", json.loads((pack / "playbook.json").read_text()))
-        isolate = next(goal for goal in playbook["goals"] if goal["id"] == "isolate")
-        inspect = next(goal for goal in playbook["goals"] if goal["id"] == "inspect")
+        goals = {goal["id"]: goal for goal in playbook["goals"]}
         self.assertIn("http.route", scenario["brief"])
         self.assertIn("only counts requests that have a value in the http.route field", briefing["summary"])
-        self.assertEqual(isolate["reference_action"]["arguments"], "schema.route_present: false")
-        self.assertIn("only counts requests with http.route", isolate["demonstration"]["narration"])
-        self.assertIn("their producer and version", isolate["demonstration"]["narration"])
-        self.assertIn("producer and version together", inspect["demonstration"]["narration"])
-        self.assertEqual(isolate["demonstration"]["reasoning"], "")
-        self.assertEqual(inspect["demonstration"]["reasoning"], "")
+        self.assertEqual(goals["isolate"]["reference_action"]["arguments"], "schema.route_present: false")
+        self.assertIn("only counts requests with http.route", goals["isolate"]["demonstration"]["narration"])
+        self.assertIn("compare what they have in common", goals["isolate"]["demonstration"]["narration"])
+        self.assertEqual(goals["isolate"]["demonstration"]["reasoning"], "")
+        # What the requests without a route share is found by scanning every field, then checked on
+        # the requests that kept their route.
+        self.assertEqual(goals["inspect"]["reference_action"]["command"], "show_field_statistics")
+        self.assertEqual([goal["id"] for goal in playbook["goals"]], ["scope", "isolate", "inspect", "contrast", "submit"])
+        self.assertTrue(goals["contrast"]["empty_result_expected"])
+        self.assertIn("schema.route_present: true and ${param.facet.field}", goals["contrast"]["reference_action"]["arguments"])
 
     def test_esql_deployment_comparison_calculates_errors_and_latency(self):
         pack = ROOT / "learning/scenarios/esql-before-after-deploy"

@@ -145,7 +145,9 @@ class PackRuleTests(unittest.TestCase):
                 for field in fields:
                     self.assertIn(field, wrong["note"])
                 checked += 1
-        self.assertGreaterEqual(checked, 7)
+        # The packs that find which field the failures share check it with a scan of every field, not a
+        # column, so they have no column route to check here.
+        self.assertGreaterEqual(checked, 5)
 
     def test_no_pack_asks_for_internal_evidence_ids(self):
         for path in [*(ROOT / "learning/scenarios").glob("*/*.json"), *(ROOT / "learning/templates").glob("*/*.json")]:
@@ -173,57 +175,63 @@ class PackRuleTests(unittest.TestCase):
 
 
 class NonMvpAnswerTests(unittest.TestCase):
-    """Every pack's answers are graded on the facts they state, in the learner's own words."""
+    """Every pack's answers are graded on the facts they state, in the learner's own words.
 
+    The values are drawn per run, so each answer is written with the run's own values (``${param...}``)."""
+
+    I, V = "${param.incident.", "${param.volume."
     # (pack, an answer a reviewer would accept, the fields a plausible mistake gets wrong)
     CASES = [
         ("esql-top-failing-routes",
-         {"finding": "/api/orders/confirm", "scope": "42 failed requests, a 93.3% failure rate", "conclusion": "/api/orders/confirm leads on both count and rate"},
-         {"finding": "/api/orders", "scope": "42 failures at 72%"}),
+         {"finding": f"{I}route}}", "scope": f"{V}failures}} failed requests, a {V}rate_exact}}% failure rate", "conclusion": f"{I}route}} leads on both count and rate"},
+         {"finding": f"{I}decoy_route}}", "scope": f"{V}failures}} failures at 72%"}),
         ("esql-before-after-deploy",
-         {"finding": "v5.1.0", "scope": "p95 went from 180 ms to 980ms and errors from 0% to 100%", "conclusion": "5.1.0 made requests slower and every one failed"},
-         {"finding": "5.0.9", "scope": "p95 210ms to 980ms"}),
+         {"finding": "v${param.release.new}", "scope": "p95 went from ${param.latency.before} ms to ${param.latency.after}ms and errors from 0% to 100%",
+          "conclusion": "${param.release.new} made requests slower and every one failed"},
+         {"finding": "${param.release.current}", "scope": "p95 5ms to ${param.latency.after}ms"}),
         ("esql-cross-service-summary",
-         {"finding": "payments", "scope": "45 failures, p95 of 1.4s", "conclusion": "Payments is the worst service"},
-         {"finding": "orders", "scope": "45 failures"}),
+         {"finding": "${param.services.0}", "scope": f"{V}failures}} failures, p95 of {V}p95_s}}s", "conclusion": "${param.services.0} is the worst service"},
+         {"finding": "${param.services.1}", "scope": f"{V}failures}} failures"}),
         ("dashboard-incident-triage",
-         {"finding": "eu-west-2", "scope": "checkout", "conclusion": "Checkout is failing in eu-west-2 right now"},
-         {"finding": "eu-west-1", "conclusion": "Checkout is failing everywhere"}),
+         {"finding": "${param.regions.0}", "scope": "checkout", "conclusion": "Checkout is failing in ${param.regions.0} right now"},
+         {"finding": "${param.regions.2}", "conclusion": "Checkout is failing everywhere"}),
         ("dashboard-drilldown-to-evidence",
-         {"finding": "orders", "scope": "/checkout", "conclusion": "The orders spike is CheckoutStateConflict failures"},
-         {"finding": "checkout", "conclusion": "The spike is real"}),
+         {"finding": f"{I}service}}", "scope": f"{I}route}}", "conclusion": f"The {I}service}} spike is {I}error_type}} failures"},
+         {"finding": "billing", "conclusion": "The spike is real"}),
         ("dashboard-panel-inspection",
          {"finding": "the failed transactions panel", "scope": "only transactions", "conclusion": "One counts all events including spans; failed transactions is the one to trust"},
          {"finding": "the all events panel", "conclusion": "The panels are both wrong"}),
         ("capacity-throughput-saturation",
-         {"finding": "about 230 rps", "scope": "checkout", "conclusion": "Latency jumps once traffic passes ~220 rps"},
-         {"finding": "around 120", "conclusion": "Checkout is slow at 120 rps"}),
+         {"finding": "about ${param.load.threshold} rps", "scope": "checkout", "conclusion": "Latency jumps once traffic passes ~${param.load.threshold} rps"},
+         {"finding": "around 60", "conclusion": "Checkout is slow at 60 rps"}),
         ("slow-dependency-trace",
-         {"finding": "payments POST payments/authorize", "scope": "POST /checkout", "conclusion": "The payments call dominates checkout"},
-         {"finding": "checkout", "conclusion": "Checkout itself is slow"}),
+         {"finding": f"{I}dependency}} {I}operation}}", "scope": f"{I}transaction}}", "conclusion": f"The {I}dependency}} call dominates {I}route_word}}"},
+         {"finding": f"{I}service}}", "conclusion": f"{I}service}} itself is slow"}),
         ("trace-error-propagation",
-         {"finding": "inventory, reserve stock span", "scope": "inventory -> orders -> api-gateway", "conclusion": "InventoryReservationRace in inventory surfaced as a gateway 502"},
-         {"finding": "api-gateway", "conclusion": "The gateway is failing"}),
+         {"finding": f"{I}origin}}, {I}origin_span}} span", "scope": f"{I}origin}} -> {I}caller}} -> {I}edge}}",
+          "conclusion": f"{I}error_type}} in {I}origin}} surfaced as a {I}edge}} 502"},
+         {"finding": f"{I}edge}}", "conclusion": f"The {I}edge}} is failing"}),
         ("retry-amplification",
-         {"finding": "three attempts per request", "scope": "orders to payments", "conclusion": "Each checkout calls payments 3 times"},
-         {"finding": "1 attempt", "scope": "orders to catalog"}),
+         {"finding": "${param.retry.word} attempts per request", "scope": f"{I}caller}} to {I}dependency}}", "conclusion": f"Each request calls {I}dependency}} ${{param.retry.attempts}} times"},
+         {"finding": "1 attempt", "scope": f"{I}caller}} to catalog"}),
         ("trace-log-correlation",
-         {"finding": "IssuerTimeout", "scope": "payments authorize card", "conclusion": "The log shows the issuer timed out"},
-         {"finding": "PaymentDeclined", "conclusion": "The card was declined"}),
+         {"finding": f"{I}log_error}}", "scope": f"{I}service}} {I}span}}", "conclusion": f"The log shows the {I}log_phrase}}"},
+         {"finding": f"{I}span_error}}", "conclusion": "The request was declined"}),
         ("cpu-saturation",
-         {"finding": "checkout-03", "scope": "checkout", "conclusion": "checkout-03 hit 97% CPU while latency rose"},
-         {"finding": "checkout-01", "conclusion": "Memory on checkout-01 caused it"}),
+         {"finding": f"{I}service}}-${{param.node}}", "scope": f"{I}service}}", "conclusion": f"{I}service}}-${{param.node}} hit ${{param.cpu.pct}}% CPU while latency rose"},
+         {"finding": f"{I}service}}-99", "conclusion": f"Memory on {I}service}}-99 caused it"}),
         ("memory-leak-and-restarts",
-         {"finding": "catalog-7d8f", "scope": "memory climbed to 94%", "conclusion": "catalog-7d8f memory rose until it restarted"},
-         {"finding": "catalog-1a2b", "conclusion": "CPU spiked"}),
+         {"finding": "${param.services.0}-${param.pods.0}", "scope": "memory climbed to ${param.memory.pct}%", "conclusion": "${param.services.0}-${param.pods.0} memory rose until it restarted"},
+         {"finding": "${param.services.0}-1a2b", "conclusion": "CPU spiked"}),
         ("hot-instance-imbalance",
-         {"finding": "orders-04", "scope": "the other instances stayed under 40% CPU", "conclusion": "orders-04 runs hot while its peers are fine"},
-         {"finding": "orders-01", "conclusion": "All orders instances are hot"}),
+         {"finding": f"{I}service}}-${{param.nodes.0}}", "scope": "the other instances stayed under ${param.load.peer_max}% CPU",
+          "conclusion": f"{I}service}}-${{param.nodes.0}} runs hot while its peers are fine"},
+         {"finding": f"{I}service}}-${{param.nodes.1}}", "conclusion": f"All {I}service}} instances are hot"}),
         ("active-alert-triage",
-         {"finding": "active", "scope": "high priority, fulfilment /shipments", "conclusion": "Still active: customers' shipment requests are failing now"},
+         {"finding": "active", "scope": f"high priority, {I}service}} {I}path}}", "conclusion": f"Still active: customers' {I}object}} requests are failing now"},
          {"finding": "resolved", "conclusion": "It is noise"}),
         ("slow-payments",
-         {"finding": "payments", "scope": "/checkout", "conclusion": "Payments latency slows the checkout path"},
+         {"finding": "${param.fault.service}", "scope": "/checkout", "conclusion": "${param.fault.service} latency slows the checkout path"},
          {"finding": "checkout", "conclusion": "Checkout is broken"}),
     ]
 
@@ -233,22 +241,26 @@ class NonMvpAnswerTests(unittest.TestCase):
         cls.server = load_module("learning_server_answers", ROOT / "learning-service/server.py")
         cls.server.LEARNING_DIR = ROOT / "learning"
 
-    def grade(self, pack, answer):
+    def grade(self, pack, answer, seed):
         template = json.loads((ROOT / "learning/scenarios" / pack / "scenario.json").read_text())
-        manifest = self.controller.materialize(template, 2, run_id="run-000000000002")
+        manifest = self.controller.materialize(template, seed, run_id=f"run-{seed:012d}")
         session = self.server.create_session({"manifest": manifest}, "challenge")
         session["completed_goals"] = {goal["id"] for goal in session["playbook"]["goals"]}
-        session["answer"] = answer
+        session["answer"] = self.controller._apply_parameters(answer, manifest["parameters"])
+        self.assertNotIn("${", json.dumps(session["answer"]))
         evidence = {"assertions": {item["id"]: True for item in manifest["scenario"]["truth"]["assertions"]}}
         return {item["id"]: item["correct"] for item in self.server.score_session(session, evidence=evidence)["answer_review"]}
 
     def test_paraphrased_facts_pass_and_wrong_facts_fail(self):
+        self.assertEqual({pack for pack, _answer, _mistakes in self.CASES}, {entry["id"] for entry in CATALOG if entry.get("track") != "mvp"})
         for pack, answer, mistakes in self.CASES:
-            with self.subTest(pack=pack):
-                self.assertTrue(all(self.grade(pack, answer).values()), self.grade(pack, answer))
-                review = self.grade(pack, {**answer, **mistakes})
-                for field in mistakes:
-                    self.assertFalse(review[field], field)
+            for seed in (2, 5, 11):
+                with self.subTest(pack=pack, seed=seed):
+                    review = self.grade(pack, answer, seed)
+                    self.assertTrue(all(review.values()), review)
+                    review = self.grade(pack, {**answer, **mistakes}, seed)
+                    for field in mistakes:
+                        self.assertFalse(review[field], field)
 
 
 class ViewScopedEvidenceTests(unittest.TestCase):

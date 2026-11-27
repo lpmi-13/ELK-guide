@@ -1,71 +1,187 @@
 {
   "schema_version": 2,
   "id": "auth-rejection-surge",
-  "version": 4,
+  "version": 5,
   "title": "An increase in rejected sign-ins",
   "type": "investigation",
   "classification": "core",
   "difficulty": 1,
   "estimated_minutes": 16,
-  "brief": "More sign-ins are being rejected than usual, but some rejections happen every day. Find the reason behind the increase and the client it affects.",
-  "skills": ["boolean-kql", "include-exclude", "top-values"],
-  "required_capabilities": ["discover", "spaces", "saved_objects"],
+  "brief": "More sign-ins are being rejected than usual, but some rejections happen every day. Find the reason behind the increase and who it affects.",
+  "skills": [
+    "boolean-kql",
+    "include-exclude",
+    "top-values"
+  ],
+  "required_capabilities": [
+    "discover",
+    "spaces",
+    "saved_objects"
+  ],
   "parameters": {
     "incident": {
-      "merge": [
+      "choose": [
         {
-          "choose": [
-            {"reason": "device_untrusted", "message": "sign-in rejected: device not trusted", "detail": "blocked a sign-in from an untrusted device"},
-            {"reason": "mfa_timeout", "message": "sign-in rejected: MFA challenge timed out", "detail": "let an MFA challenge time out"},
-            {"reason": "expired_nonce", "message": "sign-in rejected: expired nonce", "detail": "sent an expired nonce"},
-            {"reason": "token_reuse", "message": "sign-in rejected: replayed refresh token", "detail": "replayed a refresh token"},
-            {"reason": "region_blocked", "message": "sign-in rejected: region not allowed", "detail": "signed in from a blocked region"},
-            {"reason": "captcha_failed", "message": "sign-in rejected: captcha check failed", "detail": "failed a captcha check"}
-          ]
+          "reason": "device_untrusted",
+          "message": "sign-in rejected: device not trusted"
         },
         {
-          "choose": [
-            {"client": "desktop-app"}, {"client": "ios-app"}, {"client": "android-app"}, {"client": "mobile-web"},
-            {"client": "partner-api"}, {"client": "smart-tv-app"}, {"client": "kiosk-app"}
-          ]
+          "reason": "mfa_timeout",
+          "message": "sign-in rejected: MFA challenge timed out"
+        },
+        {
+          "reason": "expired_nonce",
+          "message": "sign-in rejected: expired nonce"
+        },
+        {
+          "reason": "token_reuse",
+          "message": "sign-in rejected: replayed refresh token"
+        },
+        {
+          "reason": "region_blocked",
+          "message": "sign-in rejected: region not allowed"
+        },
+        {
+          "reason": "captcha_failed",
+          "message": "sign-in rejected: captcha check failed"
         }
       ]
     },
-    "everyday": {"sample": ["bad_password", "session_expired", "account_locked", "rate_limited"], "count": 2},
+    "clients": {
+      "sample": [
+        "desktop-app",
+        "ios-app",
+        "android-app",
+        "partner-api",
+        "smart-tv-app",
+        "kiosk-app",
+        "watch-app"
+      ],
+      "count": 3
+    },
+    "countries": {
+      "sample": [
+        "BR",
+        "IN",
+        "DE",
+        "JP",
+        "AU",
+        "ZA",
+        "MX",
+        "KR",
+        "FR",
+        "NG",
+        "CA",
+        "ES"
+      ],
+      "count": 4
+    },
+    "app": {
+      "release": {
+        "major": [
+          4,
+          9
+        ],
+        "minor": [
+          2,
+          9
+        ],
+        "patch": [
+          1,
+          9
+        ]
+      }
+    },
+    "everyday": {
+      "sample": [
+        "bad_password",
+        "session_expired",
+        "account_locked",
+        "rate_limited"
+      ],
+      "count": 2
+    },
     "timing": {
       "choose": [
-        {"onset": 10, "onset_seconds": 600, "noticed": 6, "baseline": 25},
-        {"onset": 12, "onset_seconds": 720, "noticed": 7, "baseline": 27},
-        {"onset": 14, "onset_seconds": 840, "noticed": 9, "baseline": 29}
+        {
+          "onset": 10,
+          "onset_seconds": 600,
+          "noticed": 6,
+          "baseline": 25
+        },
+        {
+          "onset": 12,
+          "onset_seconds": 720,
+          "noticed": 7,
+          "baseline": 27
+        },
+        {
+          "onset": 14,
+          "onset_seconds": 840,
+          "noticed": 9,
+          "baseline": 29
+        }
+      ]
+    },
+    "facet": {
+      "choose": [
+        {
+          "field": "client.application.name",
+          "noun": "client",
+          "others": "client.geo.country_iso_code and user_agent.version",
+          "value": "${param.clients.0}",
+          "who": "the ${param.clients.0} client"
+        },
+        {
+          "field": "client.geo.country_iso_code",
+          "noun": "country",
+          "others": "client.application.name and user_agent.version",
+          "value": "${param.countries.0}",
+          "who": "one country, ${param.countries.0}"
+        },
+        {
+          "field": "user_agent.version",
+          "noun": "app version",
+          "others": "client.application.name and client.geo.country_iso_code",
+          "value": "${param.app.new}",
+          "who": "app version ${param.app.new}"
+        }
       ]
     }
   },
   "provisioning": {
-    "strategies": ["seeded-events", "saved-objects"],
+    "strategies": [
+      "seeded-events",
+      "saved-objects"
+    ],
     "seeded_events": {
       "signal_count": 50,
       "noise_count": 90,
-      "signal_window_seconds": [10, "${param.timing.onset_seconds}"],
+      "signal_window_seconds": [
+        10,
+        "${param.timing.onset_seconds}"
+      ],
       "signal": {
-        "service": {"name": "auth"},
-        "event": {"outcome": "failure"},
-        "http": {"response": {"status_code": 401}},
-        "client": {"application": {"name": "${param.incident.client}"}},
-        "authentication": {"rejection_reason": "${param.incident.reason}"},
-        "message": "${param.incident.message}"
-      },
-      "companions": [
-        {
-          "count": 2,
-          "event": {
-            "service": {"name": "auth"},
-            "event": {"outcome": "failure"},
-            "http": {"response": {"status_code": 401}},
-            "client": {"application": {"name": "${param.incident.client}"}},
-            "authentication": {"rejection_reason": "${param.incident.reason}"},
-            "message": "${param.incident.client} ${param.incident.detail}"
+        "service": {
+          "name": "auth"
+        },
+        "event": {
+          "outcome": "failure"
+        },
+        "http": {
+          "response": {
+            "status_code": 401
           }
         },
+        "authentication": {
+          "rejection_reason": "${param.incident.reason}"
+        },
+        "message": "${param.incident.message}",
+        "set": {
+          "${param.facet.field}": "${param.facet.value}"
+        }
+      },
+      "companions": [
         {
           "count": 25,
           "offset_seconds": 20,
@@ -73,18 +189,105 @@
           "jitter_seconds": 40,
           "trace": "own",
           "event": {
-            "service": {"name": "auth"},
-            "event": {"outcome": "failure"},
-            "http": {"response": {"status_code": 401}},
-            "authentication": {"rejection_reason": "${param.everyday.0}"},
+            "service": {
+              "name": "auth"
+            },
+            "event": {
+              "outcome": "failure"
+            },
+            "http": {
+              "response": {
+                "status_code": 401
+              }
+            },
+            "authentication": {
+              "rejection_reason": "${param.everyday.0}"
+            },
             "message": "sign-in rejected: ${param.everyday.0}"
           },
-          "cycle": [
-            {"client": {"application": {"name": "public-web"}}},
-            {"client": {"application": {"name": "mobile-web"}}},
-            {"client": {"application": {"name": "ios-app"}}},
-            {"client": {"application": {"name": "android-app"}}},
-            {"client": {"application": {"name": "desktop-app"}}}
+          "cycles": [
+            [
+              {
+                "client": {
+                  "application": {
+                    "name": "public-web"
+                  }
+                },
+                "user_agent": {
+                  "version": "131.0"
+                }
+              },
+              {
+                "client": {
+                  "application": {
+                    "name": "${param.clients.0}"
+                  }
+                },
+                "user_agent": {
+                  "version": "${param.app.current}"
+                }
+              },
+              {
+                "client": {
+                  "application": {
+                    "name": "mobile-web"
+                  }
+                },
+                "user_agent": {
+                  "version": "17.4"
+                }
+              },
+              {
+                "client": {
+                  "application": {
+                    "name": "${param.clients.1}"
+                  }
+                },
+                "user_agent": {
+                  "version": "${param.app.new}"
+                }
+              },
+              {
+                "client": {
+                  "application": {
+                    "name": "${param.clients.2}"
+                  }
+                },
+                "user_agent": {
+                  "version": "${param.app.legacy}"
+                }
+              }
+            ],
+            [
+              {
+                "client": {
+                  "geo": {
+                    "country_iso_code": "${param.countries.0}"
+                  }
+                }
+              },
+              {
+                "client": {
+                  "geo": {
+                    "country_iso_code": "${param.countries.1}"
+                  }
+                }
+              },
+              {
+                "client": {
+                  "geo": {
+                    "country_iso_code": "${param.countries.2}"
+                  }
+                }
+              },
+              {
+                "client": {
+                  "geo": {
+                    "country_iso_code": "${param.countries.3}"
+                  }
+                }
+              }
+            ]
           ]
         },
         {
@@ -94,49 +297,309 @@
           "jitter_seconds": 40,
           "trace": "own",
           "event": {
-            "service": {"name": "auth"},
-            "event": {"outcome": "failure"},
-            "http": {"response": {"status_code": 401}},
-            "authentication": {"rejection_reason": "${param.everyday.1}"},
+            "service": {
+              "name": "auth"
+            },
+            "event": {
+              "outcome": "failure"
+            },
+            "http": {
+              "response": {
+                "status_code": 401
+              }
+            },
+            "authentication": {
+              "rejection_reason": "${param.everyday.1}"
+            },
             "message": "sign-in rejected: ${param.everyday.1}"
           },
-          "cycle": [
-            {"client": {"application": {"name": "android-app"}}},
-            {"client": {"application": {"name": "public-web"}}},
-            {"client": {"application": {"name": "desktop-app"}}},
-            {"client": {"application": {"name": "mobile-web"}}},
-            {"client": {"application": {"name": "ios-app"}}}
+          "cycles": [
+            [
+              {
+                "client": {
+                  "application": {
+                    "name": "${param.clients.0}"
+                  }
+                },
+                "user_agent": {
+                  "version": "${param.app.current}"
+                }
+              },
+              {
+                "client": {
+                  "application": {
+                    "name": "mobile-web"
+                  }
+                },
+                "user_agent": {
+                  "version": "17.4"
+                }
+              },
+              {
+                "client": {
+                  "application": {
+                    "name": "${param.clients.1}"
+                  }
+                },
+                "user_agent": {
+                  "version": "${param.app.new}"
+                }
+              },
+              {
+                "client": {
+                  "application": {
+                    "name": "${param.clients.2}"
+                  }
+                },
+                "user_agent": {
+                  "version": "${param.app.legacy}"
+                }
+              },
+              {
+                "client": {
+                  "application": {
+                    "name": "public-web"
+                  }
+                },
+                "user_agent": {
+                  "version": "131.0"
+                }
+              }
+            ],
+            [
+              {
+                "client": {
+                  "geo": {
+                    "country_iso_code": "${param.countries.0}"
+                  }
+                }
+              },
+              {
+                "client": {
+                  "geo": {
+                    "country_iso_code": "${param.countries.1}"
+                  }
+                }
+              },
+              {
+                "client": {
+                  "geo": {
+                    "country_iso_code": "${param.countries.2}"
+                  }
+                }
+              },
+              {
+                "client": {
+                  "geo": {
+                    "country_iso_code": "${param.countries.3}"
+                  }
+                }
+              }
+            ]
           ]
         }
+      ],
+      "signal_cycles": [
+        [
+          {
+            "client": {
+              "application": {
+                "name": "${param.clients.0}"
+              }
+            }
+          },
+          {
+            "client": {
+              "application": {
+                "name": "${param.clients.1}"
+              }
+            }
+          },
+          {
+            "client": {
+              "application": {
+                "name": "${param.clients.2}"
+              }
+            }
+          }
+        ],
+        [
+          {
+            "client": {
+              "geo": {
+                "country_iso_code": "${param.countries.0}"
+              }
+            }
+          },
+          {
+            "client": {
+              "geo": {
+                "country_iso_code": "${param.countries.1}"
+              }
+            }
+          },
+          {
+            "client": {
+              "geo": {
+                "country_iso_code": "${param.countries.2}"
+              }
+            }
+          }
+        ],
+        [
+          {
+            "user_agent": {
+              "version": "${param.app.new}"
+            }
+          },
+          {
+            "user_agent": {
+              "version": "${param.app.current}"
+            }
+          },
+          {
+            "user_agent": {
+              "version": "${param.app.legacy}"
+            }
+          }
+        ]
       ]
     },
     "readiness_validators": [
-      {"id": "seeded-signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.message}"}}}
+      {
+        "id": "seeded-signal",
+        "kind": "es_count",
+        "minimum": 20,
+        "query": {
+          "term": {
+            "message.keyword": "${param.incident.message}"
+          }
+        }
+      }
     ]
   },
-  "starting_view": {"app": "discover", "saved_object": "incident-investigation", "path": "/app/discover#/view/incident-investigation"},
+  "starting_view": {
+    "app": "discover",
+    "saved_object": "incident-investigation",
+    "path": "/app/discover#/view/incident-investigation?_a=(columns:!('@timestamp',event.outcome,authentication.rejection_reason,client.application.name,client.geo.country_iso_code,user_agent.version))"
+  },
   "truth": {
     "answers": {
       "finding": "${param.incident.reason}",
-      "scope": "${param.incident.client}",
-      "conclusion": "The unusual ${param.incident.reason} rejections all come from the ${param.incident.client} client."
+      "scope": "${param.facet.field}: ${param.facet.value}",
+      "conclusion": "The unusual ${param.incident.reason} rejections all come from ${param.facet.who}."
     },
     "assertions": [
-      {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "${param.incident.message}"}}},
-      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "${param.incident.client} ${param.incident.detail}"}}},
-      {"id": "healthy_in_view", "kind": "es_count", "maximum": 0, "query": {"term": {"event.outcome.keyword": "success"}}}
-    ]
+      {
+        "id": "signal",
+        "kind": "es_count",
+        "minimum": 20,
+        "query": {
+          "term": {
+            "message.keyword": "${param.incident.message}"
+          }
+        }
+      },
+      {
+        "id": "corroboration",
+        "kind": "es_count",
+        "minimum": 1,
+        "query": {
+          "bool": {
+            "filter": [
+              {
+                "term": {
+                  "authentication.rejection_reason.keyword": "${param.incident.reason}"
+                }
+              },
+              {
+                "term": {
+                  "${param.facet.field}.keyword": "${param.facet.value}"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "everyday_in_view",
+        "kind": "es_count",
+        "maximum": 0,
+        "query": {
+          "bool": {
+            "filter": [
+              {
+                "exists": {
+                  "field": "authentication.rejection_reason"
+                }
+              }
+            ],
+            "must_not": [
+              {
+                "term": {
+                  "authentication.rejection_reason.keyword": "${param.incident.reason}"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "healthy_in_view",
+        "kind": "es_count",
+        "maximum": 0,
+        "query": {
+          "term": {
+            "event.outcome.keyword": "success"
+          }
+        }
+      }
+    ],
+    "accept": {
+      "scope": [
+        "${param.facet.value}"
+      ]
+    }
   },
   "answer_schema": {
     "type": "diagnosis",
     "fields": [
-      {"id": "finding", "label": "Rejection reason", "kind": "string", "weight": 2},
-      {"id": "scope", "label": "Affected client", "kind": "string", "weight": 1},
-      {"id": "conclusion", "label": "Conclusion", "kind": "statement", "mentions": ["finding", "scope"], "weight": 1},
-      {"id": "evidence", "label": "Evidence", "kind": "text", "scored": false}
+      {
+        "id": "finding",
+        "label": "Rejection reason",
+        "kind": "string",
+        "weight": 2
+      },
+      {
+        "id": "scope",
+        "label": "Who it affects",
+        "kind": "string",
+        "weight": 1,
+        "placeholder": "A field and its value"
+      },
+      {
+        "id": "conclusion",
+        "label": "Conclusion",
+        "kind": "statement",
+        "mentions": [
+          "finding",
+          "scope"
+        ],
+        "weight": 1
+      },
+      {
+        "id": "evidence",
+        "label": "Evidence",
+        "kind": "text",
+        "scored": false
+      }
     ]
   },
   "playbook": "playbook.json",
   "rubric": "rubric.json",
-  "cleanup": {"delete_space": true, "delete_run_data": true, "managed_resources": []}
+  "cleanup": {
+    "delete_space": true,
+    "delete_run_data": true,
+    "managed_resources": []
+  }
 }

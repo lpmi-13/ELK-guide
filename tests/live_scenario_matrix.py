@@ -177,15 +177,20 @@ def template(scenario_id):
     return controller.load_template(scenario_id)
 
 
-def choices(scenario_id):
+def choices(scenario_id, parameters=None):
+    """Each ``choose`` (or ``groups``) parameter's options. An option can name another drawn value (a
+    facet's value is the run's new version), so given a run's parameters the options read as that run
+    would have drawn them."""
     specs = template(scenario_id).get("parameters") or {}
-    return {name: spec["choose"] for name, spec in specs.items() if isinstance(spec, dict) and "choose" in spec}
+    options = {name: spec.get("choose") or [option for group in spec["groups"] for option in group]
+               for name, spec in specs.items() if isinstance(spec, dict) and ("choose" in spec or "groups" in spec)}
+    return controller._apply_parameters(options, parameters) if parameters else options
 
 
 def chosen_indices(scenario_id, key):
     seed, _ = controller.scenario_key_seed(key)
     parameters = controller.choose_parameters(template(scenario_id).get("parameters") or {}, seed)
-    return {(name, options.index(parameters[name])) for name, options in choices(scenario_id).items()}
+    return {(name, options.index(parameters[name])) for name, options in choices(scenario_id, parameters).items()}
 
 
 def variant_keys(scenario_id, cover=True):
@@ -229,7 +234,7 @@ def distractor_values(manifest, finding):
     distractor events, or the pack's declared classic wrong answer."""
     values = []
     parameters = manifest.get("parameters") or {}
-    for name, options in choices(manifest["template_id"]).items():
+    for name, options in choices(manifest["template_id"], parameters).items():
         for path, value in leaves(parameters.get(name) if isinstance(parameters.get(name), dict) else {}):
             if str(value) == str(finding):
                 values += [str(other) for option in options if (other := lookup(option, path)) is not None and str(other) != str(finding)]
@@ -300,7 +305,7 @@ def check_distractor_evidence(manifest):
     """Another variant's decisive evidence must be absent from this run."""
     parameters = manifest.get("parameters") or {}
     results = {}
-    for name, options in choices(manifest["template_id"]).items():
+    for name, options in choices(manifest["template_id"], parameters).items():
         other = next((option for option in options if option != parameters.get(name)), None)
         if other is None:
             continue

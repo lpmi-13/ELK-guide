@@ -289,7 +289,8 @@ def _choose_parameter(spec, generator):
     """Deterministically select one value for a declared scenario parameter.
 
     Supported declarations mirror the Parameterized Scenario Contract in PLAN.md §14:
-    ``choose`` picks one entry (a scalar or a correlated bundle) uniformly, while
+    ``choose`` picks one entry (a scalar or a correlated bundle) uniformly, and ``groups``
+    picks a group of entries uniformly and then one entry in it, while
     ``integer``/``decimal`` pick from an inclusive stepped range. ``sample`` picks
     ``count`` different entries in a random order, so one pool can supply the value to
     find and the everyday values around it without repeating one. ``release`` draws a
@@ -305,6 +306,9 @@ def _choose_parameter(spec, generator):
         return merged
     if isinstance(spec, dict) and "choose" in spec:
         return copy.deepcopy(generator.choice(spec["choose"]))
+    if isinstance(spec, dict) and "groups" in spec:
+        # One group, then one entry in it: a group with few entries is as likely as a large one.
+        return copy.deepcopy(generator.choice(generator.choice(spec["groups"])))
     if isinstance(spec, dict) and "sample" in spec:
         pool = spec["sample"]
         return copy.deepcopy(generator.sample(pool, int(spec.get("count", len(pool)))))
@@ -323,7 +327,10 @@ def _choose_parameter(spec, generator):
 
 
 def _apply_parameters(value, parameters):
-    """Substitute ``${param.<path>}`` tokens, preserving the native type of whole-token strings."""
+    """Substitute ``${param.<path>}`` tokens, preserving the native type of whole-token strings.
+
+    A dict's keys take tokens too, so an overlay can name a field the run draws
+    (``"set": {"${param.facet.field}": ...}``); a key always stays a string."""
     if isinstance(value, str):
         whole = PARAM_TOKEN.fullmatch(value)
         if whole:
@@ -336,21 +343,36 @@ def _apply_parameters(value, parameters):
 
         return PARAM_TOKEN.sub(replace, value)
     if isinstance(value, dict):
-        return {key: _apply_parameters(item, parameters) for key, item in value.items()}
+        return {(str(_apply_parameters(key, parameters)) if isinstance(key, str) else key): _apply_parameters(item, parameters)
+                for key, item in value.items()}
     if isinstance(value, list):
         return [_apply_parameters(item, parameters) for item in value]
     return value
 
 
+# Parameters can name each other (a facet whose value is the run's new version), at most this deep.
+PARAMETER_REFERENCE_DEPTH = 4
+
+
 def choose_parameters(param_specs, seed):
-    """Choose a concrete value for every declared parameter, seeded for reproducibility."""
+    """Choose a concrete value for every declared parameter, seeded for reproducibility.
+
+    A drawn value may name another parameter's (``"value": "${param.incident.new_version}"``), so
+    one draw (which field holds the answer) can point at a value drawn on its own (the version).
+    Those references are resolved once everything is drawn."""
     generator = random.Random(f"parameters:{seed}")
-    return {name: _choose_parameter(spec, generator) for name, spec in param_specs.items()}
+    chosen = {name: _choose_parameter(spec, generator) for name, spec in param_specs.items()}
+    for _depth in range(PARAMETER_REFERENCE_DEPTH):
+        resolved = _apply_parameters(chosen, chosen)
+        if resolved == chosen:
+            break
+        chosen = resolved
+    return chosen
 
 
 def _is_drawn(spec):
     """Whether a parameter is drawn per run (a literal constant is the same in every run)."""
-    return isinstance(spec, dict) and any(kind in spec for kind in ("choose", "integer", "decimal", "sample", "release", "merge"))
+    return isinstance(spec, dict) and any(kind in spec for kind in ("choose", "groups", "integer", "decimal", "sample", "release", "merge"))
 
 
 def _leaves(value, path=""):
@@ -363,25 +385,29 @@ def _leaves(value, path=""):
 
 
 def _fixed_leaves(name, spec):
-    """The scalars of a ``choose`` that every option shares, so no run can differ in them."""
-    if isinstance(spec, dict) and "merge" in spec:
-        return set().union(*(_fixed_leaves(name, part) for part in spec["merge"]))
-    if not isinstance(spec, dict) or "choose" not in spec or len(spec["choose"]) < 2:
+    """The scalars of a ``choose`` (or ``groups``) that every option shares, so no run can differ in them."""
+    if not isinstance(spec, dict):
         return set()
-    options = [_leaves(option, name) for option in spec["choose"]]
+    if "merge" in spec:
+        return set().union(*(_fixed_leaves(name, part) for part in spec["merge"]))
+    choices = spec.get("choose") or [option for group in spec.get("groups") or [] for option in group]
+    if len(choices) < 2:
+        return set()
+    options = [_leaves(option, name) for option in choices]
     return {path for path in options[0] if all(option.get(path) == options[0][path] for option in options)}
 
 
 def drawn_values(param_specs, scenario_key):
     """What a scenario key draws for a pack: the scalars of each drawn parameter that can differ from
-    run to run, by dotted path."""
+    run to run, by dotted path. A true/false leaf is a switch (a fourth retry or not), not a value a
+    learner reads or filters on, so it is left out."""
     seed, _ = scenario_key_seed(scenario_key)
     chosen = choose_parameters(param_specs, seed)
     values = {}
     for name, spec in param_specs.items():
         if _is_drawn(spec):
             fixed = _fixed_leaves(name, spec)
-            values.update({path: value for path, value in _leaves(chosen[name], name).items() if path not in fixed})
+            values.update({path: value for path, value in _leaves(chosen[name], name).items() if path not in fixed and not isinstance(value, bool)})
     return values
 
 
@@ -727,10 +753,48 @@ def _event_template(manifest, timestamp, trace_id, sequence):
     }
 
 
+def _set_path(document, dotted, value):
+    """Write ``value`` at a dotted field path (``host.name``), creating the objects on the way."""
+    current = document
+    parts = dotted.split(".")
+    for part in parts[:-1]:
+        if not isinstance(current.get(part), dict):
+            current[part] = {}
+        current = current[part]
+    current[parts[-1]] = copy.deepcopy(value)
+
+
+def _apply_set(document):
+    """Apply an event's ``set`` overlay: dotted field paths written after every other overlay.
+
+    Events are nested dicts with fixed keys, but which field holds a pack's answer can be drawn per
+    run (``"set": {"${param.facet.field}": "${param.facet.value}"}``). Overlays merge their ``set``
+    entries like any other object, and they are written last here, so the drawn field keeps its one
+    value even where a cycle spreads that field across several values for the other draws."""
+    overrides = document.pop("set", None)
+    for dotted, value in (overrides or {}).items():
+        _set_path(document, dotted, value)
+    return document
+
+
+def _cycled(event, cycles, sequence):
+    """Merge one overlay from each cycle, taken in turn by ``sequence``. Cycles of different lengths
+    (three endpoints, four hosts) pair up differently on every row, so each field varies on its own."""
+    for cycle in cycles:
+        if cycle:
+            event = _deep_merge(event, cycle[sequence % len(cycle)])
+    return event
+
+
+def _cycles(profile, single, several):
+    """A profile's cycles: one list under ``single`` (``signal_cycle``), or several under ``several``."""
+    return [*([profile[single]] if profile.get(single) else []), *(profile.get(several) or [])]
+
+
 def _prepare_application_event(event, application, template=None):
     """Normalize generated documents for the application that will read them."""
     template = template or {}
-    prepared = copy.deepcopy(event)
+    prepared = _apply_set(copy.deepcopy(event))
     if application == "metrics" and (_lookup_nested(template, "log") or _lookup_nested(template, "processor.event") == "log"):
         # A pack's log line beside its metrics (a queueing warning, a restart) stays a log, so the host's
         # or pod's Logs tab finds it.
@@ -882,12 +946,13 @@ def _companions_per_signal(manifest, application, generator, companion_index, co
     api-gateway → orders → inventory — into every failing trace, which APM draws as one waterfall.
     """
     documents = []
+    cycles = _substitute(_cycles(companion, "cycle", "cycles"), manifest)
     for position, signal_document in enumerate(signal_documents):
         caller = callers[id(signal_document)] if companion.get("parent") == "previous" else signal_document
         # `offset_ms` places a companion within the request, so a pack can lay out calls one after another.
         started = datetime.fromisoformat(signal_document["@timestamp"]) + timedelta(milliseconds=int(companion.get("offset_ms", 5 * (companion_index + 1))))
         sequence = 2000 + companion_index * 1000 + position
-        event = _deep_merge(_event_template(manifest, started, signal_document["trace"]["id"], sequence), template)
+        event = _cycled(_deep_merge(_event_template(manifest, started, signal_document["trace"]["id"], sequence), template), cycles, position)
         if template.get("processor", {}).get("event") != "log":
             event["parent"] = {"id": _span_or_transaction_id(caller)}
         prepared = _prepare_application_event(event, application, template)
@@ -926,7 +991,10 @@ def generate_seeded_events(manifest):
     signal = _substitute(profile.get("signal", {}), manifest)
     # `signal_cycle` (and a companion's `cycle`) is a list of overlays taken in turn, one per event, so a
     # field can vary across otherwise identical requests: several endpoints, say, rather than one.
-    signal_cycle = [_substitute(item, manifest) for item in profile.get("signal_cycle", [])]
+    # `signal_cycles` (a companion's `cycles`, the background's `noise_cycles`) holds several such
+    # lists, one per field, so each field spreads on its own.
+    signal_cycles = _substitute(_cycles(profile, "signal_cycle", "signal_cycles"), manifest)
+    noise_cycles = _substitute(_cycles(profile, "noise_cycle", "noise_cycles"), manifest)
     distractors = [_substitute(item, manifest) for item in profile.get("distractors", [])]
     excluded_services = set(_substitute(profile.get("noise_exclude_services", []), manifest))
     noise_endpoints = [endpoint for endpoint in _NOISE_ENDPOINTS if endpoint["service"] not in excluded_services] or _NOISE_ENDPOINTS
@@ -941,6 +1009,7 @@ def generate_seeded_events(manifest):
         event = _event_template(manifest, timestamp, trace_id, sequence)
         endpoint = generator.choice(noise_endpoints)
         event = _deep_merge(event, {"service": {"name": endpoint["service"]}, "http": {"request": {"method": endpoint["method"]}}, "url": {"path": endpoint["path"]}, "message": generator.choice(["request completed", "cache refreshed", "token accepted", "background reconciliation completed"])})
+        event = _cycled(event, noise_cycles, sequence)
         if distractors and sequence % 5 == 0:
             event = _deep_merge(event, distractors[sequence % len(distractors)])
         prepared = _prepare_application_event(event, application)
@@ -959,9 +1028,7 @@ def generate_seeded_events(manifest):
         # sharing a trace.id double its spans and draw "the trace document is incomplete" (verified 9.5.2).
         trace_key = sequence if application == "apm" else sequence // 2
         trace_id = representative_trace if sequence == 0 else hashlib.md5(f"{manifest['run_id']}:signal:{trace_key}".encode()).hexdigest()
-        event = _deep_merge(_event_template(manifest, timestamp, trace_id, sequence), signal)
-        if signal_cycle:
-            event = _deep_merge(event, signal_cycle[sequence % len(signal_cycle)])
+        event = _cycled(_deep_merge(_event_template(manifest, timestamp, trace_id, sequence), signal), signal_cycles, sequence)
         prepared = _prepare_application_event(event, application, signal)
         _apply_realism(prepared, generator)
         documents.append(prepared)
@@ -972,9 +1039,12 @@ def generate_seeded_events(manifest):
     # failing trace a learner opens carries the evidence (see _companions_per_signal).
     callers = {id(document): document for document in signal_documents}
     for companion_index, companion in enumerate(profile.get("companions", [])):
+        # A drawn value can leave a companion out (a fourth retry only on runs that draw four attempts).
+        if companion.get("enabled", True) is False:
+            continue
         repeats = int(companion.get("count", 1))
         template = _substitute(companion.get("event", {}), manifest)
-        cycle = [_substitute(item, manifest) for item in companion.get("cycle", [])]
+        cycles = _substitute(_cycles(companion, "cycle", "cycles"), manifest)
         if companion.get("trace") == "each":
             documents.extend(_companions_per_signal(manifest, application, generator, companion_index, companion, template, signal_documents, callers))
             continue
@@ -989,9 +1059,7 @@ def generate_seeded_events(manifest):
             # Companions corroborate the representative request unless they are background of their own
             # (a repetitive warning flood), which must not all claim to be one trace.
             trace_id = representative_trace if companion.get("trace") != "own" else hashlib.md5(f"{manifest['run_id']}:companion:{companion_index}:{sequence}".encode()).hexdigest()
-            event = _deep_merge(_event_template(manifest, timestamp, trace_id, 1000 + companion_index * 100 + sequence), template)
-            if cycle:
-                event = _deep_merge(event, cycle[sequence % len(cycle)])
+            event = _cycled(_deep_merge(_event_template(manifest, timestamp, trace_id, 1000 + companion_index * 100 + sequence), template), cycles, sequence)
             prepared = _prepare_application_event(event, application, template)
             _apply_realism(prepared, generator)
             documents.append(prepared)

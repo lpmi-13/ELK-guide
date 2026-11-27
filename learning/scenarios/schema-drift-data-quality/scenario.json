@@ -1,94 +1,624 @@
 {
   "schema_version": 2,
   "id": "schema-drift-data-quality",
-  "version": 3,
+  "version": 4,
   "title": "Fewer requests than normal on a dashboard",
   "type": "analysis",
   "classification": "core",
   "difficulty": 2,
   "estimated_minutes": 15,
-  "brief": "A dashboard only counts requests that have a value in http.route. That count dropped, but total traffic stayed the same. Find the producer and version that stopped sending http.route.",
-  "skills": ["missing-fields", "field-statistics", "producer-comparison"],
-  "required_capabilities": ["discover", "spaces", "saved_objects"],
+  "brief": "A dashboard only counts requests that have a value in http.route. That count dropped, but total traffic stayed the same. Find what the requests without http.route have in common.",
+  "skills": [
+    "missing-fields",
+    "field-statistics",
+    "producer-comparison"
+  ],
+  "required_capabilities": [
+    "discover",
+    "spaces",
+    "saved_objects"
+  ],
   "parameters": {
-    "incident": {
-      "merge": [
+    "services": {
+      "sample": [
         {
-          "choose": [
-            {"service": "checkout", "route": "/checkout"},
-            {"service": "orders", "route": "/api/orders"},
-            {"service": "payments", "route": "/api/payments"},
-            {"service": "catalog", "route": "/api/catalog"},
-            {"service": "auth", "route": "/api/auth"}
+          "name": "checkout",
+          "route": "/checkout"
+        },
+        {
+          "name": "orders",
+          "route": "/api/orders"
+        },
+        {
+          "name": "payments",
+          "route": "/api/payments"
+        },
+        {
+          "name": "catalog",
+          "route": "/api/catalog"
+        },
+        {
+          "name": "auth",
+          "route": "/api/auth"
+        }
+      ],
+      "count": 3
+    },
+    "versions": {
+      "sample": [
+        "4.8.0",
+        "5.1.0",
+        "2.3.0",
+        "6.0.0",
+        "3.4.0",
+        "1.12.0",
+        "7.2.0",
+        "2.9.1",
+        "5.6.2",
+        "3.10.0"
+      ],
+      "count": 6
+    },
+    "producers": {
+      "sample": [
+        {
+          "new": "telemetry-java/3.2",
+          "old": "telemetry-java/3.1"
+        },
+        {
+          "new": "telemetry-go/2.5",
+          "old": "telemetry-go/2.4"
+        },
+        {
+          "new": "telemetry-node/1.9",
+          "old": "telemetry-node/1.8"
+        },
+        {
+          "new": "telemetry-python/4.0",
+          "old": "telemetry-python/3.9"
+        },
+        {
+          "new": "telemetry-dotnet/1.4",
+          "old": "telemetry-dotnet/1.3"
+        },
+        {
+          "new": "telemetry-ruby/2.2",
+          "old": "telemetry-ruby/2.1"
+        }
+      ],
+      "count": 3
+    },
+    "hosts": {
+      "sample": [
+        "worker-03",
+        "worker-07",
+        "worker-11",
+        "worker-14",
+        "worker-18",
+        "worker-22",
+        "worker-25",
+        "worker-29",
+        "worker-31",
+        "worker-36",
+        "worker-42",
+        "worker-47"
+      ],
+      "count": 5
+    },
+    "volume": {
+      "choose": [
+        {
+          "missing": 27
+        },
+        {
+          "missing": 31
+        },
+        {
+          "missing": 34
+        },
+        {
+          "missing": 38
+        },
+        {
+          "missing": 42
+        }
+      ]
+    },
+    "facet": {
+      "choose": [
+        {
+          "field": "telemetry.producer",
+          "noun": "producer",
+          "others": "service.version and host.name",
+          "value": "${param.producers.0.new}",
+          "miss": [
+            {
+              "name": "${param.services.0.name}",
+              "route": "${param.services.0.route}",
+              "version": "${param.versions.0}"
+            },
+            {
+              "name": "${param.services.1.name}",
+              "route": "${param.services.1.route}",
+              "version": "${param.versions.1}"
+            },
+            {
+              "name": "${param.services.2.name}",
+              "route": "${param.services.2.route}",
+              "version": "${param.versions.2}"
+            }
+          ],
+          "first_ok_version": "${param.versions.0}",
+          "miss_producers": [
+            "${param.producers.0.new}",
+            "${param.producers.0.new}",
+            "${param.producers.0.new}"
+          ],
+          "ok_producers": [
+            "${param.producers.0.old}",
+            "${param.producers.1.new}",
+            "${param.producers.2.new}"
+          ],
+          "ok_hosts": [
+            "${param.hosts.0}",
+            "${param.hosts.1}",
+            "${param.hosts.2}",
+            "${param.hosts.3}"
           ]
         },
         {
-          "choose": [
-            {"producer": "telemetry-java/3.2", "good_producer": "telemetry-java/3.1"},
-            {"producer": "telemetry-go/2.5", "good_producer": "telemetry-go/2.4"},
-            {"producer": "telemetry-node/1.9", "good_producer": "telemetry-node/1.8"},
-            {"producer": "telemetry-python/4.0", "good_producer": "telemetry-python/3.9"},
-            {"producer": "telemetry-dotnet/1.4", "good_producer": "telemetry-dotnet/1.3"},
-            {"producer": "telemetry-ruby/2.2", "good_producer": "telemetry-ruby/2.1"}
+          "field": "service.version",
+          "noun": "version",
+          "others": "telemetry.producer and host.name",
+          "value": "${param.versions.0}",
+          "miss": [
+            {
+              "name": "${param.services.0.name}",
+              "route": "${param.services.0.route}",
+              "version": "${param.versions.0}"
+            },
+            {
+              "name": "${param.services.0.name}",
+              "route": "${param.services.0.route}",
+              "version": "${param.versions.0}"
+            },
+            {
+              "name": "${param.services.0.name}",
+              "route": "${param.services.0.route}",
+              "version": "${param.versions.0}"
+            }
+          ],
+          "first_ok_version": "${param.versions.3}",
+          "miss_producers": [
+            "${param.producers.0.new}",
+            "${param.producers.0.old}",
+            "${param.producers.0.new}"
+          ],
+          "ok_producers": [
+            "${param.producers.0.new}",
+            "${param.producers.0.old}",
+            "${param.producers.1.new}"
+          ],
+          "ok_hosts": [
+            "${param.hosts.0}",
+            "${param.hosts.1}",
+            "${param.hosts.2}",
+            "${param.hosts.3}"
           ]
         },
-        {"choose": [{"version": "4.8.0"}, {"version": "5.1.0"}, {"version": "2.3.0"}, {"version": "6.0.0"}, {"version": "3.4.0"}]}
+        {
+          "field": "host.name",
+          "noun": "host",
+          "others": "telemetry.producer and service.version",
+          "value": "${param.hosts.0}",
+          "miss": [
+            {
+              "name": "${param.services.0.name}",
+              "route": "${param.services.0.route}",
+              "version": "${param.versions.0}"
+            },
+            {
+              "name": "${param.services.1.name}",
+              "route": "${param.services.1.route}",
+              "version": "${param.versions.1}"
+            },
+            {
+              "name": "${param.services.2.name}",
+              "route": "${param.services.2.route}",
+              "version": "${param.versions.2}"
+            }
+          ],
+          "first_ok_version": "${param.versions.0}",
+          "miss_producers": [
+            "${param.producers.0.new}",
+            "${param.producers.1.new}",
+            "${param.producers.2.old}"
+          ],
+          "ok_producers": [
+            "${param.producers.0.new}",
+            "${param.producers.1.new}",
+            "${param.producers.2.old}"
+          ],
+          "ok_hosts": [
+            "${param.hosts.1}",
+            "${param.hosts.2}",
+            "${param.hosts.3}",
+            "${param.hosts.4}"
+          ]
+        }
       ]
     }
   },
   "provisioning": {
-    "strategies": ["seeded-events", "saved-objects"],
+    "strategies": [
+      "seeded-events",
+      "saved-objects"
+    ],
     "seeded_events": {
-      "signal_count": 34,
+      "signal_count": "${param.volume.missing}",
       "noise_count": 90,
       "signal": {
-        "service": {"name": "${param.incident.service}", "version": "${param.incident.version}"},
-        "telemetry": {"producer": "${param.incident.producer}"},
-        "schema": {"route_present": false},
-        "message": "request recorded without expected route field"
+        "schema": {
+          "route_present": false
+        },
+        "message": "request recorded without expected route field",
+        "set": {
+          "${param.facet.field}": "${param.facet.value}"
+        }
       },
-      "distractors": [
-        {"telemetry": {"producer": "${param.incident.good_producer}"}, "schema": {"route_present": true}, "http": {"route": "${param.incident.route}"}}
-      ],
       "companions": [
         {
-          "count": 3,
+          "count": 64,
+          "offset_seconds": 25,
+          "interval_seconds": 52,
+          "trace": "own",
           "event": {
-            "service": {"name": "${param.incident.service}", "version": "${param.incident.version}"},
-            "telemetry": {"producer": "${param.incident.producer}"},
-            "schema": {"route_present": false},
-            "message": "traffic volume unchanged despite missing route"
-          }
+            "schema": {
+              "route_present": true
+            },
+            "message": "request completed"
+          },
+          "cycles": [
+            [
+              {
+                "service": {
+                  "name": "${param.services.0.name}",
+                  "version": "${param.facet.first_ok_version}"
+                },
+                "url": {
+                  "path": "${param.services.0.route}"
+                },
+                "http": {
+                  "route": "${param.services.0.route}"
+                }
+              },
+              {
+                "service": {
+                  "name": "${param.services.1.name}",
+                  "version": "${param.versions.1}"
+                },
+                "url": {
+                  "path": "${param.services.1.route}"
+                },
+                "http": {
+                  "route": "${param.services.1.route}"
+                }
+              },
+              {
+                "service": {
+                  "name": "${param.services.2.name}",
+                  "version": "${param.versions.2}"
+                },
+                "url": {
+                  "path": "${param.services.2.route}"
+                },
+                "http": {
+                  "route": "${param.services.2.route}"
+                }
+              },
+              {
+                "service": {
+                  "name": "${param.services.0.name}",
+                  "version": "${param.versions.3}"
+                },
+                "url": {
+                  "path": "${param.services.0.route}"
+                },
+                "http": {
+                  "route": "${param.services.0.route}"
+                }
+              },
+              {
+                "service": {
+                  "name": "${param.services.1.name}",
+                  "version": "${param.versions.4}"
+                },
+                "url": {
+                  "path": "${param.services.1.route}"
+                },
+                "http": {
+                  "route": "${param.services.1.route}"
+                }
+              },
+              {
+                "service": {
+                  "name": "${param.services.2.name}",
+                  "version": "${param.versions.5}"
+                },
+                "url": {
+                  "path": "${param.services.2.route}"
+                },
+                "http": {
+                  "route": "${param.services.2.route}"
+                }
+              }
+            ],
+            [
+              {
+                "telemetry": {
+                  "producer": "${param.facet.ok_producers.0}"
+                }
+              },
+              {
+                "telemetry": {
+                  "producer": "${param.facet.ok_producers.1}"
+                }
+              },
+              {
+                "telemetry": {
+                  "producer": "${param.facet.ok_producers.2}"
+                }
+              }
+            ],
+            [
+              {
+                "host": {
+                  "name": "${param.facet.ok_hosts.0}"
+                },
+                "service": {
+                  "node": {
+                    "name": "${param.facet.ok_hosts.0}"
+                  }
+                }
+              },
+              {
+                "host": {
+                  "name": "${param.facet.ok_hosts.1}"
+                },
+                "service": {
+                  "node": {
+                    "name": "${param.facet.ok_hosts.1}"
+                  }
+                }
+              },
+              {
+                "host": {
+                  "name": "${param.facet.ok_hosts.2}"
+                },
+                "service": {
+                  "node": {
+                    "name": "${param.facet.ok_hosts.2}"
+                  }
+                }
+              },
+              {
+                "host": {
+                  "name": "${param.facet.ok_hosts.3}"
+                },
+                "service": {
+                  "node": {
+                    "name": "${param.facet.ok_hosts.3}"
+                  }
+                }
+              }
+            ]
+          ]
         }
+      ],
+      "signal_cycles": [
+        [
+          {
+            "service": {
+              "name": "${param.facet.miss.0.name}",
+              "version": "${param.facet.miss.0.version}"
+            },
+            "url": {
+              "path": "${param.facet.miss.0.route}"
+            }
+          },
+          {
+            "service": {
+              "name": "${param.facet.miss.1.name}",
+              "version": "${param.facet.miss.1.version}"
+            },
+            "url": {
+              "path": "${param.facet.miss.1.route}"
+            }
+          },
+          {
+            "service": {
+              "name": "${param.facet.miss.2.name}",
+              "version": "${param.facet.miss.2.version}"
+            },
+            "url": {
+              "path": "${param.facet.miss.2.route}"
+            }
+          }
+        ],
+        [
+          {
+            "telemetry": {
+              "producer": "${param.facet.miss_producers.0}"
+            }
+          },
+          {
+            "telemetry": {
+              "producer": "${param.facet.miss_producers.1}"
+            }
+          },
+          {
+            "telemetry": {
+              "producer": "${param.facet.miss_producers.2}"
+            }
+          }
+        ],
+        [
+          {
+            "host": {
+              "name": "${param.hosts.0}"
+            },
+            "service": {
+              "node": {
+                "name": "${param.hosts.0}"
+              }
+            }
+          },
+          {
+            "host": {
+              "name": "${param.hosts.1}"
+            },
+            "service": {
+              "node": {
+                "name": "${param.hosts.1}"
+              }
+            }
+          },
+          {
+            "host": {
+              "name": "${param.hosts.2}"
+            },
+            "service": {
+              "node": {
+                "name": "${param.hosts.2}"
+              }
+            }
+          },
+          {
+            "host": {
+              "name": "${param.hosts.3}"
+            },
+            "service": {
+              "node": {
+                "name": "${param.hosts.3}"
+              }
+            }
+          }
+        ]
       ]
     },
     "readiness_validators": [
-      {"id": "seeded-signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "request recorded without expected route field"}}}
+      {
+        "id": "seeded-signal",
+        "kind": "es_count",
+        "minimum": 20,
+        "query": {
+          "term": {
+            "message.keyword": "request recorded without expected route field"
+          }
+        }
+      }
     ]
   },
-  "starting_view": {"app": "discover", "saved_object": "incident-investigation", "path": "/app/discover#/view/incident-investigation"},
+  "starting_view": {
+    "app": "discover",
+    "saved_object": "incident-investigation",
+    "path": "/app/discover#/view/incident-investigation?_a=(columns:!('@timestamp',schema.route_present,telemetry.producer,service.version,host.name))"
+  },
   "truth": {
     "answers": {
-      "finding": "${param.incident.producer}",
-      "scope": "service.version ${param.incident.version}",
-      "conclusion": "The ${param.incident.producer} producer on version ${param.incident.version} stopped sending http.route. The number of requests did not fall."
+      "finding": "${param.facet.field}: ${param.facet.value}",
+      "scope": "${param.volume.missing}",
+      "conclusion": "Every request recorded without http.route had ${param.facet.field} ${param.facet.value}, and none with a route did. The number of requests did not fall."
     },
-    "accept": {"scope": ["${param.incident.version}"]},
+    "accept": {
+      "finding": [
+        "${param.facet.value}"
+      ]
+    },
     "assertions": [
-      {"id": "signal", "kind": "es_count", "minimum": 20, "query": {"term": {"message.keyword": "request recorded without expected route field"}}},
-      {"id": "corroboration", "kind": "es_count", "minimum": 1, "query": {"term": {"message.keyword": "traffic volume unchanged despite missing route"}}}
+      {
+        "id": "signal",
+        "kind": "es_count",
+        "minimum": 20,
+        "query": {
+          "term": {
+            "message.keyword": "request recorded without expected route field"
+          }
+        }
+      },
+      {
+        "id": "corroboration",
+        "kind": "es_count",
+        "minimum": 1,
+        "query": {
+          "bool": {
+            "filter": [
+              {
+                "term": {
+                  "schema.route_present": false
+                }
+              },
+              {
+                "term": {
+                  "${param.facet.field}.keyword": "${param.facet.value}"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "with_route_in_view",
+        "kind": "es_count",
+        "maximum": 0,
+        "query": {
+          "term": {
+            "schema.route_present": true
+          }
+        }
+      }
     ]
   },
   "answer_schema": {
     "type": "comparison",
     "fields": [
-      {"id": "finding", "label": "Producer", "kind": "string", "weight": 2},
-      {"id": "scope", "label": "Affected version", "kind": "string", "weight": 1},
-      {"id": "conclusion", "label": "Conclusion", "kind": "statement", "mentions": ["finding", "scope"], "weight": 1},
-      {"id": "evidence", "label": "Evidence", "kind": "text", "scored": false}
+      {
+        "id": "finding",
+        "label": "What the requests without a route share",
+        "kind": "string",
+        "weight": 2,
+        "placeholder": "A field and its value"
+      },
+      {
+        "id": "scope",
+        "label": "Requests without a route in the window",
+        "kind": "number",
+        "tolerance": 0,
+        "weight": 1,
+        "placeholder": "The hit count for them"
+      },
+      {
+        "id": "conclusion",
+        "label": "Conclusion",
+        "kind": "statement",
+        "mentions": [
+          "finding"
+        ],
+        "weight": 1
+      },
+      {
+        "id": "evidence",
+        "label": "Evidence",
+        "kind": "text",
+        "scored": false
+      }
     ]
   },
   "playbook": "playbook.json",
   "rubric": "rubric.json",
-  "cleanup": {"delete_space": true, "delete_run_data": true, "managed_resources": []}
+  "cleanup": {
+    "delete_space": true,
+    "delete_run_data": true,
+    "managed_resources": []
+  }
 }

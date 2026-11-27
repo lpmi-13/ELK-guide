@@ -31,12 +31,17 @@ class SurfaceDataTests(unittest.TestCase):
         cls.evaluator = load_module("evaluator_surfaces", ROOT / "learning-service/engine/evaluator.py")
 
     def documents(self, pack, seed=7):
+        documents, streams, _parameters = self.run_data(pack, seed)
+        return documents, streams
+
+    def run_data(self, pack, seed=7):
+        """A run's seeded documents, as stored and as each application reads them, and the values it drew."""
         template = json.loads((ROOT / "learning/scenarios" / pack / "scenario.json").read_text())
         manifest = self.controller.materialize(template, seed, run_id=f"run-{seed:012d}")
         application = manifest["scenario"]["starting_view"]["app"]
         documents = self.controller.generate_seeded_events(manifest)
         streams = [self.controller._application_document(document, application, manifest) for document in documents]
-        return documents, streams
+        return documents, streams, manifest["parameters"]
 
     def test_apm_errors_carry_a_grouping_key_and_transactions_drop_their_span(self):
         # APM's trace API rejects an error without error.grouping_key, and a transaction that still
@@ -52,42 +57,46 @@ class SurfaceDataTests(unittest.TestCase):
         self.assertFalse([document for document in transactions if "span" in document])
 
     def test_every_failing_trace_carries_the_whole_call_chain(self):
-        documents, _streams = self.documents("trace-error-propagation")
-        edge = [document for document in documents if document["service"]["name"] == "api-gateway" and document.get("message") == "edge returned generic downstream failure" and document["processor"]["event"] == "transaction"]
-        self.assertEqual(len(edge), 34)
-        by_parent = {}
-        for document in documents:
-            if document["processor"]["event"] == "transaction" and document.get("parent"):
-                by_parent.setdefault((document["trace"]["id"], document["parent"]["id"]), []).append(document)
-        for request in edge:
-            orders = by_parent[(request["trace"]["id"], request["transaction"]["id"])]
-            self.assertEqual([item["service"]["name"] for item in orders], ["orders"])
-            inventory = by_parent[(request["trace"]["id"], orders[0]["span"]["id"])]
-            self.assertEqual([(item["service"]["name"], item["span"]["name"], item["error"]["type"]) for item in inventory],
-                             [("inventory", "reserve stock", "InventoryReservationRace")])
+        for seed in (7, 8, 9, 10):
+            documents, _streams, parameters = self.run_data("trace-error-propagation", seed)
+            chain = parameters["incident"]
+            edge = [document for document in documents if document["service"]["name"] == chain["edge"] and document.get("message") == "edge returned generic downstream failure" and document["processor"]["event"] == "transaction"]
+            self.assertEqual(len(edge), 34)
+            by_parent = {}
+            for document in documents:
+                if document["processor"]["event"] == "transaction" and document.get("parent"):
+                    by_parent.setdefault((document["trace"]["id"], document["parent"]["id"]), []).append(document)
+            for request in edge:
+                caller = by_parent[(request["trace"]["id"], request["transaction"]["id"])]
+                self.assertEqual([item["service"]["name"] for item in caller], [chain["caller"]])
+                origin = by_parent[(request["trace"]["id"], caller[0]["span"]["id"])]
+                self.assertEqual([(item["service"]["name"], item["span"]["name"], item["error"]["type"]) for item in origin],
+                                 [(chain["origin"], chain["origin_span"], chain["error_type"])])
 
     def test_every_failing_payment_trace_has_its_application_log(self):
-        documents, streams = self.documents("trace-log-correlation")
+        documents, streams, parameters = self.run_data("trace-log-correlation")
         failing = {document["trace"]["id"] for document in documents if document.get("message") == "trace span failed without full context"}
-        logs = [(stream, document) for stream, document in streams if document.get("message") == "issuer timed out after authorization deadline"]
+        logs = [(stream, document) for stream, document in streams if document.get("message") == parameters["incident"]["log_message"]]
+        self.assertTrue(logs)
         self.assertEqual({document["trace"]["id"] for _stream, document in logs}, failing)
         self.assertTrue(all(stream.startswith("logs-") for stream, _document in logs))
 
     def test_a_failed_request_reports_its_http_result(self):
-        documents, _streams = self.documents("trace-error-propagation")
-        edge = next(document for document in documents if document["service"]["name"] == "api-gateway" and document["processor"]["event"] == "transaction")
+        documents, _streams, parameters = self.run_data("trace-error-propagation")
+        edge = next(document for document in documents if document["service"]["name"] == parameters["incident"]["edge"] and document["processor"]["event"] == "transaction")
         self.assertEqual(edge["transaction"]["result"], "HTTP 5xx")
 
     def test_host_metrics_are_system_module_samples_with_healthy_peers(self):
-        documents, streams = self.documents("cpu-saturation")
+        documents, streams, parameters = self.run_data("cpu-saturation")
         metrics = [document for stream, document in streams if stream and stream.startswith("metrics-")]
         self.assertTrue(metrics)
         self.assertEqual({document["event"]["module"] for document in metrics}, {"system"})
         peers = [document["system"]["cpu"]["total"]["norm"]["pct"] for document in metrics if document["host"]["name"].startswith("instance-")]
         self.assertTrue(peers)
         self.assertTrue(all(0.12 <= value <= 0.42 for value in peers))
-        outlier = {document["system"]["cpu"]["total"]["norm"]["pct"] for document in metrics if document["host"]["name"] == "checkout-03"}
-        self.assertEqual(outlier, {0.97})
+        host = f'{parameters["incident"]["service"]}-{parameters["node"]}'
+        outlier = {document["system"]["cpu"]["total"]["norm"]["pct"] for document in metrics if document["host"]["name"] == host}
+        self.assertEqual(outlier, {parameters["cpu"]["fraction"]})
         # The queueing warning is the host's log line, not a metric sample.
         warnings = [stream for stream, document in streams if document.get("message") == "request queueing aligned with CPU peak"]
         self.assertTrue(warnings)
@@ -96,19 +105,21 @@ class SurfaceDataTests(unittest.TestCase):
     def test_pod_metrics_are_the_kubernetes_pod_metricset(self):
         # The pods view needs kubernetes.pod.uid, and reads memory against the pod's limit only when
         # usage against its node is reported too.
-        documents, streams = self.documents("memory-leak-and-restarts")
+        documents, streams, parameters = self.run_data("memory-leak-and-restarts")
+        service, neighbour = parameters["services"]
+        names = [f"{service}-{parameters['pods'][0]}", f"{service}-{parameters['pods'][1]}", f"{service}-{parameters['pods'][2]}", f"{neighbour}-{parameters['pods'][3]}"]
         pods = [document for stream, document in streams if stream and stream.startswith("metrics-kubernetes.pod-")]
-        self.assertEqual({document["kubernetes"]["pod"]["name"] for document in pods}, {"catalog-7d8f", "catalog-5c2a", "catalog-9b1e", "orders-3f6c"})
+        self.assertEqual({document["kubernetes"]["pod"]["name"] for document in pods}, set(names))
         for document in pods:
             self.assertEqual((document["event"]["module"], document["metricset"]["name"]), ("kubernetes", "pod"))
             self.assertEqual(document["kubernetes"]["pod"]["uid"], document["kubernetes"]["pod"]["name"])
             self.assertIn("pct", document["kubernetes"]["pod"]["memory"]["usage"]["limit"])
             self.assertIn("pct", document["kubernetes"]["pod"]["memory"]["usage"]["node"])
-        leaking = {document["kubernetes"]["pod"]["memory"]["usage"]["limit"]["pct"] for document in pods if document["kubernetes"]["pod"]["name"] == "catalog-7d8f"}
-        self.assertEqual(leaking, {0.94})
-        restarts = [(stream, document) for stream, document in streams if document.get("message") == "first catalog pod restart"]
+        leaking = {document["kubernetes"]["pod"]["memory"]["usage"]["limit"]["pct"] for document in pods if document["kubernetes"]["pod"]["name"] == names[0]}
+        self.assertEqual(leaking, {parameters["memory"]["fraction"]})
+        restarts = [(stream, document) for stream, document in streams if document.get("message") == f"first {service} pod restart"]
         self.assertTrue(restarts)
-        self.assertTrue(all(stream.startswith("logs-") and document["kubernetes"]["pod"]["uid"] == "catalog-7d8f" for stream, document in restarts))
+        self.assertTrue(all(stream.startswith("logs-") and document["kubernetes"]["pod"]["uid"] == names[0] for stream, document in restarts))
 
     def test_a_validator_value_naming_the_answer_resolves_to_it(self):
         # Playbooks are stored unsubstituted, so "${truth.finding}" must resolve when the evaluator
@@ -154,10 +165,11 @@ class SurfaceDataTests(unittest.TestCase):
                     self.assertIsNotNone(self.controller._lookup_nested(reading, "system.cpu.total.norm.pct"))
                     self.assertIsNotNone(self.controller._lookup_nested(reading, "system.memory.actual.used.pct"))
                 # The outlier keeps its own reading.
-                signal = template["provisioning"]["seeded_events"]["signal"]
+                signal = manifest["scenario"]["provisioning"]["seeded_events"]["signal"]
                 outlier = self.controller._lookup_nested(signal, "kubernetes.pod.name") or self.controller._lookup_nested(signal, "host.name")
                 path = "system.memory.actual.used.pct" if pack == "memory-leak-and-restarts" else "system.cpu.total.norm.pct"
                 wanted = self.controller._lookup_nested(signal, path)
+                self.assertTrue([reading for reading in tail if entity(reading) == outlier])
                 self.assertTrue(all(self.controller._lookup_nested(reading, path) == wanted for reading in tail if entity(reading) == outlier))
 
     def test_the_metric_tail_never_reaches_other_surfaces_or_the_runs_own_index(self):
@@ -167,34 +179,43 @@ class SurfaceDataTests(unittest.TestCase):
         documents = self.controller.generate_seeded_events(manifest)
         self.assertEqual(self.controller._metric_tail(manifest, documents, "apm", datetime.now(timezone.utc)), [])
 
-    def test_every_retry_trace_shows_its_three_attempts_one_after_another(self):
+    def test_every_retry_trace_shows_each_attempt_one_after_another(self):
         # A learner may open any trace sample, so each must carry the spans the step reads; a transaction
         # without its own duration is drawn at APM's 120 ms default, shorter than its calls.
-        documents, _streams = self.documents("retry-amplification")
-        transactions = [document for document in documents if document.get("processor", {}).get("event") == "transaction" and document.get("transaction", {}).get("name") == "POST /checkout" and document.get("retry", {}).get("count") == 3]
-        self.assertTrue(transactions)
-        spans = [document for document in documents if document.get("processor", {}).get("event") == "span" and document.get("span", {}).get("name") == "POST payments/authorize"]
-        for transaction in transactions:
-            self.assertEqual(transaction["transaction"]["duration"]["us"], 1800000)
-            attempts = sorted((span for span in spans if span["trace"]["id"] == transaction["trace"]["id"]), key=lambda span: span["@timestamp"])
-            self.assertEqual(len(attempts), 3)
-            # Each hangs off its request; an orphan draws "the trace document is incomplete" over the waterfall.
-            for attempt in attempts:
-                self.assertEqual(attempt["parent"]["id"], transaction["transaction"]["id"])
-                self.assertEqual(attempt["transaction"]["id"], transaction["transaction"]["id"])
-        # One root per trace: two transactions sharing a trace.id would double its spans.
-        roots = [transaction["trace"]["id"] for transaction in transactions]
-        self.assertEqual(len(roots), len(set(roots)))
-        started = sorted(span["@timestamp"] for span in spans if span["trace"]["id"] == transactions[-1]["trace"]["id"])
-        first, second, third = [datetime_from_iso(value) for value in started[:3]]
-        self.assertGreater((second - first).total_seconds(), 0.5)
-        self.assertGreater((third - second).total_seconds(), 0.5)
+        attempt_counts = set()
+        for seed in range(7, 19):
+            documents, _streams, parameters = self.run_data("retry-amplification", seed)
+            incident, retry = parameters["incident"], parameters["retry"]
+            attempt_counts.add(retry["attempts"])
+            transactions = [document for document in documents if document.get("processor", {}).get("event") == "transaction" and document.get("transaction", {}).get("name") == incident["transaction"] and document.get("retry", {}).get("count") == retry["attempts"]]
+            self.assertTrue(transactions)
+            spans = [document for document in documents if document.get("processor", {}).get("event") == "span" and document.get("span", {}).get("name") == incident["operation"]]
+            for transaction in transactions:
+                self.assertEqual(transaction["transaction"]["duration"]["us"], retry["transaction_us"])
+                attempts = sorted((span for span in spans if span["trace"]["id"] == transaction["trace"]["id"]), key=lambda span: span["@timestamp"])
+                self.assertEqual(len(attempts), retry["attempts"])
+                # The request lasts longer than all its calls, one after another.
+                self.assertGreater(retry["transaction_us"], retry["attempts"] * 550000)
+                # Each hangs off its request; an orphan draws "the trace document is incomplete" over the waterfall.
+                for attempt in attempts:
+                    self.assertEqual(attempt["parent"]["id"], transaction["transaction"]["id"])
+                    self.assertEqual(attempt["transaction"]["id"], transaction["transaction"]["id"])
+            # One root per trace: two transactions sharing a trace.id would double its spans.
+            roots = [transaction["trace"]["id"] for transaction in transactions]
+            self.assertEqual(len(roots), len(set(roots)))
+            started = [datetime_from_iso(value) for value in sorted(span["@timestamp"] for span in spans if span["trace"]["id"] == transactions[-1]["trace"]["id"])]
+            self.assertTrue(all((later - earlier).total_seconds() > 0.5 for earlier, later in zip(started, started[1:])))
+        # Runs differ in how many times a request calls the dependency.
+        self.assertEqual(attempt_counts, {2, 3, 4})
 
     def test_a_hosts_log_evidence_belongs_to_that_host(self):
         # The step reads the outlier's own Logs tab, which lists only lines carrying its host.name.
-        for pack, host in (("hot-instance-imbalance", "orders-04"), ("cpu-saturation", "checkout-03")):
+        hosts = {"hot-instance-imbalance": lambda parameters: f'{parameters["incident"]["service"]}-{parameters["nodes"][0]}',
+                 "cpu-saturation": lambda parameters: f'{parameters["incident"]["service"]}-{parameters["node"]}'}
+        for pack, outlier in hosts.items():
             with self.subTest(pack=pack):
-                _documents, streams = self.documents(pack)
+                _documents, streams, parameters = self.run_data(pack)
+                host = outlier(parameters)
                 logs = [document for stream, document in streams if stream and stream.startswith("logs-")]
                 self.assertTrue([document for document in logs if document.get("host", {}).get("name") == host])
 
